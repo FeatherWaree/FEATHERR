@@ -12674,9 +12674,11 @@ ProjectileAssist.Callbacks.OnToggle = function(state)
 	game:GetService("RunService"):BindToRenderStep("ProjectileAssist_AimLine", Enum.RenderPriority.First.Value, asTick)
 end
 
-
 if not asKnit then
 	pcall(function() asKnit = require(game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("knit",5):WaitForChild("src",5)).KnitClient end)
+end
+if not paGetItemMeta then
+	pcall(function() paGetItemMeta = require(game:GetService("ReplicatedStorage"):WaitForChild("TS",5):WaitForChild("item",5):WaitForChild("item-meta",5)).getItemMeta end)
 end
 
 AutoChargeBow = Combat:CreateButton("Auto Charge Bow", nil, true)
@@ -12684,31 +12686,35 @@ AutoChargeBow:CreateSlider("Charge Percent", 1, 100, 100, nil, 1)
 
 acbConn = nil
 
-function acbFindSource()
+function acbGetHandler()
 	if not (asKnit and asKnit.Controllers) then return nil end
 	for _, acb_c in pairs(asKnit.Controllers) do
-		if acb_c and acb_c.projectileHandler and type(acb_c.releaseChargeInput) == "function" and acb_c.aimingMaid then return acb_c end
+		if acb_c and acb_c.projectileHandler then return acb_c.projectileHandler end
 	end
 	return nil
 end
 
 function acbTick()
 	if not loops["auto charge bow"] then return end
-	acb_sc = acbFindSource()
-	if not acb_sc then return end
-	acb_h = acb_sc.projectileHandler
+	acb_h = acbGetHandler()
 	if not acb_h then return end
-	acb_hi = nil
-	pcall(function() acb_hi = acb_sc:getHandItem() end)
-	if not acb_hi or not acb_hi.itemType then return end
-	acb_meta = paGetItemMeta and paGetItemMeta(acb_hi.itemType) or nil
-	acb_ps = acb_meta and acb_meta.projectileSource or nil
+	acb_char = Player.Character
+	if not acb_char then return end
+	acb_hi = acb_char:FindFirstChild("HandInvItem")
+	acb_hv = acb_hi and acb_hi.Value
+	acb_name = acb_hv and (typeof(acb_hv) == "Instance" and acb_hv.Name or tostring(acb_hv)) or nil
+	if not acb_name or not paGetItemMeta then return end
+	acb_ok, acb_meta = pcall(paGetItemMeta, acb_name)
+	if not acb_ok or not acb_meta then return end
+	acb_ps = acb_meta.projectileSource
 	if not acb_ps or not acb_ps.maxStrengthChargeSec or acb_ps.maxStrengthChargeSec <= 0 then return end
-	acb_frac = (acb_h.drawDurationSeconds or 0) / acb_ps.maxStrengthChargeSec
-	if acb_frac < 0 then acb_frac = 0 elseif acb_frac > 1 then acb_frac = 1 end
-	acb_pct = AutoChargeBow.Values["Charge Percent"] or 100
-	if acb_frac * 100 >= acb_pct then
-		pcall(function() acb_sc:releaseChargeInput(acb_sc.aimingMaid, function() return true end, nil) end)
+	acb_maxT = acb_ps.maxStrengthChargeSec
+	acb_minS = acb_ps.minStrengthScalar or 0.5
+	acb_frac = math.clamp((AutoChargeBow.Values["Charge Percent"] or 100) / 100, 0, 1)
+	acb_targetDraw = acb_maxT * acb_frac
+	if (acb_h.drawDurationSeconds or 0) < acb_targetDraw then
+		acb_h.drawDurationSeconds = acb_targetDraw
+		acb_h.velocityMultiplier = acb_frac + (1 - acb_frac) * acb_minS
 	end
 end
 
@@ -12719,11 +12725,6 @@ AutoChargeBow.Callbacks.OnToggle = function(state)
 	else
 		if acbConn then acbConn:Disconnect(); acbConn = nil end
 	end
-end
-
-if not PA_PROJ_META then PA_PROJ_META = {} end
-if next(PA_PROJ_META) == nil then
-	pcall(function() PA_PROJ_META = require(game:GetService("ReplicatedStorage"):WaitForChild("TS",5):WaitForChild("projectile",5):WaitForChild("projectile-meta",5)).ProjectileMeta or {} end)
 end
 
 AAD_SKY          = 14      -- blatant: how many studs to pop up (clears a horizontal arrow; raise if a fast bolt still clips)
