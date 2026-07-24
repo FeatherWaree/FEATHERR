@@ -923,7 +923,8 @@ end
 		["auto arrow dodge"] = false,
 		["swim"] = false,
 		["nofall"] = false,
-		["spin bot"] = false
+		["spin bot"] = false,
+		["auto charge bow"] = false,
  		}
  
 
@@ -1030,15 +1031,15 @@ end
 	cachedHumanoid = nil
 	localInventory = inventoriesFolder:WaitForChild(Player.Name)
 	local Character = Player.Character or Player.CharacterAdded:Wait()
-	local PlayerGui = Player:WaitForChild("PlayerGui")
-	local UserInputService = game:GetService("UserInputService")
-	local TweenService = game:GetService("TweenService")
-	local CoreGui = game:GetService("CoreGui")
-	local camera = workspace.CurrentCamera
-	local orginalClan = nil
-	local orginalLevel = nil
-	local orginalChatNameColor = nil
-	local zephyrStacks = 0
+	PlayerGui = Player:WaitForChild("PlayerGui")
+	UserInputService = game:GetService("UserInputService")
+	TweenService = game:GetService("TweenService")
+	CoreGui = game:GetService("CoreGui")
+	camera = workspace.CurrentCamera
+	orginalClan = nil
+	orginalLevel = nil
+	orginalChatNameColor = nil
+	zephyrStacks = 0
 	if Player:GetAttribute("ClanTag") then
 		orginalClan = Player:GetAttribute("ClanTag")
 	end
@@ -3985,11 +3986,6 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 
 	NoClickDelay = Combat:CreateButton("No Click Delay", nil, true)
 	NoClickDelay:CreateSlider("CPS", 1, 1000, 1000)
-	
-	AutoArrowDodge = Combat:CreateButton("Auto Arrow Dodge", nil, true)
-	AutoArrowDodge:CreateDropdown("Type", {"Blatant", "Legit"}, "Legit", nil, false)
-
-
 
 	--Visuals
 	WhiteHits = Visuals:CreateButton("White Hits", nil, true)
@@ -12400,4 +12396,504 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 			end
 		end
 	end)
+end
+
+
+if not paTier then
+	function paTier(low, base, iron, gold)
+		if low:find("iron") then return iron end
+		if low:find("gold") or low:find("diamond") or low:find("emerald") then return gold end
+		return base
+	end
+end
+if not paAmount then
+	function paAmount(name)
+		if not paInv then return 0 end
+		pam_i = paInv:FindFirstChild(name); return pam_i and (pam_i:GetAttribute("Amount") or 0) or 0
+	end
+end
+paRS = game:GetService("ReplicatedStorage")
+if not PA_PROJ_META then PA_PROJ_META = {} end
+if next(PA_PROJ_META) == nil then
+	pcall(function() PA_PROJ_META = require(paRS:WaitForChild("TS",5):WaitForChild("projectile",5):WaitForChild("projectile-meta",5)).ProjectileMeta or {} end)
+end
+if not paGetItemMeta then
+	pcall(function() paGetItemMeta = require(paRS:WaitForChild("TS",5):WaitForChild("item",5):WaitForChild("item-meta",5)).getItemMeta end)
+end
+if not paInv then
+	pcall(function() paInv = paRS:WaitForChild("Inventories",5):FindFirstChild(Players.LocalPlayer.Name) end)
+end
+if not asKnit then
+	pcall(function() asKnit = require(paRS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("knit",5):WaitForChild("src",5)).KnitClient end)
+end
+
+asF0 = workspace:FindFirstChild("ProjectileTargeting")
+if asF0 then for _, asOld in pairs(asF0:GetChildren()) do if asOld.Name:sub(1,3) == "PA_" then pcall(function() asOld:Destroy() end) end end end
+pcall(function()
+	if asHookFn and getrawmetatable(game).__namecall == asHookFn then
+		mt = getrawmetatable(game); setreadonly(mt, false); mt.__namecall = asOldNC; setreadonly(mt, true)
+	end
+end)
+
+function asSolve(O, T, v, g)
+	aso_d = T - O; aso_len = aso_d.Magnitude
+	if v <= 0 then return nil end
+	if aso_len < 0.05 then return Vector3.new(0, v, 0), 0 end
+	if g < 0.001 then return aso_d.Unit * v, aso_len / v end
+	aso_R = math.sqrt(aso_d.X*aso_d.X + aso_d.Z*aso_d.Z)
+	if aso_R < 0.5 then return aso_d.Unit * v, aso_len / v end
+	aso_v2 = v*v; aso_disc = aso_v2*aso_v2 - g*(g*aso_R*aso_R + 2*aso_d.Y*aso_v2)
+	if aso_disc < 0 then return nil end
+	aso_tanT = (aso_v2 - math.sqrt(aso_disc)) / (g*aso_R); aso_cosT = 1 / math.sqrt(1 + aso_tanT*aso_tanT)
+	aso_hDir = Vector3.new(aso_d.X, 0, aso_d.Z) * (1/aso_R)
+	return aso_hDir*(v*aso_cosT) + Vector3.new(0, v*aso_tanT*aso_cosT, 0), aso_R/(v*aso_cosT)
+end
+function asAim(O, hrp, vel, v, g, life, pTgtG)
+	asa_T = hrp; asa_g = pTgtG or 0; asa_vt, asa_t = nil, 0
+	for asa_i = 1, 4 do
+		asa_vt, asa_t = asSolve(O, asa_T, v, g)
+		if not asa_vt or asa_t > (life or 3) then return nil end
+		asa_T = Vector3.new(hrp.X + vel.X*asa_t, hrp.Y + vel.Y*asa_t - 0.5*asa_g*asa_t*asa_t, hrp.Z + vel.Z*asa_t)
+	end
+	return asa_vt, asa_t
+end
+function asResolve(itemType, inst)
+	asr_low = itemType:lower()
+	if PA_PROJ_META[itemType] then return { weapon = inst, ammo = itemType, projectile = itemType, kind = "throw" } end
+	asr_proj = nil
+	if asr_low:find("headhunter") then asr_proj = paTier(asr_low, "tactical_headhunter_arrow", "tactical_headhunter_arrow_iron", "tactical_headhunter_arrow_iron")
+	elseif asr_low:find("tactical")  then asr_proj = paTier(asr_low, "tactical_crossbow_arrow", "tactical_crossbow_arrow_iron", "tactical_crossbow_arrow_iron")
+	elseif asr_low:find("crossbow")  then asr_proj = paTier(asr_low, "crossbow_arrow", "crossbow_arrow_iron", "tactical_crossbow_arrow")
+	elseif asr_low:find("bow")       then asr_proj = paTier(asr_low, "arrow", "iron_arrow", "golden_arrow")
+	end
+	if asr_proj and PA_PROJ_META[asr_proj] then return { weapon = inst, ammo = "arrow", projectile = asr_proj, kind = "weapon" } end
+	if paGetItemMeta then
+		asr_ok, asr_m = pcall(paGetItemMeta, itemType)
+		if asr_ok and asr_m then
+			asr_found = nil
+			for _, asr_v in pairs(asr_m) do
+				if type(asr_v) == "string" and PA_PROJ_META[asr_v] then asr_found = asr_v break end
+				if type(asr_v) == "table" then for _, asr_v2 in pairs(asr_v) do if type(asr_v2) == "string" and PA_PROJ_META[asr_v2] then asr_found = asr_v2 break end end end
+				if asr_found then break end
+			end
+			if asr_found then return { weapon = inst, ammo = "arrow", projectile = asr_found, kind = "discovered" } end
+		end
+	end
+	return nil
+end
+
+ProjectileAssist = Combat:CreateButton("Projectile Assist", nil, true)
+ProjectileAssist:CreateToggle("Target Players", true, nil)
+ProjectileAssist:CreateToggle("Target NPCs/Dummies", false, nil)
+ProjectileAssist:CreateToggle("Ignore Behind Walls", true, nil)
+ProjectileAssist:CreateToggle("Ignore Telepearls", true, nil)
+ProjectileAssist:CreateToggle("Ignore Fireballs", true, nil)
+ProjectileAssist:CreateDropdown("Target Part", {"Torso", "Head", "Random"}, "Torso", nil, false)
+ProjectileAssist:CreateSlider("FOV", 1, 1000, 100, nil, 1)
+
+PA_FOV_SCALE = 0.18
+PA_LIMB_NAMES = { "Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso", "LeftUpperArm", "RightUpperArm", "LeftUpperLeg", "RightUpperLeg", "LeftHand", "RightHand", "LeftFoot", "RightFoot" }
+asRandCache = setmetatable({}, {__mode = "k"})
+asTrack = setmetatable({}, {__mode = "k"})
+asNow = 0
+asWallParams = RaycastParams.new(); asWallParams.FilterType = Enum.RaycastFilterType.Exclude; asWallParams.IgnoreWater = true
+asErrShown = false; asAssisted = false
+
+function asIsSpectator(team) return team ~= nil and tostring(team.Name):lower():find("spectat") ~= nil end
+
+function asTrackUpdate(model, pos, now, rawVel)
+	tr = asTrack[model]
+	if not tr then tr = {c = 0}; asTrack[model] = tr end
+	if tr.t4 and now - tr.t4 > 0.2 then tr.c = 0 end
+	tr.x1, tr.y1, tr.z1, tr.t1 = tr.x2, tr.y2, tr.z2, tr.t2
+	tr.x2, tr.y2, tr.z2, tr.t2 = tr.x3, tr.y3, tr.z3, tr.t3
+	tr.x3, tr.y3, tr.z3, tr.t3 = tr.x4, tr.y4, tr.z4, tr.t4
+	tr.x4, tr.y4, tr.z4, tr.t4 = pos.X, pos.Y, pos.Z, now
+	if tr.c < 4 then tr.c = tr.c + 1 end
+	if tr.c >= 2 and tr.t1 and (now - tr.t1) > 0.001 then
+		atd = now - tr.t1
+		atv = Vector3.new((tr.x4 - tr.x1)/atd, (tr.y4 - tr.y1)/atd, (tr.z4 - tr.z1)/atd)
+		if atv.Magnitude > 250 then atv = atv.Unit * 250 end
+		return atv
+	end
+	return rawVel
+end
+
+function asPartFor(model)
+	asp_mode = ProjectileAssist.Values["Target Part"] or "Torso"
+	asp_torso = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	if asp_mode == "Head" then return model:FindFirstChild("Head") or asp_torso end
+	if asp_mode == "Random" then
+		asp_cached = asRandCache[model]; if asp_cached and asp_cached.Parent then return asp_cached end
+		asp_pool, asp_pref = {}, {}
+		for _, asp_d in pairs(model:GetDescendants()) do
+			if asp_d:IsA("BasePart") then table.insert(asp_pool, asp_d); if table.find(PA_LIMB_NAMES, asp_d.Name) then table.insert(asp_pref, asp_d) end end
+		end
+		asp_src = (#asp_pref > 0) and asp_pref or asp_pool
+		asp_pick = (#asp_src > 0) and asp_src[math.random(1, #asp_src)] or asp_torso
+		asRandCache[model] = asp_pick; return asp_pick
+	end
+	return asp_torso
+end
+
+function asHasLOS(origin, part)
+	ash_char = Player.Character
+	if ash_char then asWallParams.FilterDescendantsInstances = { ash_char, part.Parent } else asWallParams.FilterDescendantsInstances = { part.Parent } end
+	return workspace:Raycast(origin, part.Position - origin, asWallParams) == nil
+end
+
+function asConsider(model, part, rawVel)
+	asRoot = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	if not asRoot then return end
+	asDvel = asTrackUpdate(model, asRoot.Position, asNow, rawVel)
+	if not part then return end
+	asc_d = part.Position - asOrigin; if asc_d.Magnitude < 0.01 then return end
+	asc_ang = math.acos(math.clamp(asc_d.Unit:Dot(asLook), -1, 1)); if asc_ang > asHalf then return end
+	if ProjectileAssist.Values["Ignore Behind Walls"] and not asHasLOS(asOrigin, part) then return end
+	if asc_ang < asBestAng then asBestAng = asc_ang; asBestModel = model; asBestPart = part; asBestVel = asDvel end
+end
+
+function asPickTarget()
+	asBestAng = math.huge; asBestModel, asBestPart, asBestVel = nil, nil, nil
+	if ProjectileAssist.Values["Target Players"] then
+		for _, aspl in ipairs(EntityCache.players) do
+			if not asIsSpectator(aspl.Team) then
+				asc = aspl.Character
+				if asc then asch = asc:FindFirstChild("HumanoidRootPart"); if asch then asConsider(asc, asPartFor(asc), asch.AssemblyLinearVelocity) end end
+			end
+		end
+	end
+	if ProjectileAssist.Values["Target NPCs/Dummies"] then
+		for _, asm in ipairs(EntityCache.npcs) do asConsider(asm, asPartFor(asm), Vector3.zero) end
+	end
+	return asBestModel, asBestPart, asBestVel
+end
+
+function asTick()
+	asOk, asErr = pcall(function()
+		asHandler = nil
+		if asKnit and asKnit.Controllers then
+			for _, asC in pairs(asKnit.Controllers) do
+				if asC and asC.projectileHandler then asHandler = asC.projectileHandler; break end
+			end
+		end
+		if not asHandler then asAssisted = false; return end
+
+		asShould = false
+		if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+			asCam = workspace.CurrentCamera
+			if asCam then
+				asChar = Player.Character
+				asHrp = asChar and asChar:FindFirstChild("HumanoidRootPart")
+				asHum = asChar and asChar:FindFirstChildOfClass("Humanoid")
+				if asHrp and asHum and asHum.Health > 0 and not asIsSpectator(Player.Team) then
+					asHead = asChar:FindFirstChild("Head")
+					if (asCam.CFrame.Position - (asHead and asHead.Position or asHrp.Position)).Magnitude <= 2 then
+						asTool = asChar:FindFirstChildOfClass("Tool")
+						asHi = asChar:FindFirstChild("HandInvItem"); asHv = asHi and asHi.Value
+						asHname = asHv and (typeof(asHv) == "Instance" and asHv.Name or tostring(asHv)) or (asTool and asTool.Name) or nil
+						asHeldLower = asHname and asHname:lower() or ""
+						asHinst = asHname and paInv and paInv:FindFirstChild(asHname) or nil
+						if asHinst then
+							asL = asResolve(asHname, asHinst)
+							if asL then
+								asPm = PA_PROJ_META[asL.projectile]
+								if asPm then
+									if not (ProjectileAssist.Values["Ignore Telepearls"] and (asL.projectile == "telepearl" or asHeldLower:find("telepearl"))) then
+										if not (ProjectileAssist.Values["Ignore Fireballs"] and (asL.projectile == "fireball" or asHeldLower:find("fireball"))) then
+											if paAmount(asL.ammo) > 0 then asShould = true end
+										end
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+
+		if not asShould then
+			if asAssisted then asHandler.targetPoint = nil; asAssisted = false end
+			return
+		end
+
+		asLook = asCam.CFrame.LookVector; asOrigin = asCam.CFrame.Position
+		asHalf = math.rad((ProjectileAssist.Values["FOV"] or 100) * PA_FOV_SCALE)
+		asNow = tick()
+		asModel, asPart, asVel = asPickTarget()
+		if not asModel or not asPart then
+			if asAssisted then asHandler.targetPoint = nil; asAssisted = false end
+			return
+		end
+
+		asMuzzle = nil
+		if asTool then asH = asTool:FindFirstChild("Handle"); if asH then asBO = asH:FindFirstChild("BulletOrigin"); if asBO and asBO:IsA("Attachment") then asMuzzle = asBO.WorldPosition end end end
+		if not asMuzzle then asMuzzle = asHrp.Position end
+		asSolveO = asMuzzle + Vector3.new(0, 2, 0)
+
+		asHum2 = asModel:FindFirstChildOfClass("Humanoid")
+		asAir2 = (asHum2 and asHum2.FloorMaterial == Enum.Material.Air) or math.abs(asVel.Y) > 2
+		asLeadY = asAir2 and asVel.Y or 0
+		asTgtG = asAir2 and (workspace.Gravity or 196.2) or 0
+		asLead = Vector3.new(asVel.X, asLeadY, asVel.Z)
+		if asLead.Magnitude > 200 then asLead = asLead.Unit * 200 end
+
+		asEffV = (asPm.launchVelocity or 100) * (asHandler.velocityMultiplier or 1)
+		asVt, asT = asAim(asSolveO, asPart.Position, asLead, asEffV, asPm.gravitationalAcceleration or 0, asPm.predictionLifetimeSec or asPm.lifetimeSec or 3, asTgtG)
+		if not asVt then
+			if asAssisted then asHandler.targetPoint = nil; asAssisted = false end
+			return
+		end
+
+		asHandler.targetPoint = asSolveO + asVt.Unit * 1000
+		asHandler.lockedAimPoint = nil
+		asAssisted = true
+	end)
+	if not asOk and not asErrShown then asErrShown = true; warn("[ProjectileAssist] " .. tostring(asErr)) end
+end
+
+ProjectileAssist.Callbacks.OnToggle = function(state)
+	loops["projectile assist"] = state
+	if not state then
+		pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ProjectileAssist_AimLine") end)
+		if asAssisted and asKnit and asKnit.Controllers then
+			for _, asC in pairs(asKnit.Controllers) do if asC and asC.projectileHandler then asC.projectileHandler.targetPoint = nil end end
+		end
+		asAssisted = false
+		asRandCache = setmetatable({}, {__mode = "k"})
+		asTrack = setmetatable({}, {__mode = "k"})
+		return
+	end
+	startEntityCache()
+	asRandCache = setmetatable({}, {__mode = "k"})
+	asTrack = setmetatable({}, {__mode = "k"})
+	asErrShown = false; asAssisted = false
+	asF0 = workspace:FindFirstChild("ProjectileTargeting")
+	if asF0 then for _, asOld in pairs(asF0:GetChildren()) do if asOld.Name:sub(1,3) == "PA_" then pcall(function() asOld:Destroy() end) end end end
+	pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ProjectileAssist_AimLine") end)
+	game:GetService("RunService"):BindToRenderStep("ProjectileAssist_AimLine", Enum.RenderPriority.First.Value, asTick)
+end
+
+
+if not asKnit then
+	pcall(function() asKnit = require(game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("knit",5):WaitForChild("src",5)).KnitClient end)
+end
+
+AutoChargeBow = Combat:CreateButton("Auto Charge Bow", nil, true)
+AutoChargeBow:CreateSlider("Charge Percent", 1, 100, 100, nil, 1)
+
+acbConn = nil
+
+function acbFindSource()
+	if not (asKnit and asKnit.Controllers) then return nil end
+	for _, acb_c in pairs(asKnit.Controllers) do
+		if acb_c and acb_c.projectileHandler and type(acb_c.releaseChargeInput) == "function" and acb_c.aimingMaid then return acb_c end
+	end
+	return nil
+end
+
+function acbTick()
+	if not loops["auto charge bow"] then return end
+	acb_sc = acbFindSource()
+	if not acb_sc then return end
+	acb_h = acb_sc.projectileHandler
+	if not acb_h then return end
+	acb_hi = nil
+	pcall(function() acb_hi = acb_sc:getHandItem() end)
+	if not acb_hi or not acb_hi.itemType then return end
+	acb_meta = paGetItemMeta and paGetItemMeta(acb_hi.itemType) or nil
+	acb_ps = acb_meta and acb_meta.projectileSource or nil
+	if not acb_ps or not acb_ps.maxStrengthChargeSec or acb_ps.maxStrengthChargeSec <= 0 then return end
+	acb_frac = (acb_h.drawDurationSeconds or 0) / acb_ps.maxStrengthChargeSec
+	if acb_frac < 0 then acb_frac = 0 elseif acb_frac > 1 then acb_frac = 1 end
+	acb_pct = AutoChargeBow.Values["Charge Percent"] or 100
+	if acb_frac * 100 >= acb_pct then
+		pcall(function() acb_sc:releaseChargeInput(acb_sc.aimingMaid, function() return true end, nil) end)
+	end
+end
+
+AutoChargeBow.Callbacks.OnToggle = function(state)
+	loops["auto charge bow"] = state
+	if state then
+		if not acbConn then acbConn = game:GetService("RunService").Heartbeat:Connect(acbTick) end
+	else
+		if acbConn then acbConn:Disconnect(); acbConn = nil end
+	end
+end
+
+if not PA_PROJ_META then PA_PROJ_META = {} end
+if next(PA_PROJ_META) == nil then
+	pcall(function() PA_PROJ_META = require(game:GetService("ReplicatedStorage"):WaitForChild("TS",5):WaitForChild("projectile",5):WaitForChild("projectile-meta",5)).ProjectileMeta or {} end)
+end
+
+AAD_SKY          = 14      -- blatant: how many studs to pop up (clears a horizontal arrow; raise if a fast bolt still clips)
+AAD_SKY_MAX      = 0.6     -- blatant: safety cap on how long to stay up before forcing the descent
+AAD_SAFE_DESCENT = 18      -- blatant: descent speed via BodyVelocity (kept low so the landing velocity is under the damage threshold)
+AAD_JUKE_TIME    = 0.25    -- legit: how long the sidestep lasts
+AAD_JUKE_SPEED   = 26      -- legit: sidestep speed (~run speed)
+AAD_COOLDOWN     = 0.3     -- min gap between dodges (stops flailing on a spray)
+AAD_HIT_R_BLAT   = 3.5     -- "going to hit me" radius, blatant
+AAD_HIT_R_LEG    = 2.8     -- same, legit (tighter = reacts later, looks more human)
+AAD_REACT_BLAT   = 0.5     -- react this many seconds before impact, blatant
+AAD_REACT_LEG    = 0.3     -- same, legit
+
+AutoArrowDodge = Combat:CreateButton("Auto Arrow Dodge", nil, true)
+AutoArrowDodge:CreateDropdown("Mode", {"Legit", "Blatant"}, "Legit", nil, false)
+AutoArrowDodge:CreateSlider("Distance", 0, 1000, 300, nil, 1)
+
+aad = { on = false, conn = nil, evConn = nil, useScan = false, list = {}, state = "idle", origCF = nil, bv = nil, jukeDir = nil, dodgeUntil = 0, upStart = 0, lastDodge = 0, threatV = Vector3.zero }
+
+function aadParse(...)
+	aap_a = {...}; aap_typ, aap_vel, aap_org, aap_shooter = nil, nil, nil, nil
+	for aap_i = 1, #aap_a do
+		aap_x = aap_a[aap_i]; aap_t = typeof(aap_x)
+		if aap_t == "string" and not aap_typ then
+			aap_typ = aap_x
+		elseif aap_t == "Vector3" then
+			if not aap_vel then aap_vel = aap_x elseif not aap_org then aap_org = aap_x end
+		elseif aap_t == "Instance" then
+			if aap_x:IsA("Model") or aap_x:IsA("BasePart") then
+				if not aap_shooter and (Players:GetPlayerFromCharacter(aap_x) or aap_x:FindFirstChildOfClass("Humanoid")) then
+					aap_shooter = aap_x
+				end
+			end
+		end
+	end
+	if aap_shooter == Player.Character then return end
+	aap_op = aap_shooter and Players:GetPlayerFromCharacter(aap_shooter)
+	if aap_op and aap_op.Team == Player.Team then return end
+	if not aap_vel or not aap_org then return end
+	aap_g, aap_life = 196.2, 3
+	if aap_typ and PA_PROJ_META[aap_typ] then
+		aap_g = PA_PROJ_META[aap_typ].gravitationalAcceleration or aap_g
+		aap_life = PA_PROJ_META[aap_typ].lifetimeSec or aap_life
+	end
+	if #aad.list > 64 then table.remove(aad.list, 1) end
+	table.insert(aad.list, { o = aap_org, v = aap_vel, g = aap_g, t0 = tick(), life = aap_life })
+end
+
+function aadConnect()
+	aad_ok = pcall(function()
+		aad_cse = require(Player.PlayerScripts.TS["client-sync-events"]).ClientSyncEvents
+		aad.evConn = aad_cse.ProjectileLaunched:connect(aadParse)
+	end)
+	aad.useScan = not aad_ok
+end
+
+function aadPurge()
+	aad_now0 = tick(); aad_i = 1
+	while aad_i <= #aad.list do
+		if aad_now0 - aad.list[aad_i].t0 > aad.list[aad_i].life then table.remove(aad.list, aad_i) else aad_i = aad_i + 1 end
+	end
+end
+
+function aadRebuildScan()
+	aad.list = {}; aad_char0 = Player.Character
+	for _, aad_m in pairs(workspace:GetChildren()) do
+		aad_pp = nil
+		if aad_m:IsA("Model") and not aad_m:FindFirstChildOfClass("Humanoid") then aad_pp = aad_m.PrimaryPart
+		elseif aad_m:IsA("BasePart") and not aad_m:IsDescendantOf(aad_char0) then aad_pp = aad_m end
+		if aad_pp and aad_pp.AssemblyLinearVelocity.Magnitude > 40 then
+			table.insert(aad.list, { o = aad_pp.Position, v = aad_pp.AssemblyLinearVelocity, g = 196.2, t0 = tick(), life = 0.15 })
+		end
+	end
+end
+
+function aadThreat(C, mode)
+	aad_rad = (mode == "Blatant") and AAD_HIT_R_BLAT or AAD_HIT_R_LEG
+	aad_react = (mode == "Blatant") and AAD_REACT_BLAT or AAD_REACT_LEG
+	aad_maxD = AutoArrowDodge.Values["Distance"] or 300
+	aad_now1 = tick()
+	for aad_j = 1, #aad.list do
+		aad_e = aad.list[aad_j]
+		aad_age = aad_now1 - aad_e.t0
+		aad_P = aad_e.o + aad_e.v * aad_age + Vector3.new(0, -0.5 * aad_e.g * aad_age * aad_age, 0)
+		aad_V = aad_e.v + Vector3.new(0, -aad_e.g * aad_age, 0)
+		aad_rel = aad_P - C
+		if aad_rel.Magnitude <= aad_maxD then
+			aad_vm2 = aad_V:Dot(aad_V)
+			if aad_vm2 > 0.01 then
+				aad_tca = -aad_rel:Dot(aad_V) / aad_vm2
+				if aad_tca >= -0.05 then
+					aad_tcac = aad_tca < 0 and 0 or aad_tca
+					aad_closest = aad_rel + aad_V * aad_tcac
+					if aad_closest.Magnitude <= aad_rad and aad_tca <= aad_react then
+						aad.threatV = aad_V
+						return true
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
+function aadCleanupBV()
+	if aad.bv then pcall(function() aad.bv:Destroy() end); aad.bv = nil end
+end
+
+function aadLoop()
+	if not aad.on then return end
+	aad_char = Player.Character
+	aad_hrp = aad_char and aad_char:FindFirstChild("HumanoidRootPart")
+	aad_hum = aad_char and aad_char:FindFirstChildOfClass("Humanoid")
+	if not aad_hrp or not aad_hum or aad_hum.Health <= 0 then aadCleanupBV(); aad.state = "idle"; return end
+	if loops["fly"] or loops["swim"] then aadCleanupBV(); aad.state = "idle"; return end
+	if aad.state ~= "idle" and (not aad.bv or not aad.bv.Parent) and (aad.state == "up" or aad.state == "down") then aad.state = "idle" end
+
+	aad_mode = AutoArrowDodge.Values["Mode"] or "Legit"
+	if aad.useScan then aadRebuildScan() else aadPurge() end
+	aad_now = tick()
+	aad_hit = aadThreat(aad_hrp.Position, aad_mode)
+
+	if aad.state == "idle" then
+		if aad_hit and aad_now - aad.lastDodge >= AAD_COOLDOWN then
+			if aad_mode == "Blatant" then
+				aad.origCF = aad_hrp.CFrame
+				aad_hrp.CFrame = aad_hrp.CFrame + Vector3.new(0, AAD_SKY, 0)
+				if not aad.bv or not aad.bv.Parent then
+					aad.bv = Instance.new("BodyVelocity"); aad.bv.MaxForce = Vector3.new(0, 1e9, 0); aad.bv.Parent = aad_hrp
+				end
+				aad.bv.Velocity = Vector3.zero
+				aad.state = "up"; aad.upStart = aad_now
+			else
+				aad_hV = Vector3.new(aad.threatV.X, 0, aad.threatV.Z)
+				if aad_hV.Magnitude < 0.01 then aad_hV = Vector3.new(workspace.CurrentCamera.CFrame.RightVector.X, 0, workspace.CurrentCamera.CFrame.RightVector.Z) end
+				aad_perp = Vector3.new(-aad_hV.Z, 0, aad_hV.X).Unit
+				if math.random() < 0.5 then aad_perp = -aad_perp end
+				aad.jukeDir = aad_perp
+				aad.state = "juke"; aad.dodgeUntil = aad_now + AAD_JUKE_TIME
+			end
+		end
+	elseif aad.state == "up" then
+		aad.bv.Velocity = Vector3.zero
+		if not aad_hit or aad_now - aad.upStart > AAD_SKY_MAX then aad.state = "down" end
+	elseif aad.state == "down" then
+		aad.bv.Velocity = Vector3.new(0, -AAD_SAFE_DESCENT, 0)
+		if aad_hrp.Position.Y <= aad.origCF.Position.Y + 0.5 or aad_hum.FloorMaterial ~= Enum.Material.Air then
+			aad_hrp.CFrame = CFrame.new(aad_hrp.Position.X, aad.origCF.Position.Y, aad_hrp.Position.Z)
+			aadCleanupBV(); aad.state = "idle"; aad.lastDodge = aad_now
+		end
+	elseif aad.state == "juke" then
+		if aad_now < aad.dodgeUntil then
+			aad_curV = aad_hrp.AssemblyLinearVelocity
+			aad_hrp.AssemblyLinearVelocity = Vector3.new(aad.jukeDir.X * AAD_JUKE_SPEED, aad_curV.Y, aad.jukeDir.Z * AAD_JUKE_SPEED)
+		else
+			aad.state = "idle"; aad.lastDodge = aad_now
+		end
+	end
+end
+
+AutoArrowDodge.Callbacks.OnToggle = function(state)
+	loops["auto arrow dodge"] = state
+	aad.on = state
+	if state then
+		aad.state = "idle"; aad.list = {}; aad.lastDodge = 0
+		aadConnect()
+		if not aad.conn then aad.conn = game:GetService("RunService").Heartbeat:Connect(aadLoop) end
+	else
+		if aad.conn then aad.conn:Disconnect(); aad.conn = nil end
+		if aad.evConn then pcall(function() aad.evConn:Disconnect() end); aad.evConn = nil end
+		aadCleanupBV(); aad.state = "idle"; aad.list = {}
+	end
 end
