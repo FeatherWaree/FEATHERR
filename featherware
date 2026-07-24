@@ -10244,149 +10244,177 @@ end
 	end
 
 
-	ChestESP.Callbacks.OnToggle = function(state)
-		loops["chest esp"] = state
+CHEST_ESP_RANGE = 1000   -- how far to show chests (lower = less lag in skywars)
+CHEST_ESP_ICON  = 0.14   -- icon size (scale relative to billboard height; ~0.84 studs)
+
+-- ===== build the "all items" list for the filter dropdown =====
+asAllItems = {}
+asOk, asITMod = pcall(function()
+	return require(game:GetService("ReplicatedStorage"):WaitForChild("TS", 5):WaitForChild("item", 5):WaitForChild("item-type", 5))
+end)
+if asOk and asITMod then
+	asIT = asITMod.ItemType or asITMod
+	for asK, asV in pairs(asIT) do
+		asName = nil
+		if type(asV) == "string" then asName = asV elseif type(asK) == "string" then asName = asK end
+		if asName and asName ~= "" and not asAllItems[asName] then asAllItems[asName] = true end
 	end
-
-	local function getItemImage(itemName)
-		if not ItemMetaModule or not ItemMetaModule.getItemMeta then 
-			return "" 
-		end
-
-		-- 2. Use the game's own lookup function
-		-- It handles the conversion from string to Enum for you
-		itemData = ItemMetaModule.getItemMeta(itemName)
-
-		if itemData and (itemData.image or itemData.icon) then
-			imgVal = itemData.image or itemData.icon
-
-			-- Handle numeric IDs vs direct asset strings
-			if type(imgVal) == "number" then
-				return "rbxassetid://" .. tostring(imgVal)
-			elseif type(imgVal) == "string" then
-				if string.match(imgVal, "^%d+$") then
-					return "rbxassetid://" .. imgVal
-				end
-				return imgVal
-			end
-		end
-
-		return ""
+end
+asItemList = {}
+for asName in pairs(asAllItems) do table.insert(asItemList, asName) end
+table.sort(asItemList)
+if #asItemList == 0 then
+	asItemList = {"wood_sword","stone_sword","iron_sword","diamond_sword","wood_bow","bow","arrow","diamond","emerald","iron_ingot","gold_ingot","wool_white","fireball","golden_apple"}
+end
+asKeywords = {"sword","bow","arrow","diamond","emerald","iron","gold","wool","fireball","apple","potion","armor","helmet","chestplate","boots","shield","totem","pearl","snowball"}
+asDefaultSel = {}
+for _, asName in ipairs(asItemList) do
+	asLow = asName:lower()
+	for _, asKw in ipairs(asKeywords) do
+		if asLow:find(asKw, 1, true) then table.insert(asDefaultSel, asName); break end
 	end
-	local activeESPs = {} 
+end
+if #asDefaultSel == 0 then asDefaultSel = asItemList end
+ChestESP:CreateDropdown("Items", asItemList, asDefaultSel, nil, true)   -- last arg true = multi-select
 
-	local function createChestESP(chestPart)
-		billboard = Instance.new("BillboardGui")
-		billboard.Name = "chestESP"
-		billboard.Adornee = chestPart
+ChestESP.Callbacks.OnToggle = function(state)
+	loops["chest esp"] = state
+end
 
-		billboard.Size = UDim2.new(8.5, 0, 2.5, 0) 
-
-		billboard.StudsOffset = Vector3.new(0, 6, 0) 
-		billboard.AlwaysOnTop = true
-		billboard.MaxDistance = 15000
-
-		success, coreGui = pcall(function() return game:GetService("CoreGui") end)
-		billboard.Parent = success and coreGui or Players.LocalPlayer:WaitForChild("PlayerGui")
-
-		container = Instance.new("Frame")
-		container.Name = "Container"
-		container.Size = UDim2.new(1, 0, 1, 0)
-		container.BackgroundTransparency = 1
-		container.Parent = billboard
-
-		layout = Instance.new("UIListLayout")
-		layout.FillDirection = Enum.FillDirection.Horizontal
-		layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
-		layout.Padding = UDim.new(0, 12) 
-		layout.Parent = container
-
-		return billboard
+-- is this item in the selected filter? (nil filter = show all; table = whitelist)
+function asIsItemSelected(itemName)
+	asSel = ChestESP.Values["Items"]
+	if asSel == nil then return true end
+	if type(asSel) == "table" then
+		for asK, asV in pairs(asSel) do
+			if asK == itemName or asV == itemName then return true end
+		end
+		return false
+	elseif type(asSel) == "string" then
+		return asSel == itemName
 	end
+	return true
+end
 
-	local function updateChestESP(billboard, inventoryFolder)
-		container = billboard:FindFirstChild("Container")
-		if not container then return end
-
-		currentItems = {}
-		for _, obj in pairs(inventoryFolder:GetChildren()) do
-			if obj.Name ~= "ChestOwner" then
-				table.insert(currentItems, obj.Name)
-			end
-		end
-
-		table.sort(currentItems)
-		local inventoryHash = table.concat(currentItems, ",")
-
-		if billboard:GetAttribute("LastHash") == inventoryHash then
-			return 
-		end
-
-		billboard:SetAttribute("LastHash", inventoryHash)
-
-		for _, child in pairs(container:GetChildren()) do
-			if child:IsA("ImageLabel") then
-				child:Destroy()
-			end
-		end
-
-		for _, itemName in ipairs(currentItems) do
-			img = Instance.new("ImageLabel")
-
-			img.Size = UDim2.new(2, 0, 2, 0) 
-			img.SizeConstraint = Enum.SizeConstraint.RelativeYY 
-			img.BackgroundTransparency = 1
-			img.Image = getItemImage(itemName)
-			img.BorderSizePixel = 0
-
-
-			img.Parent = container
+local function getItemImage(itemName)
+	if not ItemMetaModule or not ItemMetaModule.getItemMeta then return "" end
+	itemData = ItemMetaModule.getItemMeta(itemName)
+	if itemData and (itemData.image or itemData.icon) then
+		imgVal = itemData.image or itemData.icon
+		if type(imgVal) == "number" then
+			return "rbxassetid://" .. tostring(imgVal)
+		elseif type(imgVal) == "string" then
+			if string.match(imgVal, "^%d+$") then return "rbxassetid://" .. imgVal end
+			return imgVal
 		end
 	end
+	return ""
+end
 
-	task.spawn(function()
-		while true do
-			task.wait(0.2) 
+local activeESPs = {}
 
-			if loops["chest esp"] then
-				local chests = findNearbyContainers(15000, true)
-				local currentlyVisibleChests = {}
+local function createChestESP(chestPart)
+	billboard = Instance.new("BillboardGui")
+	billboard.Name = "chestESP"
+	billboard.Adornee = chestPart
+	billboard.Size = UDim2.new(8, 0, 6, 0)          -- big enough to hold a wrapping grid (scale-based) [[3]][[6]]
+	billboard.StudsOffset = Vector3.new(0, 4, 0)
+	billboard.AlwaysOnTop = true
+	billboard.MaxDistance = CHEST_ESP_RANGE
 
-				for _, chestPart in pairs(chests) do
-					currentlyVisibleChests[chestPart] = true
+	success, coreGui = pcall(function() return game:GetService("CoreGui") end)
+	billboard.Parent = success and coreGui or Players.LocalPlayer:WaitForChild("PlayerGui")
 
-					local chestInventoryFolder
-					for _, object in pairs(chestPart:GetChildren()) do
-						if object.Name == "ChestFolderValue" then
-							chestInventoryFolder = object.Value
-							break
-						end
+	container = Instance.new("Frame")
+	container.Name = "Container"
+	container.Size = UDim2.new(1, 0, 1, 0)
+	container.BackgroundTransparency = 1
+	container.Parent = billboard
+
+	layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.Wraps = true                              -- wrap icons into rows so ALL fit in bounds [[4]]
+	layout.Padding = UDim.new(0, 4)
+	layout.Parent = container
+
+	return billboard
+end
+
+local function asGetFilteredItems(inventoryFolder)
+	asItems = {}
+	for _, obj in pairs(inventoryFolder:GetChildren()) do
+		if obj.Name ~= "ChestOwner" and asIsItemSelected(obj.Name) then
+			table.insert(asItems, obj.Name)
+		end
+	end
+	table.sort(asItems)
+	return asItems
+end
+
+local function updateChestESP(billboard, items)
+	container = billboard:FindFirstChild("Container")
+	if not container then return end
+
+	local inventoryHash = table.concat(items, ",")
+	if billboard:GetAttribute("LastHash") == inventoryHash then return end
+	billboard:SetAttribute("LastHash", inventoryHash)
+
+	for _, child in pairs(container:GetChildren()) do
+		if child:IsA("ImageLabel") then child:Destroy() end
+	end
+
+	for _, itemName in ipairs(items) do
+		img = Instance.new("ImageLabel")
+		img.Size = UDim2.new(CHEST_ESP_ICON, 0, CHEST_ESP_ICON, 0)
+		img.SizeConstraint = Enum.SizeConstraint.RelativeYY   -- square icons, scale-based (no angle clipping) [[3]]
+		img.BackgroundTransparency = 1                        -- no background, just the image
+		img.Image = getItemImage(itemName)
+		img.BorderSizePixel = 0
+		img.Parent = container
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(0.15)
+		if loops["chest esp"] then
+			local chests = findNearbyContainers(CHEST_ESP_RANGE, true)
+			local currentlyVisibleChests = {}
+
+			for _, chestPart in pairs(chests) do
+				local chestInventoryFolder
+				for _, object in pairs(chestPart:GetChildren()) do
+					if object.Name == "ChestFolderValue" then
+						chestInventoryFolder = object.Value
+						break
 					end
-
-					if chestInventoryFolder then
+				end
+				if chestInventoryFolder then
+					local items = asGetFilteredItems(chestInventoryFolder)
+					if #items > 0 then                       -- only chests with a selected item get a billboard (lag saver)
+						currentlyVisibleChests[chestPart] = true
 						if not activeESPs[chestPart] then
 							activeESPs[chestPart] = createChestESP(chestPart)
 						end
-
-						updateChestESP(activeESPs[chestPart], chestInventoryFolder)
+						updateChestESP(activeESPs[chestPart], items)
 					end
 				end
-
-				for chestPart, gui in pairs(activeESPs) do
-					if not currentlyVisibleChests[chestPart] or not chestPart.Parent then
-						gui:Destroy()
-						activeESPs[chestPart] = nil
-					end
-				end
-			else
-				for chestPart, gui in pairs(activeESPs) do
-					gui:Destroy()
-				end
-				table.clear(activeESPs)
 			end
+
+			for chestPart, gui in pairs(activeESPs) do
+				if not currentlyVisibleChests[chestPart] or not chestPart.Parent then
+					gui:Destroy()
+					activeESPs[chestPart] = nil
+				end
+			end
+		else
+			for chestPart, gui in pairs(activeESPs) do gui:Destroy() end
+			table.clear(activeESPs)
 		end
-	end)
+	end
+end)
 
 	zephyrStackIncrease.OnClientEvent:Connect(function(data)
 		print("Orb count:", data.orbCount)
