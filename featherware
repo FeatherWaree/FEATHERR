@@ -2696,6 +2696,27 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 					buildOptions()
 				end
 			end)
+			
+			local lastRightClick = 0
+			dBtn.MouseButton2Click:Connect(function()
+				local now = tick()
+				if now - lastRightClick < 0.3 then
+					lastRightClick = 0
+					if multiSelect then
+						mod.Values[dName] = {}
+					else
+						mod.Values[dName] = nil
+					end
+					updateDropdownText()
+					if optFrame.Visible then buildOptions() end
+					_G.SavedConfig[settingID] = mod.Values[dName]
+					saveConfigToPC()
+					if dCallback then dCallback(mod.Values[dName]) end
+					if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, mod.Values[dName]) end
+				else
+					lastRightClick = now
+				end
+			end)
 
 			if isPlayerDropdown then
 				local pAdded = Players.PlayerAdded:Connect(function(plr)
@@ -10245,7 +10266,7 @@ end
 
 
 CHEST_ESP_RANGE = 1000   -- how far to show chests (lower = less lag in skywars)
-CHEST_ESP_ICON  = 0.56   -- icon size (scale relative to billboard height; ~0.84 studs)
+CHEST_ESP_ICON  = 1   -- icon size (scale relative to billboard height; ~0.84 studs)
 
 -- ===== build the "all items" list for the filter dropdown =====
 asAllItems = {}
@@ -10274,7 +10295,6 @@ for _, asName in ipairs(asItemList) do
 		if asLow:find(asKw, 1, true) then table.insert(asDefaultSel, asName); break end
 	end
 end
-if #asDefaultSel == 0 then asDefaultSel = asItemList end
 ChestESP:CreateDropdown("Items", asItemList, asDefaultSel, nil, true)   -- last arg true = multi-select
 
 ChestESP.Callbacks.OnToggle = function(state)
@@ -12755,25 +12775,27 @@ AutoChargeBow.Callbacks.OnToggle = function(state)
 	end
 end
 
-AAD_SKY          = 14      -- blatant: how many studs to pop up (clears a horizontal arrow; raise if a fast bolt still clips)
-AAD_SKY_MAX      = 0.6     -- blatant: safety cap on how long to stay up before forcing the descent
-AAD_SAFE_DESCENT = 18      -- blatant: descent speed via BodyVelocity (kept low so the landing velocity is under the damage threshold)
-AAD_JUKE_TIME    = 0.25    -- legit: how long the sidestep lasts
-AAD_JUKE_SPEED   = 26      -- legit: sidestep speed (~run speed)
-AAD_COOLDOWN     = 0.3     -- min gap between dodges (stops flailing on a spray)
-AAD_HIT_R_BLAT   = 3.5     -- "going to hit me" radius, blatant
-AAD_HIT_R_LEG    = 2.8     -- same, legit (tighter = reacts later, looks more human)
-AAD_REACT_BLAT   = 0.5     -- react this many seconds before impact, blatant
-AAD_REACT_LEG    = 0.3     -- same, legit
+AAD_SKY          = 14
+AAD_SKY_MAX      = 0.6
+AAD_SAFE_DESCENT = 18
+AAD_JUKE_TIME    = 0.25
+AAD_JUKE_SPEED   = 26
+AAD_COOLDOWN     = 0.3
+AAD_HIT_R_BLAT   = 3.5
+AAD_HIT_R_LEG    = 2.8
+AAD_REACT_BLAT   = 0.5
+AAD_REACT_LEG    = 0.3
 
 AutoArrowDodge = Combat:CreateButton("Auto Arrow Dodge", nil, true)
 AutoArrowDodge:CreateDropdown("Mode", {"Legit", "Blatant"}, "Legit", nil, false)
 AutoArrowDodge:CreateSlider("Distance", 0, 1000, 300, nil, 1)
 
-aad = { on = false, conn = nil, evConn = nil, useScan = false, list = {}, state = "idle", origCF = nil, bv = nil, jukeDir = nil, dodgeUntil = 0, upStart = 0, lastDodge = 0, threatV = Vector3.zero }
+aad = { on = false, conn = nil, evConn = nil, useScan = false, list = {}, state = "idle", origCF = nil, bv = nil, jukeDir = nil, dodgeUntil = 0, upStart = 0, lastDodge = 0, threatV = Vector3.zero, parseDiag = false, loopDiag = false, diagStart = 0 }
 
 function aadParse(...)
-	aap_a = {...}; aap_typ, aap_vel, aap_org, aap_shooter = nil, nil, nil, nil
+	aap_a = {...}
+	if not aad.parseDiag then aad.parseDiag = true; print("[AAD] ProjectileLaunched fired, args:", #aap_a) end
+	aap_typ, aap_vel, aap_org, aap_shooter = nil, nil, nil, nil
 	for aap_i = 1, #aap_a do
 		aap_x = aap_a[aap_i]; aap_t = typeof(aap_x)
 		if aap_t == "string" and not aap_typ then
@@ -12793,7 +12815,7 @@ function aadParse(...)
 	if aap_op and aap_op.Team == Player.Team then return end
 	if not aap_vel or not aap_org then return end
 	aap_g, aap_life = 196.2, 3
-	if aap_typ and PA_PROJ_META[aap_typ] then
+	if aap_typ and PA_PROJ_META and PA_PROJ_META[aap_typ] then
 		aap_g = PA_PROJ_META[aap_typ].gravitationalAcceleration or aap_g
 		aap_life = PA_PROJ_META[aap_typ].lifetimeSec or aap_life
 	end
@@ -12802,11 +12824,20 @@ function aadParse(...)
 end
 
 function aadConnect()
+	aad.evConn = nil
 	aad_ok = pcall(function()
-		aad_cse = require(Player.PlayerScripts.TS["client-sync-events"]).ClientSyncEvents
+		aad_cse = require(Player.PlayerScripts:WaitForChild("TS", 5):WaitForChild("client-sync-events", 5)).ClientSyncEvents
 		aad.evConn = aad_cse.ProjectileLaunched:connect(aadParse)
 	end)
+	if not aad_ok then
+		aad_ok = pcall(function()
+			aad_cse = require(game:GetService("Players").LocalPlayer.PlayerScripts:WaitForChild("TS", 5):WaitForChild("client-sync-events", 5)).ClientSyncEvents
+			aad.evConn = aad_cse.ProjectileLaunched:connect(aadParse)
+		end)
+	end
 	aad.useScan = not aad_ok
+	print("[AAD] event connected:", not aad.useScan)
+	if aad.useScan then warn("[AAD] event connect failed -> scan fallback (weaker)") end
 end
 
 function aadPurge()
@@ -12817,13 +12848,19 @@ function aadPurge()
 end
 
 function aadRebuildScan()
-	aad.list = {}; aad_char0 = Player.Character
-	for _, aad_m in pairs(workspace:GetChildren()) do
-		aad_pp = nil
-		if aad_m:IsA("Model") and not aad_m:FindFirstChildOfClass("Humanoid") then aad_pp = aad_m.PrimaryPart
-		elseif aad_m:IsA("BasePart") and not aad_m:IsDescendantOf(aad_char0) then aad_pp = aad_m end
-		if aad_pp and aad_pp.AssemblyLinearVelocity.Magnitude > 40 then
-			table.insert(aad.list, { o = aad_pp.Position, v = aad_pp.AssemblyLinearVelocity, g = 196.2, t0 = tick(), life = 0.15 })
+	aad.list = {}
+	aad_char0 = Player.Character
+	aad_roots = { workspace }
+	aad_map = workspace:FindFirstChild("Map"); if aad_map then table.insert(aad_roots, aad_map) end
+	aad_proj = workspace:FindFirstChild("Projectiles"); if aad_proj then table.insert(aad_roots, aad_proj) end
+	for _, aad_root in pairs(aad_roots) do
+		for _, aad_m in pairs(aad_root:GetChildren()) do
+			aad_pp = nil
+			if aad_m:IsA("Model") and not aad_m:FindFirstChildOfClass("Humanoid") then aad_pp = aad_m.PrimaryPart
+			elseif aad_m:IsA("BasePart") and aad_char0 and not aad_m:IsDescendantOf(aad_char0) then aad_pp = aad_m end
+			if aad_pp and aad_pp.AssemblyLinearVelocity.Magnitude > 20 then
+				table.insert(aad.list, { o = aad_pp.Position, v = aad_pp.AssemblyLinearVelocity, g = 196.2, t0 = tick(), life = 0.2 })
+			end
 		end
 	end
 end
@@ -12868,12 +12905,17 @@ function aadLoop()
 	aad_hum = aad_char and aad_char:FindFirstChildOfClass("Humanoid")
 	if not aad_hrp or not aad_hum or aad_hum.Health <= 0 then aadCleanupBV(); aad.state = "idle"; return end
 	if loops["fly"] or loops["swim"] then aadCleanupBV(); aad.state = "idle"; return end
-	if aad.state ~= "idle" and (not aad.bv or not aad.bv.Parent) and (aad.state == "up" or aad.state == "down") then aad.state = "idle" end
+	if aad.state ~= "idle" and (not aad.bv or not aad.bv.Parent) and (aad.state == "up" or aad.state == "down" or aad.state == "juke") then aad.state = "idle" end
 
 	aad_mode = AutoArrowDodge.Values["Mode"] or "Legit"
 	if aad.useScan then aadRebuildScan() else aadPurge() end
 	aad_now = tick()
 	aad_hit = aadThreat(aad_hrp.Position, aad_mode)
+
+	if not aad.loopDiag and aad_now - aad.diagStart > 1 then
+		aad.loopDiag = true
+		print("[AAD] projectiles tracked:", #aad.list, "| mode:", aad_mode, "| threat:", aad_hit)
+	end
 
 	if aad.state == "idle" then
 		if aad_hit and aad_now - aad.lastDodge >= AAD_COOLDOWN then
@@ -12881,8 +12923,9 @@ function aadLoop()
 				aad.origCF = aad_hrp.CFrame
 				aad_hrp.CFrame = aad_hrp.CFrame + Vector3.new(0, AAD_SKY, 0)
 				if not aad.bv or not aad.bv.Parent then
-					aad.bv = Instance.new("BodyVelocity"); aad.bv.MaxForce = Vector3.new(0, 1e9, 0); aad.bv.Parent = aad_hrp
+					aad.bv = Instance.new("BodyVelocity"); aad.bv.Parent = aad_hrp
 				end
+				aad.bv.MaxForce = Vector3.new(0, 1e9, 0)
 				aad.bv.Velocity = Vector3.zero
 				aad.state = "up"; aad.upStart = aad_now
 			else
@@ -12891,6 +12934,11 @@ function aadLoop()
 				aad_perp = Vector3.new(-aad_hV.Z, 0, aad_hV.X).Unit
 				if math.random() < 0.5 then aad_perp = -aad_perp end
 				aad.jukeDir = aad_perp
+				if not aad.bv or not aad.bv.Parent then
+					aad.bv = Instance.new("BodyVelocity"); aad.bv.Parent = aad_hrp
+				end
+				aad.bv.MaxForce = Vector3.new(1e9, 0, 1e9)
+				aad.bv.Velocity = Vector3.new(aad.jukeDir.X * AAD_JUKE_SPEED, 0, aad.jukeDir.Z * AAD_JUKE_SPEED)
 				aad.state = "juke"; aad.dodgeUntil = aad_now + AAD_JUKE_TIME
 			end
 		end
@@ -12898,6 +12946,7 @@ function aadLoop()
 		aad.bv.Velocity = Vector3.zero
 		if not aad_hit or aad_now - aad.upStart > AAD_SKY_MAX then aad.state = "down" end
 	elseif aad.state == "down" then
+		aad.bv.MaxForce = Vector3.new(0, 1e9, 0)
 		aad.bv.Velocity = Vector3.new(0, -AAD_SAFE_DESCENT, 0)
 		if aad_hrp.Position.Y <= aad.origCF.Position.Y + 0.5 or aad_hum.FloorMaterial ~= Enum.Material.Air then
 			aad_hrp.CFrame = CFrame.new(aad_hrp.Position.X, aad.origCF.Position.Y, aad_hrp.Position.Z)
@@ -12905,10 +12954,9 @@ function aadLoop()
 		end
 	elseif aad.state == "juke" then
 		if aad_now < aad.dodgeUntil then
-			aad_curV = aad_hrp.AssemblyLinearVelocity
-			aad_hrp.AssemblyLinearVelocity = Vector3.new(aad.jukeDir.X * AAD_JUKE_SPEED, aad_curV.Y, aad.jukeDir.Z * AAD_JUKE_SPEED)
+			aad.bv.Velocity = Vector3.new(aad.jukeDir.X * AAD_JUKE_SPEED, 0, aad.jukeDir.Z * AAD_JUKE_SPEED)
 		else
-			aad.state = "idle"; aad.lastDodge = aad_now
+			aadCleanupBV(); aad.state = "idle"; aad.lastDodge = aad_now
 		end
 	end
 end
@@ -12917,7 +12965,7 @@ AutoArrowDodge.Callbacks.OnToggle = function(state)
 	loops["auto arrow dodge"] = state
 	aad.on = state
 	if state then
-		aad.state = "idle"; aad.list = {}; aad.lastDodge = 0
+		aad.state = "idle"; aad.list = {}; aad.lastDodge = 0; aad.parseDiag = false; aad.loopDiag = false; aad.diagStart = tick()
 		aadConnect()
 		if not aad.conn then aad.conn = game:GetService("RunService").Heartbeat:Connect(aadLoop) end
 	else
