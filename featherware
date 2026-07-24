@@ -10245,7 +10245,7 @@ end
 
 
 CHEST_ESP_RANGE = 1000   -- how far to show chests (lower = less lag in skywars)
-CHEST_ESP_ICON  = 0.14   -- icon size (scale relative to billboard height; ~0.84 studs)
+CHEST_ESP_ICON  = 0.56   -- icon size (scale relative to billboard height; ~0.84 studs)
 
 -- ===== build the "all items" list for the filter dropdown =====
 asAllItems = {}
