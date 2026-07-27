@@ -12788,12 +12788,13 @@ AAD_COOLDOWN     = 0.12
 AAD_ABOVE        = 5
 AAD_BAND_LOW     = -3.5
 AAD_BAND_HIGH    = 5.0
-AAD_R_BLAT       = 2.6
-AAD_R_LEG        = 2.2
-AAD_REACT_BLAT   = 0.5
+AAD_R_BLAT       = 3.0
+AAD_R_LEG        = 2.4
+AAD_REACT_BLAT   = 0.7
 AAD_REACT_LEG    = 0.4
-AAD_SWEEP        = 0.03
 AAD_AIR_SPEED    = 22
+AAD_SCAN_EVERY   = 0.04
+AAD_OWNER_TOL    = 9
 
 AutoArrowDodge = Combat:CreateButton("Auto Arrow Dodge", nil, true)
 AutoArrowDodge:CreateDropdown("Mode", {"Legit", "Blatant"}, "Legit", nil, false)
@@ -12802,13 +12803,14 @@ AutoArrowDodge:CreateToggle("Other Projectiles", true, nil)
 
 if not paRS then paRS = game:GetService("ReplicatedStorage") end
 aadCS = game:GetService("CollectionService")
+aadSkipDescend = { Map = true, Terrain = true, Camera = true, Players = true, Lighting = true, SoundService = true, CoreGui = true }
 
 aad = {
 	on = false, conn = nil, evConn = nil, netConn = nil,
-	srcNet = false, srcSync = false,
+	srcNet = false, srcSync = false, srcScan = false,
 	list = {}, state = "idle", origCF = nil, ceilingY = 0, bv = nil,
 	jukeDir = nil, dodgeUntil = 0, upStart = 0, downStart = 0, lastDodge = 0,
-	threatV = Vector3.zero, threatTtc = 999, threatY = 0,
+	threatV = Vector3.zero, threatTtc = 999,
 	actKind = "jump", actDir = Vector3.new(1,0,0), actStart = Vector3.zero,
 	actNeed = 0, actDur = 0, actJumped = false,
 	hist = {}, scanAcc = 0, histFrame = 0,
@@ -12843,11 +12845,41 @@ function aadIsArrowType(typ, nameHint)
 		if tostring(typ):lower():find("arrow") then return true end
 		return false
 	end
-	if nameHint then
-		aai_n = tostring(nameHint):lower()
-		if aai_n:find("arrow") then return true end
-	end
+	if nameHint and tostring(nameHint):lower():find("arrow") then return true end
 	return false
+end
+
+-- backward-ray ownership for the scan: who is BEHIND this part along its travel?
+function aadScanOwner(pos, dir)
+	aso_back = Vector3.new(-dir.X, -dir.Y, -dir.Z)
+	aso_best = AAD_OWNER_TOL; aso_found = false; aso_friendly = nil
+	for _, aso_pl in pairs(Players:GetPlayers()) do
+		aso_c = aso_pl.Character; aso_r = aso_c and aso_c:FindFirstChild("HumanoidRootPart")
+		if aso_r then
+			aso_w = aso_r.Position - pos
+			aso_db = aso_w:Dot(aso_back)
+			if aso_db > 0 then
+				aso_perp = (aso_w - aso_back * aso_db).Magnitude
+				if aso_perp < aso_best then
+					aso_best = aso_perp; aso_found = true
+					aso_friendly = (aso_pl == Player or (aso_pl.Team ~= nil and aso_pl.Team == Player.Team))
+				end
+			end
+		end
+	end
+	for _, aso_npc in ipairs(EntityCache.npcs) do
+		aso_r = aso_npc:FindFirstChild("HumanoidRootPart") or aso_npc.PrimaryPart
+		if aso_r then
+			aso_w = aso_r.Position - pos
+			aso_db = aso_w:Dot(aso_back)
+			if aso_db > 0 then
+				aso_perp = (aso_w - aso_back * aso_db).Magnitude
+				if aso_perp < aso_best then aso_best = aso_perp; aso_found = true; aso_friendly = false end
+			end
+		end
+	end
+	if not aso_found then return nil end
+	return aso_friendly
 end
 
 function aadIngest(typ, vel, org, shooter, nameHint)
@@ -12864,7 +12896,7 @@ function aadIngest(typ, vel, org, shooter, nameHint)
 		aai_g = PA_PROJ_META[typ].gravitationalAcceleration or aai_g
 		aai_life = PA_PROJ_META[typ].lifetimeSec or aai_life
 	end
-	if #aad.list > 64 then table.remove(aad.list, 1) end
+	if #aad.list > 96 then table.remove(aad.list, 1) end
 	table.insert(aad.list, { o = org, v = vel, g = aai_g, t0 = tick(), life = aai_life })
 	return true
 end
@@ -12936,8 +12968,12 @@ function aadAddCand(part)
 			if aadc_spd > 30 then
 				aadc_my = aad_hrp and aad_hrp.Position
 				if aadc_my and (aadc_pos - aadc_my):Dot(aadc_dpos) < 0 then
-					aadc_hint = (part.Parent and part.Parent.Name) or part.Name
-					if aadIngest(nil, aadc_dpos / aadc_dt, aadc_pos, nil, aadc_hint) and not aad.dScan then aad.dScan = true end
+					aadc_dir = aadc_dpos.Unit
+					aadc_fr = aadScanOwner(aadc_pos, aadc_dir)        -- true=friendly, false=enemy, nil=unknown
+					if aadc_fr == false then                            -- ONLY positively-enemy parts get in
+						aadc_hint = (part.Parent and part.Parent.Name) or part.Name
+						if aadIngest(nil, aadc_dpos / aadc_dt, aadc_pos, nil, aadc_hint) and not aad.dScan then aad.dScan = true end
+					end
 				end
 			end
 		end
@@ -12957,20 +12993,26 @@ function aadScan()
 			aadAddCand(aad_ti:IsA("BasePart") and aad_ti or aad_ti.PrimaryPart)
 		end
 	end
-	aad_roots = { workspace }
+	aad_mc2 = aadMyChar()
 	for _, aad_ch in ipairs(workspace:GetChildren()) do
-		if aad_ch:IsA("Folder") or aad_ch:IsA("Model") then
-			aad_low = aad_ch.Name:lower()
-			if aad_low:find("projectile") or aad_low:find("effect") or aad_low:find("combat") or aad_low:find("arrow") then table.insert(aad_roots, aad_ch) end
-		end
-	end
-	for _, aad_r in ipairs(aad_roots) do
-		for _, aad_ch in ipairs(aad_r:GetChildren()) do
-			aadAddCand(aad_ch:IsA("BasePart") and aad_ch or (aad_ch:IsA("Model") and aad_ch.PrimaryPart or nil))
+		if aad_ch:IsA("BasePart") then
+			aadAddCand(aad_ch)
+		elseif aad_ch:IsA("Model") and not aad_ch:FindFirstChildOfClass("Humanoid") then
+			aadAddCand(aad_ch.PrimaryPart)
+			if not aadSkipDescend[aad_ch.Name] then
+				for _, aad_gc in ipairs(aad_ch:GetChildren()) do
+					if aad_gc:IsA("BasePart") then aadAddCand(aad_gc) elseif aad_gc:IsA("Model") then aadAddCand(aad_gc.PrimaryPart) end
+				end
+			end
+		elseif (aad_ch:IsA("Folder") or aad_ch:IsA("Model")) and not aadSkipDescend[aad_ch.Name] then
+			for _, aad_gc in ipairs(aad_ch:GetChildren()) do
+				if aad_gc:IsA("BasePart") then aadAddCand(aad_gc) elseif aad_gc:IsA("Model") and not aad_gc:FindFirstChildOfClass("Humanoid") then aadAddCand(aad_gc.PrimaryPart) end
+			end
 		end
 	end
 end
 
+-- exact horizontal closest-approach (no step-skip) + vertical band = ignores overhead arcs, catches flat close/mid shots
 function aadThreat(C, mode)
 	aat_R = (mode == "Blatant") and AAD_R_BLAT or AAD_R_LEG
 	aat_react = (mode == "Blatant") and AAD_REACT_BLAT or AAD_REACT_LEG
@@ -12978,29 +13020,40 @@ function aadThreat(C, mode)
 	aat_bandLow = C.Y + AAD_BAND_LOW
 	aat_bandHigh = C.Y + AAD_BAND_HIGH
 	aat_now = tick()
-	aat_best = false; aat_bestTtc = 999; aat_bestV = Vector3.zero; aat_bestY = 0
+	aat_best = false; aat_bestTtc = 999; aat_bestV = Vector3.zero
 	for aat_j = 1, #aad.list do
 		aat_e = aad.list[aat_j]; aat_a0 = aat_now - aat_e.t0
 		if aat_a0 >= 0 and aat_a0 <= aat_e.life then
 			aat_P0 = aadPosAt(aat_e, aat_a0); aat_V0 = aadVelAt(aat_e, aat_a0)
-			if (aat_P0 - C).Magnitude <= aat_maxD + 30 then
-				aat_hP0 = Vector3.new(aat_P0.X - C.X, 0, aat_P0.Z - C.Z)
-				aat_hV0 = Vector3.new(aat_V0.X, 0, aat_V0.Z)
-				aat_closing = (aat_hP0:Dot(aat_hV0) < 0) or (aat_hP0.Magnitude < aat_R + 1.5)
-				if aat_closing then
-					aat_n = math.ceil(aat_react / AAD_SWEEP)
-					aat_bhd = 1e9; aat_bttc = 0; aat_bV = aat_V0; aat_bY = aat_P0.Y
-					for aat_i = 0, aat_n do
-						aat_age = aat_a0 + aat_i * AAD_SWEEP
-						if aat_age > aat_e.life then break end
-						aat_P = aadPosAt(aat_e, aat_age)
-						if aat_P.Y >= aat_bandLow and aat_P.Y <= aat_bandHigh then
-							aat_hd = Vector3.new(aat_P.X - C.X, 0, aat_P.Z - C.Z).Magnitude
-							if aat_hd < aat_bhd then aat_bhd = aat_hd; aat_bttc = aat_age - aat_a0; aat_bV = aadVelAt(aat_e, aat_age); aat_bY = aat_P.Y end
+			aat_hN = Vector3.new(aat_P0.X - C.X, 0, aat_P0.Z - C.Z)
+			if aat_hN.Magnitude <= aat_maxD then
+				if aat_hN.Magnitude <= aat_R and aat_P0.Y >= aat_bandLow and aat_P0.Y <= aat_bandHigh then
+					aat_bestTtc = 0; aat_bestV = aat_V0; aat_best = true
+				else
+					aat_Vh = Vector3.new(aat_V0.X, 0, aat_V0.Z); aat_vh2 = aat_Vh:Dot(aat_Vh)
+					if aat_vh2 > 0.01 then
+						aat_th = aat_a0 - aat_hN:Dot(aat_Vh) / aat_vh2
+						if aat_th >= aat_a0 and aat_th <= aat_a0 + aat_react then
+							aat_Ph = aadPosAt(aat_e, aat_th)
+							aat_hh = Vector3.new(aat_Ph.X - C.X, 0, aat_Ph.Z - C.Z).Magnitude
+							if aat_hh <= aat_R and aat_Ph.Y >= aat_bandLow and aat_Ph.Y <= aat_bandHigh then
+								aat_ttc = aat_th - aat_a0
+								if aat_ttc < aat_bestTtc then aat_bestTtc = aat_ttc; aat_bestV = aadVelAt(aat_e, aat_th); aat_best = true end
+							end
 						end
-					end
-					if aat_bhd <= aat_R and aat_bttc <= aat_react and aat_bttc < aat_bestTtc then
-						aat_bestTtc = aat_bttc; aat_bestV = aat_bV; aat_bestY = aat_bY; aat_best = true
+					elseif aat_hN.Magnitude <= aat_R then
+						aat_k = 0
+						while aat_k <= 8 do
+							aat_t = aat_a0 + aat_k * 0.04
+							if aat_t > aat_a0 + aat_react then break end
+							aat_Py = aadPosAt(aat_e, aat_t).Y
+							if aat_Py >= aat_bandLow and aat_Py <= aat_bandHigh then
+								aat_ttc = aat_t - aat_a0
+								if aat_ttc < aat_bestTtc then aat_bestTtc = aat_ttc; aat_bestV = aadVelAt(aat_e, aat_t); aat_best = true end
+								break
+							end
+							aat_k = aat_k + 1
+						end
 					end
 				end
 			end
@@ -13008,7 +13061,6 @@ function aadThreat(C, mode)
 	end
 	aad.threatTtc = aat_best and aat_bestTtc or 999
 	aad.threatV = aat_bestV
-	aad.threatY = aat_bestY
 	return aat_best
 end
 
@@ -13094,14 +13146,14 @@ function aadLoop(dt)
 
 	aad_mode = AutoArrowDodge.Values["Mode"] or "Legit"
 	aad.scanAcc = aad.scanAcc + (dt or 0.016)
-	if aad.scanAcc >= 0.03 then aad.scanAcc = 0; aadScan() end
+	if aad.scanAcc >= AAD_SCAN_EVERY then aad.scanAcc = 0; aadScan() end
 	aadPurge()
 	aad_now = tick()
 	aad_hit = aadThreat(aad_hrp.Position, aad_mode)
 
 	if not aad.dSum and aad_now - aad.sumAt > 1.5 then
 		aad.dSum = true
-		print("[AAD] tracked:", #aad.list, "| mode:", aad_mode, "| threat:", aad_hit, "| net:", aad.srcNet, "sync:", aad.srcSync, "scan:", aad.dScan)
+		print("[AAD] tracked:", #aad.list, "| mode:", aad_mode, "| threat:", aad_hit, "| net:", aad.srcNet, "sync:", aad.srcSync, "scan:", aad.srcScan)
 	end
 
 	if aad_mode == "Blatant" then
@@ -13190,7 +13242,7 @@ AutoArrowDodge.Callbacks.OnToggle = function(state)
 		aad.state = "idle"; aad.list = {}; aad.hist = {}; aad.lastDodge = 0; aad.scanAcc = 0; aad.sumAt = tick()
 		aad.dodgeUntil = 0; aad.ceilingY = 0; aad.origCF = nil
 		aad.dNet = false; aad.dSync = false; aad.dScan = false; aad.dSum = false
-		aad.srcNet = false; aad.srcSync = false
+		aad.srcNet = false; aad.srcSync = false; aad.srcScan = false
 		aadConnect()
 		if not aad.conn then aad.conn = game:GetService("RunService").Heartbeat:Connect(aadLoop) end
 	else
