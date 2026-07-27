@@ -925,6 +925,8 @@ end
 		["nofall"] = false,
 		["spin bot"] = false,
 		["auto charge bow"] = false,
+		["keep sprint"] = false,
+		["target strafe"] = false
  		}
  
 
@@ -1929,6 +1931,61 @@ function stopDesync()
 	exitReal()
 	if desync.marker then desync.marker:Destroy(); desync.marker = nil end
 	desync.queue = {}
+end
+
+local THEME = {
+	Panel      = Color3.fromRGB(16, 16, 19),
+	PanelTop   = Color3.fromRGB(21, 21, 25),
+	Card       = Color3.fromRGB(24, 24, 29),
+	CardHover  = Color3.fromRGB(31, 31, 37),
+	Input      = Color3.fromRGB(34, 34, 40),
+	Border     = Color3.fromRGB(43, 43, 50),
+	TextPrimary   = Color3.fromRGB(238, 238, 244),
+	TextSecondary = Color3.fromRGB(160, 160, 172),
+	TextDim       = Color3.fromRGB(112, 112, 124),
+	Accent     = Color3.fromRGB(140, 120, 255),
+	AccentSoft = Color3.fromRGB(118, 102, 224),
+	OnColor    = Color3.fromRGB(70, 210, 145),
+	ToggleOff  = Color3.fromRGB(52, 52, 60),
+	Danger     = Color3.fromRGB(240, 92, 92),
+}
+
+local function corner(parent, r)
+	local c = Instance.new("UICorner", parent)
+	c.CornerRadius = UDim.new(0, r or 6)
+	return c
+end
+
+local function stroke(parent, color, thickness, transparency)
+	local s = Instance.new("UIStroke", parent)
+	s.Color = color or THEME.Border
+	s.Thickness = thickness or 1
+	s.Transparency = transparency or 0.45
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	return s
+end
+
+local function makeToggleSwitch(parent, default, onColor)
+	local track = Instance.new("Frame", parent)
+	track.Size = UDim2.fromOffset(34, 18)
+	track.BackgroundColor3 = default and (onColor or THEME.Accent) or THEME.ToggleOff
+	track.BorderSizePixel = 0
+	corner(track, 9)
+	stroke(track, THEME.Border, 1, 0.55)
+
+	local thumb = Instance.new("Frame", track)
+	thumb.Size = UDim2.fromOffset(12, 12)
+	thumb.AnchorPoint = Vector2.new(0, 0.5)
+	thumb.Position = default and UDim2.new(0, 19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+	thumb.BackgroundColor3 = THEME.TextPrimary
+	thumb.BorderSizePixel = 0
+	corner(thumb, 6)
+
+	local function setState(state)
+		tween(track, {BackgroundColor3 = state and (onColor or THEME.Accent) or THEME.ToggleOff}, 0.16)
+		tween(thumb, {Position = state and UDim2.new(0, 19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)}, 0.16)
+	end
+	return track, setState
 end
 
 local function injectElements(mod, settingsCont, uniquePrefix)
@@ -3858,6 +3915,7 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 
 
 	Combat = FW:CreateCategory("Combat")
+	Blatat = FW:CreateCategory("Blatant")
 	Visuals = FW:CreateCategory("Visuals")
 	Utility = FW:CreateCategory("Utility")
 	Movement = FW:CreateCategory("Movement")
@@ -4320,6 +4378,9 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 	LongJump:CreateToggle("Auto UnToggle", nil, false)
 	
 	Swim = Movement:CreateButton("Swim", nil, true)
+	
+	KeepSprint = Movement:CreateButton("Keep Sprint", nil, true)
+	
 	
 
 	--Game
@@ -10888,7 +10949,6 @@ function getCharacterData()
 	return nil
 end
 
--- === Professional Minimalist UI ===
 function createFlyUI()
 	if destroyFlyUI then
 		destroyFlyUI()
@@ -12860,17 +12920,37 @@ function aadIsArrow(typ, hint)
 	return false
 end
 
-function aadIngest(typ, vel, org, shooter, hint)
+function aadOwnerVerdictFromUserId(uid)
+	if not uid or uid == 0 then return "skip" end
+	if uid == Player.UserId then return "skip" end
+	aou_plr = Players:GetPlayerByUserId(uid)
+	if not aou_plr then return "skip" end
+	aou_sameTeam = (aou_plr.Team ~= nil and Player.Team ~= nil and aou_plr.Team == Player.Team)
+	if aou_sameTeam then return "skip" end
+	if aou_plr.Team ~= nil and tostring(aou_plr.Team.Name):lower():find("spectat") then return "skip" end
+	return "enemy"
+end
+
+function aadOwnerVerdictFromShooterModel(shooter)
+	if not shooter then return "skip" end
+	if shooter == aadMyChar() then return "skip" end
+	aos_plr = Players:GetPlayerFromCharacter(shooter)
+	if not aos_plr then return "skip" end
+	aos_sameTeam = (aos_plr.Team ~= nil and Player.Team ~= nil and aos_plr.Team == Player.Team)
+	if aos_sameTeam then return "skip" end
+	if aos_plr.Team ~= nil and tostring(aos_plr.Team.Name):lower():find("spectat") then return "skip" end
+	return "enemy"
+end
+
+function aadIngest(typ, vel, org, verdict, hint)
 	if not aad.on then return false end
+	if verdict ~= "enemy" then return false end
 	if not vel or not org then return false end
-	if shooter and shooter == aadMyChar() then return false end
-	aai_op = shooter and Players:GetPlayerFromCharacter(shooter)
-	if aai_op and aai_op.Team == Player.Team then return false end
 	if not AutoArrowDodge.Values["Other Projectiles"] then
 		if not aadIsArrow(typ, hint) then return false end
 	end
 	aai_g, aai_life = 196.2, 3
-	if typ and PA_PROJ_META[typ] then
+	if typ and PA_PROJ_META and PA_PROJ_META[typ] then
 		aai_g = PA_PROJ_META[typ].gravitationalAcceleration or aai_g
 		aai_life = PA_PROJ_META[typ].lifetimeSec or aai_life
 	end
@@ -12895,7 +12975,8 @@ end
 
 function aadParseSync(...)
 	aaps_typ, aaps_vel, aaps_org, aaps_sh = aadScanTypes({...})
-	if aadIngest(aaps_typ, aaps_vel, aaps_org, aaps_sh, nil) and not aad.dSync then aad.dSync = true; aad.srcSync = true end
+	aaps_verdict = aadOwnerVerdictFromShooterModel(aaps_sh)
+	if aadIngest(aaps_typ, aaps_vel, aaps_org, aaps_verdict, nil) and not aad.dSync then aad.dSync = true; aad.srcSync = true end
 end
 
 function aadParseNet(...)
@@ -12904,10 +12985,12 @@ function aadParseNet(...)
 		if type(aapn_args[aapn_i]) == "table" and typeof(aapn_args[aapn_i].initialVelocity) == "Vector3" then aapn_tbl = aapn_args[aapn_i]; break end
 	end
 	if aapn_tbl then
-		aapn_ok = aadIngest(aapn_tbl.projectileType, aapn_tbl.initialVelocity, aapn_tbl.positionFrom, aapn_tbl.shooter, nil)
+		aapn_verdict = aadOwnerVerdictFromShooterModel(aapn_tbl.shooter)
+		aapn_ok = aadIngest(aapn_tbl.projectileType, aapn_tbl.initialVelocity, aapn_tbl.positionFrom, aapn_verdict, nil)
 	else
 		aapn_typ, aapn_vel, aapn_org, aapn_sh = aadScanTypes(aapn_args)
-		aapn_ok = aadIngest(aapn_typ, aapn_vel, aapn_org, aapn_sh, nil)
+		aapn_verdict = aadOwnerVerdictFromShooterModel(aapn_sh)
+		aapn_ok = aadIngest(aapn_typ, aapn_vel, aapn_org, aapn_verdict, nil)
 	end
 	if aapn_ok and not aad.dNet then aad.dNet = true; aad.srcNet = true end
 end
@@ -12946,8 +13029,12 @@ function aadAddCand(part)
 			if aadc_spd > 30 then
 				aadc_my = aad_hrp and aad_hrp.Position
 				if aadc_my and (aadc_pos - aadc_my):Dot(aadc_dpos) < 0 then
-					aadc_hint = (part.Parent and part.Parent.Name) or part.Name
-					if aadIngest(nil, aadc_dpos / aadc_dt, aadc_pos, nil, aadc_hint) and not aad.dScan then aad.dScan = true end
+					aadc_uid = tonumber(part:GetAttribute("ProjectileShooter"))
+					aadc_verdict = aadOwnerVerdictFromUserId(aadc_uid)
+					if aadc_verdict == "enemy" then
+						aadc_hint = (part.Parent and part.Parent.Name) or part.Name
+						if aadIngest(nil, aadc_dpos / aadc_dt, aadc_pos, aadc_verdict, aadc_hint) and not aad.dScan then aad.dScan = true end
+					end
 				end
 			end
 		end
@@ -13021,7 +13108,6 @@ function aadThreat(C, mode)
 	return aat_best
 end
 
--- generous "still transiting my column" test used ONLY while airborne (decides when to come down)
 function aadHoldDanger()
 	ahd_low = aad.origCF.Position.Y + AAD_BAND_LOW
 	ahd_high = aad.origCF.Position.Y + AAD_CEIL_CAP
@@ -13229,6 +13315,436 @@ AutoArrowDodge.Callbacks.OnToggle = function(state)
 		pcall(function()
 			aad_c2 = aadMyChar(); aad_h2 = aad_c2 and aad_c2:FindFirstChildOfClass("Humanoid")
 			if aad_h2 then aad_h2:Move(Vector3.zero, false) end
+		end)
+	end
+end
+
+KeepSprint.Callbacks.OnToggle = function(state)
+	loops["keep sprint"] = state
+end
+
+cachedChar:GetAttributeChangedSignal("SpeedBoost"):Connect(function()
+	if cachedChar:GetAttribute("SpeedBoost") == 1.5 then
+		if loops["keep sprint"] and canRequire then
+			SprintController.attemptingSprint = true
+			SprintController:startSprinting()
+		end
+	end
+end)
+
+TS_MAP_RADIUS = 30
+TS_MAP_HALF = 150
+TS_MAX_BLOCKS = 120
+TS_FLIP_MIN = 0.35
+TS_FLIP_MAX = 0.70
+
+TargetStrafe = Combat:CreateButton("Target Strafe", nil, true)
+TargetStrafe:CreateToggle("Target Players", true, nil)
+TargetStrafe:CreateToggle("Target NPCs/Dummies", false, nil)
+TargetStrafe:CreateToggle("Ignore Behind Walls", true, nil)
+TargetStrafe:CreateToggle("Ignore Invisible", true, nil)
+TargetStrafe:CreateSlider("Search Range", 1, 30, 14, nil, 1)
+TargetStrafe:CreateSlider("Strafe Range", 1, 30, 8, nil, 1)
+TargetStrafe:CreateSlider("Y Factor", 0, 100, 50, nil, 1)
+TargetStrafe:CreateDropdown("Strafe Mode", {"Strafe", "Circle", "Custom"}, "Strafe", nil)
+
+ts = { on = false, lock = nil, sign = 1, flipAt = 0, wpIndex = 1, blockedTime = 0 }
+ts_waypoints = {}
+ts_editorOpen = false
+ts_editorGui = nil
+ts_editorTarget = nil
+tsErrShown = false
+tsWallParams = RaycastParams.new(); tsWallParams.FilterType = Enum.RaycastFilterType.Exclude; tsWallParams.IgnoreWater = true
+tsGroundParams = RaycastParams.new(); tsGroundParams.FilterType = Enum.RaycastFilterType.Exclude; tsGroundParams.IgnoreWater = true
+
+function tsUserMoving()
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.D) then return true end
+	if UserInputService:IsKeyDown(Enum.KeyCode.Up) or UserInputService:IsKeyDown(Enum.KeyCode.Down) or UserInputService:IsKeyDown(Enum.KeyCode.Left) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then return true end
+	return false
+end
+
+function tsIsInvisible(model)
+	tsp_pool = {}
+	tsp_t = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso") or model:FindFirstChild("LowerTorso")
+	if tsp_t then table.insert(tsp_pool, tsp_t) end
+	tsp_h = model:FindFirstChild("Head")
+	if tsp_h then table.insert(tsp_pool, tsp_h) end
+	if #tsp_pool == 0 then return false end
+	tsp_sum = 0
+	for _, tsp_p in ipairs(tsp_pool) do
+		if tsp_p:IsA("BasePart") then tsp_sum = tsp_sum + math.max(tsp_p.Transparency, tsp_p.LocalTransparencyModifier) end
+	end
+	return (tsp_sum / #tsp_pool) >= 0.9
+end
+
+function tsHasLOS(from, model)
+	tsl_h = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	if not tsl_h then return false end
+	tsl_char = Player.Character
+	if tsl_char then tsWallParams.FilterDescendantsInstances = { tsl_char, model } else tsWallParams.FilterDescendantsInstances = { model } end
+	return workspace:Raycast(from + Vector3.new(0, 1, 0), tsl_h.Position - (from + Vector3.new(0, 1, 0)), tsWallParams) == nil
+end
+
+function tsDist(model)
+	tsd_h = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	if not tsd_h then return nil, nil end
+	return tsd_h, (tsd_h.Position - ts_myPos).Magnitude
+end
+
+function tsDirClear(dir)
+	tsWallParams.FilterDescendantsInstances = { ts_char }
+	ts_wall = workspace:Raycast(ts_hrp.Position + Vector3.new(0, 0.5, 0), dir * 2.0, tsWallParams)
+	if ts_wall then return false end
+
+	-- [FIXED]: If the player is currently flying, ignore the cliff edge detection so they don't freeze in mid-air.
+	if loops and loops["fly"] then return true end
+
+	tsGroundParams.FilterDescendantsInstances = { ts_char }
+	ts_edge = workspace:Raycast(ts_hrp.Position + dir * 1.4 + Vector3.new(0, 1, 0), Vector3.new(0, -6, 0), tsGroundParams)
+	return ts_edge ~= nil
+end
+
+function tsFindTarget()
+	ts_cands = {}
+	if TargetStrafe.Values["Target Players"] then
+		for _, ts_pl in ipairs(EntityCache.players) do
+			ts_m = ts_pl.Character
+			if ts_m and not (TargetStrafe.Values["Ignore Invisible"] and tsIsInvisible(ts_m)) then
+				ts_h, ts_d = tsDist(ts_m)
+				if ts_h and ts_d <= (TargetStrafe.Values["Search Range"] or 14) then
+					if not (TargetStrafe.Values["Ignore Behind Walls"]) or tsHasLOS(ts_myPos, ts_m) then
+						table.insert(ts_cands, { m = ts_m, d = ts_d })
+					end
+				end
+			end
+		end
+	end
+	if TargetStrafe.Values["Target NPCs/Dummies"] then
+		for _, ts_npc in ipairs(EntityCache.npcs) do
+			if not (TargetStrafe.Values["Ignore Invisible"] and tsIsInvisible(ts_npc)) then
+				ts_h, ts_d = tsDist(ts_npc)
+				if ts_h and ts_d <= (TargetStrafe.Values["Search Range"] or 14) then
+					if not (TargetStrafe.Values["Ignore Behind Walls"]) or tsHasLOS(ts_myPos, ts_npc) then
+						table.insert(ts_cands, { m = ts_npc, d = ts_d })
+					end
+				end
+			end
+		end
+	end
+	if #ts_cands == 0 then return nil end
+	table.sort(ts_cands, function(a, b) return a.d < b.d end)
+	return ts_cands[1].m
+end
+
+function tsMapPos(dx, dz, centerUI)
+	return Vector2.new(centerUI.X + dx * (TS_MAP_HALF / TS_MAP_RADIUS), centerUI.Y + dz * (TS_MAP_HALF / TS_MAP_RADIUS))
+end
+
+function tsMakeDot(parent, size, color, text)
+	tsd = Instance.new("Frame")
+	tsd.Size = UDim2.fromOffset(size, size)
+	tsd.BackgroundColor3 = color; tsd.BackgroundTransparency = 0.1
+	tsd.BorderSizePixel = 0; tsd.AnchorPoint = Vector2.new(0.5, 0.5); tsd.ZIndex = 5
+	tsd.Parent = parent
+	Instance.new("UICorner", tsd).CornerRadius = UDim.new(1, 0)
+	if text and text ~= "" then
+		tsd_lbl = Instance.new("TextLabel", tsd)
+		tsd_lbl.Size = UDim2.fromScale(1, 1); tsd_lbl.BackgroundTransparency = 1
+		tsd_lbl.Text = text; tsd_lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+		tsd_lbl.TextSize = 11; tsd_lbl.Font = Enum.Font.GothamBold; tsd_lbl.ZIndex = 6
+	end
+	return tsd
+end
+
+function tsRefreshEditor()
+	if not ts_editorOpen or not ts_editorGui then return end
+	ts_map = ts_editorGui:FindFirstChild("TS_BG"):FindFirstChild("TS_Map")
+	if not ts_map then return end
+
+	ts_dots = ts_map:FindFirstChild("TS_Dots")
+	for _, ts_c in ipairs(ts_dots:GetChildren()) do ts_c:Destroy() end
+
+	ts_centerUI = Vector2.new(ts_map.AbsoluteSize.X / 2, ts_map.AbsoluteSize.Y / 2)
+
+	-- Red dot in the center for the Target
+	ts_edot = tsMakeDot(ts_dots, 14, Color3.fromRGB(255, 60, 60), "")
+	ts_edot.Position = UDim2.fromOffset(ts_centerUI.X, ts_centerUI.Y)
+
+	-- Blue dot for the Player
+	ts_char = Player.Character
+	ts_hrp = ts_char and ts_char:FindFirstChild("HumanoidRootPart")
+	ts_editorTarget = ts.lock or tsFindTarget()
+
+	if ts_hrp and ts_editorTarget then
+		ts_tHRP = ts_editorTarget:FindFirstChild("HumanoidRootPart") or ts_editorTarget.PrimaryPart
+		if ts_tHRP then
+			ts_pdx = ts_hrp.Position.X - ts_tHRP.Position.X
+			ts_pdz = ts_hrp.Position.Z - ts_tHRP.Position.Z
+			ts_ppUI = tsMapPos(ts_pdx, ts_pdz, ts_centerUI)
+			ts_pdot = tsMakeDot(ts_dots, 9, Color3.fromRGB(80, 160, 255), "")
+			ts_pdot.Position = UDim2.fromOffset(ts_ppUI.X, ts_ppUI.Y)
+		end
+	end
+
+	-- Numbered Custom Waypoints
+	for ts_wi, ts_wp in ipairs(ts_waypoints) do
+		ts_wposUI = tsMapPos(ts_wp.x, ts_wp.z, ts_centerUI)
+		ts_wdot = tsMakeDot(ts_dots, 16, Color3.fromRGB(255, 200, 60), tostring(ts_wi))
+		ts_wdot.Position = UDim2.fromOffset(ts_wposUI.X, ts_wposUI.Y)
+	end
+
+	ts_info = ts_editorGui:FindFirstChild("TS_BG"):FindFirstChild("TS_Info")
+	if ts_info then ts_info.Text = "Waypoints: " .. #ts_waypoints .. "  |  Left-click add  |  Right-click remove" end
+end
+
+function tsRefreshBlocks()
+	if not ts_editorOpen or not ts_editorGui then return end
+	ts_editorTarget = ts.lock or tsFindTarget()
+	ts_map = ts_editorGui:FindFirstChild("TS_BG"):FindFirstChild("TS_Map")
+	ts_blocks = ts_map and ts_map:FindFirstChild("TS_Blocks")
+	if not ts_map or not ts_blocks then return end
+	for _, ts_b in ipairs(ts_blocks:GetChildren()) do ts_b:Destroy() end
+
+	ts_centerUI = Vector2.new(ts_map.AbsoluteSize.X / 2, ts_map.AbsoluteSize.Y / 2)
+	ts_tHRP = ts_editorTarget and (ts_editorTarget:FindFirstChild("HumanoidRootPart") or ts_editorTarget.PrimaryPart)
+	ts_tPos = ts_tHRP and ts_tHRP.Position or (Player.Character and Player.Character.PrimaryPart and Player.Character.PrimaryPart.Position) or Vector3.zero
+
+	ts_src = workspace:FindFirstChild("Map") or workspace
+	ts_count = 0
+	for _, ts_part in ipairs(ts_src:GetChildren()) do
+		if ts_count >= TS_MAX_BLOCKS then break end
+		ts_bp = nil
+		if ts_part:IsA("BasePart") then ts_bp = ts_part
+		elseif ts_part:IsA("Model") and ts_part.PrimaryPart then ts_bp = ts_part.PrimaryPart end
+
+		if ts_bp and ts_bp.Size.X >= 2 and ts_bp.Size.Z >= 2 then
+			ts_dy = ts_bp.Position.Y - ts_tPos.Y
+			if ts_dy > -12 and ts_dy < 6 then
+				ts_dx = ts_bp.Position.X - ts_tPos.X
+				ts_dz = ts_bp.Position.Z - ts_tPos.Z
+				if math.abs(ts_dx) < TS_MAP_RADIUS and math.abs(ts_dz) < TS_MAP_RADIUS then
+					ts_bposUI = tsMapPos(ts_dx, ts_dz, ts_centerUI)
+					ts_bf = Instance.new("Frame")
+					ts_bf.AnchorPoint = Vector2.new(0.5, 0.5)
+					ts_bf.Position = UDim2.fromOffset(ts_bposUI.X, ts_bposUI.Y)
+					ts_bf.Size = UDim2.fromOffset(math.max(3, ts_bp.Size.X * (TS_MAP_HALF / TS_MAP_RADIUS)), math.max(3, ts_bp.Size.Z * (TS_MAP_HALF / TS_MAP_RADIUS)))
+					ts_bf.BackgroundColor3 = Color3.fromRGB(90, 95, 105)
+					ts_bf.BackgroundTransparency = 0.45; ts_bf.BorderSizePixel = 0; ts_bf.ZIndex = 2
+					ts_bf.Parent = ts_blocks
+					ts_count = ts_count + 1
+				end
+			end
+		end
+	end
+end
+
+function tsBuildEditor()
+	if ts_editorGui then return end
+	ts_editorGui = Instance.new("ScreenGui")
+	ts_editorGui.Name = "TS_PathEditor"; ts_editorGui.ResetOnSpawn = false
+	ts_editorGui.Parent = game:GetService("CoreGui")
+
+	ts_bg = Instance.new("Frame", ts_editorGui)
+	ts_bg.Name = "TS_BG"
+	ts_bg.Size = UDim2.fromOffset(360, 435); ts_bg.AnchorPoint = Vector2.new(0.5, 0.5)
+	ts_bg.Position = UDim2.fromScale(0.5, 0.5)
+	ts_bg.BackgroundColor3 = Color3.fromRGB(24, 26, 32); ts_bg.BackgroundTransparency = 0.08
+	ts_bg.BorderSizePixel = 0; ts_bg.ZIndex = 1
+	Instance.new("UICorner", ts_bg).CornerRadius = UDim.new(0, 8)
+
+	ts_title = Instance.new("TextLabel", ts_bg)
+	ts_title.Size = UDim2.fromOffset(360, 28); ts_title.Position = UDim2.fromOffset(0, 6)
+	ts_title.BackgroundTransparency = 1; ts_title.Text = "STRAFE PATH EDITOR"
+	ts_title.TextColor3 = Color3.fromRGB(255, 255, 255); ts_title.TextSize = 15
+	ts_title.Font = Enum.Font.GothamBold; ts_title.ZIndex = 2
+
+	ts_map = Instance.new("TextButton", ts_bg)
+	ts_map.Name = "TS_Map"; ts_map.Size = UDim2.fromOffset(300, 300)
+	ts_map.Position = UDim2.fromOffset(30, 40)
+	ts_map.BackgroundColor3 = Color3.fromRGB(38, 41, 50); ts_map.BackgroundTransparency = 0.05
+	ts_map.BorderSizePixel = 0; ts_map.Text = ""; ts_map.AutoButtonColor = false; ts_map.ZIndex = 2
+
+	ts_blocks = Instance.new("Frame", ts_map)
+	ts_blocks.Name = "TS_Blocks"; ts_blocks.Size = UDim2.fromScale(1, 1)
+	ts_blocks.BackgroundTransparency = 1; ts_blocks.ClipsDescendants = true; ts_blocks.ZIndex = 2
+
+	ts_dots = Instance.new("Frame", ts_map)
+	ts_dots.Name = "TS_Dots"; ts_dots.Size = UDim2.fromScale(1, 1)
+	ts_dots.BackgroundTransparency = 1; ts_dots.ClipsDescendants = true; ts_dots.ZIndex = 4
+
+	ts_map.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			ts_centerUI = Vector2.new(ts_map.AbsoluteSize.X / 2, ts_map.AbsoluteSize.Y / 2)
+			ts_relX = input.Position.X - ts_map.AbsolutePosition.X
+			ts_relY = input.Position.Y - ts_map.AbsolutePosition.Y
+
+			ts_dx = (ts_relX - ts_centerUI.X) / (TS_MAP_HALF / TS_MAP_RADIUS)
+			ts_dz = (ts_relY - ts_centerUI.Y) / (TS_MAP_HALF / TS_MAP_RADIUS)
+
+			ts_editorTarget = ts.lock or tsFindTarget()
+			ts_tHRP = ts_editorTarget and (ts_editorTarget:FindFirstChild("HumanoidRootPart") or ts_editorTarget.PrimaryPart)
+			ts_tPos = ts_tHRP and ts_tHRP.Position or (Player.Character and Player.Character.PrimaryPart and Player.Character.PrimaryPart.Position) or Vector3.zero
+
+			tsGroundParams.FilterDescendantsInstances = {}
+			ts_gh = workspace:Raycast(Vector3.new(ts_tPos.X + ts_dx, ts_tPos.Y + 40, ts_tPos.Z + ts_dz), Vector3.new(0, -120, 0), tsGroundParams)
+			ts_gy = ts_gh and (ts_gh.Position.Y - ts_tPos.Y) or 0
+
+			table.insert(ts_waypoints, { x = ts_dx, y = ts_gy, z = ts_dz })
+			tsRefreshEditor()
+
+		elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+			ts_centerUI = Vector2.new(ts_map.AbsoluteSize.X / 2, ts_map.AbsoluteSize.Y / 2)
+			ts_clickPos = Vector2.new(input.Position.X - ts_map.AbsolutePosition.X, input.Position.Y - ts_map.AbsolutePosition.Y)
+
+			ts_closestIdx = -1
+			ts_minDist = 15
+
+			for i, wp in ipairs(ts_waypoints) do
+				ts_wpUI = tsMapPos(wp.x, wp.z, ts_centerUI)
+				ts_dist = (ts_wpUI - ts_clickPos).Magnitude
+				if ts_dist < ts_minDist then
+					ts_minDist = ts_dist
+					ts_closestIdx = i
+				end
+			end
+
+			if ts_closestIdx ~= -1 then
+				table.remove(ts_waypoints, ts_closestIdx)
+				tsRefreshEditor()
+			end
+		end
+	end)
+
+	ts_legend = Instance.new("TextLabel", ts_bg)
+	ts_legend.Size = UDim2.fromOffset(300, 20); ts_legend.Position = UDim2.fromOffset(30, 345)
+	ts_legend.BackgroundTransparency = 1; ts_legend.Text = "Red dot is equal to target"
+	ts_legend.TextColor3 = Color3.fromRGB(180, 180, 180); ts_legend.TextSize = 12
+	ts_legend.Font = Enum.Font.Gotham; ts_legend.ZIndex = 2
+	ts_legend.TextXAlignment = Enum.TextXAlignment.Center
+
+	ts_reset = Instance.new("TextButton", ts_bg)
+	ts_reset.Size = UDim2.fromOffset(300, 30); ts_reset.Position = UDim2.fromOffset(30, 370)
+	ts_reset.BackgroundColor3 = Color3.fromRGB(160, 60, 60); ts_reset.BorderSizePixel = 0
+	ts_reset.Text = "RESET PATH"; ts_reset.TextColor3 = Color3.fromRGB(255, 255, 255)
+	ts_reset.TextSize = 13; ts_reset.Font = Enum.Font.GothamBold; ts_reset.ZIndex = 2
+	Instance.new("UICorner", ts_reset).CornerRadius = UDim.new(0, 6)
+	ts_reset.MouseButton1Click:Connect(function() ts_waypoints = {}; ts.wpIndex = 1; tsRefreshEditor() end)
+
+	ts_info = Instance.new("TextLabel", ts_bg)
+	ts_info.Name = "TS_Info"; ts_info.Size = UDim2.fromOffset(320, 28)
+	ts_info.Position = UDim2.fromOffset(20, 405); ts_info.BackgroundTransparency = 1
+	ts_info.Text = ""; ts_info.TextColor3 = Color3.fromRGB(180, 185, 195)
+	ts_info.TextSize = 12; ts_info.Font = Enum.Font.Gotham; ts_info.ZIndex = 2
+end
+
+TargetStrafe:CreateToggle("Edit Strafe Path", false, function(state)
+	ts_editorOpen = state
+	if state then
+		tsBuildEditor()
+		tsRefreshEditor()
+		tsRefreshBlocks()
+	else
+		if ts_editorGui then 
+			ts_editorGui:Destroy() 
+			ts_editorGui = nil 
+		end
+	end
+end)
+
+function tsDoMove(dir)
+	if dir.Magnitude < 0.01 then ts_hum:Move(Vector3.zero, false); return end
+	ts_hum:Move(dir.Unit, false)
+end
+
+function tsTick()
+	if not ts.on then return end
+	ts_char = Player.Character
+	ts_hrp = ts_char and ts_char:FindFirstChild("HumanoidRootPart")
+	ts_hum = ts_char and ts_char:FindFirstChildOfClass("Humanoid")
+	if not ts_hrp or not ts_hum or ts_hum.Health <= 0 then ts.lock = nil; return end
+
+	-- [FIXED]: Removed `loops["fly"]` from this block so the script no longer turns off movement when flying.
+	if loops and loops["swim"] then ts.lock = nil; ts_hum:Move(Vector3.zero, false); return end
+
+	if tsUserMoving() then ts.lock = nil; return end
+
+	ts_myPos = ts_hrp.Position
+	ts.lock = tsFindTarget()
+	if not ts.lock then ts_hum:Move(Vector3.zero, false); return end
+	ts_tHRP = ts.lock:FindFirstChild("HumanoidRootPart") or ts.lock.PrimaryPart
+	if not ts_tHRP then ts.lock = nil; return end
+
+	ts_toT = ts_tHRP.Position - ts_myPos
+	ts_hDist = math.sqrt(ts_toT.X * ts_toT.X + ts_toT.Z * ts_toT.Z)
+	if ts_hDist < 0.05 then ts_hum:Move(Vector3.zero, false); return end
+	ts_dirTo = Vector3.new(ts_toT.X / ts_hDist, 0, ts_toT.Z / ts_hDist)
+	ts_perp = Vector3.new(-ts_dirTo.Z, 0, ts_dirTo.X)
+	ts_range = TargetStrafe.Values["Strafe Range"] or 8
+	ts_mode = TargetStrafe.Values["Strafe Mode"] or "Strafe"
+	ts_now = tick()
+
+	if ts_mode == "Custom" then
+		if #ts_waypoints == 0 then tsDoMove(Vector3.zero); return end
+		if ts.wpIndex > #ts_waypoints then ts.wpIndex = 1 end
+		ts_wp = ts_waypoints[ts.wpIndex]
+		ts_wpos = Vector3.new(ts_tHRP.Position.X + ts_wp.x, ts_tHRP.Position.Y + ts_wp.y, ts_tHRP.Position.Z + ts_wp.z)
+		ts_wd = ts_wpos - ts_myPos
+		ts_whDist = math.sqrt(ts_wd.X * ts_wd.X + ts_wd.Z * ts_wd.Z)
+		if ts_whDist < 1.5 then
+			ts.wpIndex = ts.wpIndex + 1
+			if ts.wpIndex > #ts_waypoints then ts.wpIndex = 1 end
+			tsDoMove(Vector3.zero); return
+		end
+		ts_wdir = Vector3.new(ts_wd.X / ts_whDist, 0, ts_wd.Z / ts_whDist)
+		if tsDirClear(ts_wdir) then
+			tsDoMove(ts_wdir); ts.blockedTime = 0
+		else
+			ts.blockedTime = ts.blockedTime + 0.016
+			if ts.blockedTime > 0.5 then ts.wpIndex = ts.wpIndex + 1; ts.blockedTime = 0 end
+			tsDoMove(Vector3.zero)
+		end
+		return
+	end
+
+	if ts_now >= ts.flipAt then
+		ts.sign = -ts.sign
+		ts.flipAt = ts_now + (TS_FLIP_MIN + math.random() * (TS_FLIP_MAX - TS_FLIP_MIN))
+	end
+
+	ts_radialErr = ts_hDist - ts_range
+	ts_radial = 0
+	if math.abs(ts_radialErr) > 1 then
+		ts_radial = math.clamp(ts_radialErr * 0.35, -0.6, 0.6)
+	end
+
+	ts_move = ts_perp * ts.sign + ts_dirTo * ts_radial
+
+	if not tsDirClear(ts_move.Unit) then
+		ts.sign = -ts.sign
+		ts_move = ts_perp * ts.sign + ts_dirTo * ts_radial
+		if not tsDirClear(ts_move.Unit) then
+			ts_move = ts_dirTo * ts_radial
+			if ts_move.Magnitude < 0.01 or not tsDirClear(ts_move.Unit) then
+				tsDoMove(Vector3.zero); return
+			end
+		end
+	end
+	tsDoMove(ts_move)
+end
+
+TargetStrafe.Callbacks.OnToggle = function(state)
+	loops["target strafe"] = state
+	ts.on = state
+	if state then
+		startEntityCache()
+		ts.lock = nil; ts.sign = 1; ts.flipAt = tick(); ts.wpIndex = 1
+		if not ts.conn then ts.conn = game:GetService("RunService"):BindToRenderStep("TargetStrafeMove", 300, tsTick) end
+	else
+		if ts.conn then game:GetService("RunService"):UnbindFromRenderStep("TargetStrafeMove"); ts.conn = nil end
+		ts.lock = nil
+		pcall(function()
+			ts_c2 = Player.Character; ts_h2 = ts_c2 and ts_c2:FindFirstChildOfClass("Humanoid")
+			if ts_h2 and not tsUserMoving() then ts_h2:Move(Vector3.zero, false) end
 		end)
 	end
 end
