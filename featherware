@@ -12781,20 +12781,21 @@ AutoChargeBow.Callbacks.OnToggle = function(state)
 end
 
 AAD_SKY          = 14
-AAD_SKY_MAX      = 0.7
-AAD_SAFE_DESCENT = 18
+AAD_HOLD_MAX     = 1.5
 AAD_COOLDOWN     = 0.12
 AAD_HIT_R_BLAT   = 3.5
 AAD_HIT_R_LEG    = 3.0
 AAD_REACT_BLAT   = 0.5
 AAD_REACT_LEG    = 0.35
-AAD_SWEEP        = 0.02
 AAD_CLEAR_MARGIN = 1.2
 AAD_AIR_SPEED    = 22
+AAD_BAND_LOW     = -4
+AAD_BAND_HIGH    = 3
 
 AutoArrowDodge = Combat:CreateButton("Auto Arrow Dodge", nil, true)
 AutoArrowDodge:CreateDropdown("Mode", {"Legit", "Blatant"}, "Legit", nil, false)
 AutoArrowDodge:CreateSlider("Distance", 0, 1000, 300, nil, 1)
+AutoArrowDodge:CreateToggle("Other Projectiles", true, nil)
 
 if not paRS then paRS = game:GetService("ReplicatedStorage") end
 aadCS = game:GetService("CollectionService")
@@ -12805,8 +12806,8 @@ aad = {
 	list = {}, state = "idle", origCF = nil, ceilingY = 0, bv = nil,
 	jukeDir = nil, dodgeUntil = 0, upStart = 0, lastDodge = 0,
 	threatV = Vector3.zero, threatTtc = 999,
-	actKind = "jump", actDir = Vector3.zero, actStart = Vector3.zero,
-	actNeed = 0, actDur = 0, actJumped = false,
+	actKind = "jump", actDir = Vector3.new(1,0,0), actStart = Vector3.zero,
+	actNeed = 0, actDur = 0, actJumped = false, actJumpStrafe = false,
 	hist = {}, scanAcc = 0, histFrame = 0,
 	dNet = false, dSync = false, dScan = false, dSum = false, sumAt = 0,
 }
@@ -12814,6 +12815,9 @@ aad = {
 aadGroundParams = RaycastParams.new()
 aadGroundParams.FilterType = Enum.RaycastFilterType.Exclude
 aadGroundParams.IgnoreWater = true
+aadDownParams = RaycastParams.new()
+aadDownParams.FilterType = Enum.RaycastFilterType.Exclude
+aadDownParams.IgnoreWater = true
 
 function aadMyChar() return Player.Character end
 function aadPosAt(e, age) return e.o + e.v * age + Vector3.new(0, -0.5 * e.g * age * age, 0) end
@@ -12823,22 +12827,37 @@ function aadFeet()
 	return aad_hrp.Position - Vector3.new(0, aad_hrp.Size.Y * 0.5 + (aad_hum and aad_hum.HipHeight or 2), 0)
 end
 function aadSafeGround(dir, probe)
-	aasg_f = aadFeet()
-	aasg_o = aasg_f + Vector3.new(dir.X, 0, dir.Z) * probe
+	aasg_o = aadFeet() + Vector3.new(dir.X, 0, dir.Z) * probe
 	return workspace:Raycast(aasg_o, Vector3.new(0, -8, 0), aadGroundParams) ~= nil
 end
 function aadSafeAhead(dir)
-	aasa_f = aadFeet()
-	aasa_o = aasa_f + Vector3.new(dir.X, 0, dir.Z) * 2
+	aasa_o = aadFeet() + Vector3.new(dir.X, 0, dir.Z) * 2
 	return workspace:Raycast(aasa_o, Vector3.new(0, -6, 0), aadGroundParams) ~= nil
 end
+function aadGroundY()
+	aad_char2 = aadMyChar()
+	if aad_char2 then aadDownParams.FilterDescendantsInstances = { aad_char2 } else aadDownParams.FilterDescendantsInstances = {} end
+	agd_hit = workspace:Raycast(aad_hrp.Position, Vector3.new(0, -300, 0), aadDownParams)
+	if not agd_hit then return nil end
+	return agd_hit.Position.Y + aad_hrp.Size.Y * 0.5 + (aad_hum and aad_hum.HipHeight or 2)
+end
 
-function aadIngest(typ, vel, org, shooter)
+function aadIsArrow(typ, hint)
+	if typ and PA_PROJ_META and PA_PROJ_META[typ] and PA_PROJ_META[typ].arrow then return true end
+	if typ and tostring(typ):lower():find("arrow") then return true end
+	if not typ and hint and tostring(hint):lower():find("arrow") then return true end
+	return false
+end
+
+function aadIngest(typ, vel, org, shooter, hint)
 	if not vel or not org then return false end
 	aai_mc = aadMyChar()
 	if shooter and shooter == aai_mc then return false end
 	aai_op = shooter and Players:GetPlayerFromCharacter(shooter)
 	if aai_op and aai_op.Team == Player.Team then return false end
+	if not AutoArrowDodge.Values["Other Projectiles"] then
+		if not aadIsArrow(typ, hint) then return false end
+	end
 	aai_g, aai_life = 35, 2.8
 	if typ and PA_PROJ_META and PA_PROJ_META[typ] then
 		aai_g = PA_PROJ_META[typ].gravitationalAcceleration or aai_g
@@ -12865,7 +12884,7 @@ end
 
 function aadParseSync(...)
 	aaps_typ, aaps_vel, aaps_org, aaps_sh = aadScanTypes({...})
-	if aadIngest(aaps_typ, aaps_vel, aaps_org, aaps_sh) and not aad.dSync then aad.dSync = true; aad.srcSync = true end
+	if aadIngest(aaps_typ, aaps_vel, aaps_org, aaps_sh, nil) and not aad.dSync then aad.dSync = true; aad.srcSync = true end
 end
 
 function aadParseNet(...)
@@ -12874,10 +12893,10 @@ function aadParseNet(...)
 		if type(aapn_args[aapn_i]) == "table" and typeof(aapn_args[aapn_i].initialVelocity) == "Vector3" then aapn_tbl = aapn_args[aapn_i]; break end
 	end
 	if aapn_tbl then
-		aapn_ok = aadIngest(aapn_tbl.projectileType, aapn_tbl.initialVelocity, aapn_tbl.positionFrom, aapn_tbl.shooter)
+		aapn_ok = aadIngest(aapn_tbl.projectileType, aapn_tbl.initialVelocity, aapn_tbl.positionFrom, aapn_tbl.shooter, nil)
 	else
 		aapn_typ, aapn_vel, aapn_org, aapn_sh = aadScanTypes(aapn_args)
-		aapn_ok = aadIngest(aapn_typ, aapn_vel, aapn_org, aapn_sh)
+		aapn_ok = aadIngest(aapn_typ, aapn_vel, aapn_org, aapn_sh, nil)
 	end
 	if aapn_ok and not aad.dNet then aad.dNet = true; aad.srcNet = true end
 end
@@ -12916,7 +12935,8 @@ function aadAddCand(part)
 			if aadc_spd > 30 then
 				aadc_my = aad_hrp and aad_hrp.Position
 				if aadc_my and (aadc_pos - aadc_my):Dot(aadc_dpos) < 0 then
-					if aadIngest(nil, aadc_dpos / aadc_dt, aadc_pos, nil) and not aad.dScan then aad.dScan = true end
+					aadc_hint = (part.Parent and part.Parent.Name) or part.Name
+					if aadIngest(nil, aadc_dpos / aadc_dt, aadc_pos, nil, aadc_hint) and not aad.dScan then aad.dScan = true end
 				end
 			end
 		end
@@ -12950,30 +12970,36 @@ function aadScan()
 	end
 end
 
--- TRUE-ARC sweep: simulates the curved path, so overhead arcs that pass over you never trip it
 function aadThreat(C, mode)
 	aat_rad = (mode == "Blatant") and AAD_HIT_R_BLAT or AAD_HIT_R_LEG
 	aat_react = (mode == "Blatant") and AAD_REACT_BLAT or AAD_REACT_LEG
 	aat_maxD = AutoArrowDodge.Values["Distance"] or 300
+	aat_bLow = C.Y + AAD_BAND_LOW
+	aat_bHigh = C.Y + AAD_BAND_HIGH
 	aat_now = tick()
 	aat_best = false; aat_bestTtc = 999; aat_bestV = Vector3.zero
 	for aat_j = 1, #aad.list do
 		aat_e = aad.list[aat_j]; aat_a0 = aat_now - aat_e.t0
 		if aat_a0 >= 0 and aat_a0 <= aat_e.life then
-			aat_P0 = aadPosAt(aat_e, aat_a0)
-			if (aat_P0 - C).Magnitude <= aat_maxD + 40 then
-				aat_V0 = aadVelAt(aat_e, aat_a0)
-				if (aat_P0 - C):Dot(aat_V0) < 0 then
-					aat_n = math.ceil(aat_react / AAD_SWEEP); aat_minD = 1e9; aat_minAge = aat_a0
-					for aat_i = 0, aat_n do
-						aat_age = aat_a0 + aat_i * AAD_SWEEP
-						if aat_age > aat_e.life then break end
-						aat_P = aadPosAt(aat_e, aat_age); aat_d = (aat_P - C).Magnitude
-						if aat_d < aat_minD then aat_minD = aat_d; aat_minAge = aat_age end
-					end
-					aat_ttc = aat_minAge - aat_a0
-					if aat_minD <= aat_rad and aat_ttc <= aat_react and aat_ttc < aat_bestTtc then
-						aat_bestTtc = aat_ttc; aat_bestV = aadVelAt(aat_e, aat_minAge); aat_best = true
+			aat_P0 = aadPosAt(aat_e, aat_a0); aat_V0 = aadVelAt(aat_e, aat_a0)
+			aat_hN = Vector3.new(aat_P0.X - C.X, 0, aat_P0.Z - C.Z)
+			if aat_hN.Magnitude <= aat_maxD then
+				if aat_hN.Magnitude <= aat_rad and aat_P0.Y >= aat_bLow and aat_P0.Y <= aat_bHigh then
+					aat_bestTtc = 0; aat_bestV = aat_V0; aat_best = true
+				else
+					aat_hV = Vector3.new(aat_V0.X, 0, aat_V0.Z); aat_vh2 = aat_hV:Dot(aat_hV)
+					if aat_vh2 > 0.01 then
+						aat_th = aat_a0 - aat_hN:Dot(aat_hV) / aat_vh2
+						if aat_th < aat_a0 then aat_th = aat_a0 end
+						if aat_th > aat_a0 + aat_react then aat_th = aat_a0 + aat_react end
+						aat_Ph = aadPosAt(aat_e, aat_th)
+						aat_hh = Vector3.new(aat_Ph.X - C.X, 0, aat_Ph.Z - C.Z).Magnitude
+						if aat_hh <= aat_rad and aat_Ph.Y >= aat_bLow and aat_Ph.Y <= aat_bHigh then
+							aat_ttc = aat_th - aat_a0
+							if aat_ttc <= aat_react and aat_ttc < aat_bestTtc then
+								aat_bestTtc = aat_ttc; aat_bestV = aadVelAt(aat_e, aat_th); aat_best = true
+							end
+						end
 					end
 				end
 			end
@@ -12987,53 +13013,57 @@ end
 function aadCleanupBV()
 	if aad.bv then pcall(function() aad.bv:Destroy() end); aad.bv = nil end
 end
-
 function aadEnsureBV()
-	if not aad.bv or not aad.bv.Parent then
-		aad.bv = Instance.new("BodyVelocity"); aad.bv.Parent = aad_hrp
-	end
+	if not aad.bv or not aad.bv.Parent then aad.bv = Instance.new("BodyVelocity"); aad.bv.Parent = aad_hrp end
 	return aad.bv
 end
 
--- pick a legit dodge that uses the walk/jump anims and never walks off an edge
 function aadPlanLegit()
 	aapl_hV = Vector3.new(aad.threatV.X, 0, aad.threatV.Z)
 	if aapl_hV.Magnitude < 0.01 then aapl_hV = Vector3.new(workspace.CurrentCamera.CFrame.RightVector.X, 0, workspace.CurrentCamera.CFrame.RightVector.Z) end
 	aapl_perp = Vector3.new(-aapl_hV.Z, 0, aapl_hV.X).Unit
-	aapl_perpL = aapl_perp; aapl_perpR = -aapl_perp
+	aapl_dirL = aapl_perp; aapl_dirR = -aapl_perp
 	aapl_ws = math.max(aad_hum.WalkSpeed or 16, 1)
 	aapl_need = AAD_HIT_R_LEG + AAD_CLEAR_MARGIN
 	aapl_needTime = aapl_need / aapl_ws
 	aapl_ttc = aad.threatTtc
 	aapl_grounded = aad_hum.FloorMaterial ~= Enum.Material.Air
+	aad.actJumped = false
+	aad.actJumpStrafe = false
+	aad.actStart = aad_hrp.Position
+	aad.actNeed = aapl_need
+	aad.actDir = aapl_dirL                          -- always a valid vector (the old nil here was the crash)
 
 	if not aapl_grounded then
-		aad.actKind = "air"; aad.actDir = aapl_perpL; aad.actNeed = aapl_need; aad.actDur = 0.3; aad.actJumped = false
-		aad.actStart = aad_hrp.Position; return
+		aad.actKind = "air"; aad.actDur = 0.3; return
 	end
 
 	aapl_r = math.random()
-	if aapl_ttc < aapl_needTime * 0.85 then
-		aad.actKind = (aapl_r < 0.6) and "hop" or "jump"      -- close range -> instant jump / leap (responsive)
+	if aapl_ttc < 0.3 then
+		aapl_kind = (aapl_r < 0.55) and "hop" or "jump"
 	else
-		if aapl_r < 0.5 then aad.actKind = "walk" elseif aapl_r < 0.8 then aad.actKind = "hop" else aad.actKind = "jump" end
+		if aapl_r < 0.45 then aapl_kind = "walk" elseif aapl_r < 0.75 then aapl_kind = "hop" else aapl_kind = "jump" end
 	end
 
-	aad.actDir = nil
-	if aad.actKind == "walk" or aad.actKind == "hop" then
-		aapl_probe = (aad.actKind == "walk") and (aapl_need + 1.5) or (aapl_need + 11.5)   -- leap carry needs a bigger safe margin
-		aapl_sL = aadSafeGround(aapl_perpL, aapl_probe); aapl_sR = aadSafeGround(aapl_perpR, aapl_probe)
-		if aapl_sL and aapl_sR then aad.actDir = (math.random() < 0.5) and aapl_perpL or aapl_perpR
-		elseif aapl_sL then aad.actDir = aapl_perpL
-		elseif aapl_sR then aad.actDir = aapl_perpR
+	if aapl_kind == "walk" or aapl_kind == "hop" then
+		aapl_probe = (aapl_kind == "walk") and (aapl_need + 1.5) or (aapl_need + 9)
+		aapl_sL = aadSafeGround(aapl_dirL, aapl_probe); aapl_sR = aadSafeGround(aapl_dirR, aapl_probe)
+		if aapl_sL and aapl_sR then aad.actDir = (math.random() < 0.5) and aapl_dirL or aapl_dirR
+		elseif aapl_sL then aad.actDir = aapl_dirL
+		elseif aapl_sR then aad.actDir = aapl_dirR
+		else aapl_kind = "jump" end
+	end
+
+	if aapl_kind == "jump" then                      -- sometimes turn the hop into a safe strafe-jump
+		aapl_jsL = aadSafeGround(aapl_dirL, aapl_need + 4); aapl_jsR = aadSafeGround(aapl_dirR, aapl_need + 4)
+		if aapl_jsL and aapl_jsR then aad.actDir = (math.random() < 0.5) and aapl_dirL or aapl_dirR; aad.actJumpStrafe = true
+		elseif aapl_jsL then aad.actDir = aapl_dirL; aad.actJumpStrafe = true
+		elseif aapl_jsR then aad.actDir = aapl_dirR; aad.actJumpStrafe = true
 		end
-		if not aad.actDir then aad.actKind = "jump" end        -- no safe side -> vertical hop only, never off the edge
 	end
 
-	aad.actNeed = aapl_need
-	aad.actDur = (aad.actKind == "walk") and math.clamp(aapl_needTime + 0.05, 0.18, 0.45) or (aad.actKind == "hop") and 0.45 or 0.4
-	aad.actJumped = false
-	aad.actStart = aad_hrp.Position
+	aad.actKind = aapl_kind
+	aad.actDur = (aapl_kind == "walk") and math.clamp(aapl_needTime + 0.05, 0.16, 0.4) or (aapl_kind == "hop") and 0.42 or 0.4
 end
 
 function aadLoop(dt)
@@ -13043,11 +13073,11 @@ function aadLoop(dt)
 	aad_hum = aad_char and aad_char:FindFirstChildOfClass("Humanoid")
 	if not aad_hrp or not aad_hum or aad_hum.Health <= 0 then aadCleanupBV(); aad.state = "idle"; return end
 	if loops["fly"] or loops["swim"] then aadCleanupBV(); aad.state = "idle"; return end
-	if (aad.state == "up" or aad.state == "down") and (not aad.bv or not aad.bv.Parent) then aad.state = "idle" end
+	if aad.state == "up" and (not aad.bv or not aad.bv.Parent) then aad.state = "idle" end
 
 	aad_mode = AutoArrowDodge.Values["Mode"] or "Legit"
 	aad.scanAcc = aad.scanAcc + (dt or 0.016)
-	if aad.scanAcc >= 0.03 then aad.scanAcc = 0; aadScan() end
+	if aad.scanAcc >= 0.05 then aad.scanAcc = 0; aadScan() end
 	aadPurge()
 	aad_now = tick()
 	aad_hit = aadThreat(aad_hrp.Position, aad_mode)
@@ -13057,30 +13087,26 @@ function aadLoop(dt)
 		print("[AAD] tracked:", #aad.list, "| mode:", aad_mode, "| threat:", aad_hit, "| net:", aad.srcNet, "sync:", aad.srcSync, "scan:", aad.dScan)
 	end
 
-	-- ===================== BLATANT: one ceiling, no stacking, gentle landing =====================
 	if aad_mode == "Blatant" then
 		if aad.state == "idle" then
 			if aad_hit and aad_now - aad.lastDodge >= AAD_COOLDOWN then
 				aad.origCF = aad_hrp.CFrame
 				aad.ceilingY = aad.origCF.Position.Y + AAD_SKY
-				aad_hrp.CFrame = aad_hrp.CFrame + Vector3.new(0, AAD_SKY, 0)
+				aad_hrp.CFrame = CFrame.new(aad_hrp.Position.X, aad.ceilingY, aad_hrp.Position.Z)
 				aad_bv = aadEnsureBV(); aad_bv.MaxForce = Vector3.new(0, 1e9, 0); aad_bv.Velocity = Vector3.zero
 				aad.state = "up"; aad.upStart = aad_now
-				print("[AAD] DODGE Blatant up")
 			end
 		elseif aad.state == "up" then
 			aad_bv = aadEnsureBV(); aad_bv.MaxForce = Vector3.new(0, 1e9, 0); aad_bv.Velocity = Vector3.zero
 			if aad_hrp.Position.Y > aad.ceilingY then aad_hrp.CFrame = CFrame.new(aad_hrp.Position.X, aad.ceilingY, aad_hrp.Position.Z) end
-			if not aad_hit or aad_now - aad.upStart > AAD_SKY_MAX then aad.state = "down" end
-		elseif aad.state == "down" then
-			if aad_hit then                                          -- another shot while descending -> back to the SAME ceiling (no extra height)
-				aad_hrp.CFrame = CFrame.new(aad_hrp.Position.X, aad.ceilingY, aad_hrp.Position.Z)
-				aad_bv = aadEnsureBV(); aad_bv.MaxForce = Vector3.new(0, 1e9, 0); aad_bv.Velocity = Vector3.zero
-				aad.state = "up"; aad.upStart = aad_now
-			else
-				aad_bv = aadEnsureBV(); aad_bv.MaxForce = Vector3.new(0, 1e9, 0); aad_bv.Velocity = Vector3.new(0, -AAD_SAFE_DESCENT, 0)
-				if aad_hum.FloorMaterial ~= Enum.Material.Air or aad_hrp.Position.Y < aad.ceilingY - 80 then   -- only land when truly grounded -> BV stays on the whole way down = no fall damage
-					aad_hrp.CFrame = CFrame.new(aad.origCF.Position.X, aad_hrp.Position.Y, aad.origCF.Position.Z)
+			if not aad_hit then
+				aad_gy = aadGroundY()
+				aad_targetY = aad_gy or aad.origCF.Position.Y
+				aad_groundPos = Vector3.new(aad_hrp.Position.X, aad_targetY, aad_hrp.Position.Z)
+				aad_groundClear = not aadThreat(aad_groundPos, aad_mode)
+				if aad_groundClear or (aad_now - aad.upStart > AAD_HOLD_MAX) then
+					aad_bv.Velocity = Vector3.zero
+					aad_hrp.CFrame = CFrame.new(aad_hrp.Position.X, aad_targetY, aad_hrp.Position.Z)   -- X,Z kept (no snap-back); Y = floor
 					aadCleanupBV(); aad.state = "idle"; aad.lastDodge = aad_now
 				end
 			end
@@ -13088,36 +13114,26 @@ function aadLoop(dt)
 		return
 	end
 
-	-- ===================== LEGIT: animated walk / hop / jump, edge-safe, distance-aware =====================
 	if aad.state == "idle" then
 		if aad_hit and aad_now - aad.lastDodge >= AAD_COOLDOWN then
 			aadPlanLegit()
-			aad.state = "juke"
-			print("[AAD] DODGE Legit", aad.actKind, "ttc", math.floor(aad.threatTtc * 100) / 100)
+			aad.state = "juke"; aad.dodgeUntil = 0
 		end
 	elseif aad.state == "juke" then
-		aad.actDur = aad.actDur  -- (keep)
-		aaj_elapsed = (aad_now - (aad.dodgeUntil - aad.actDur))   -- not used; track via below
-		-- elapsed tracked by dodgeUntil countdown:
-		aaj_left = aad.dodgeUntil - aad_now
-		-- we set dodgeUntil at engage; compute elapsed:
-	end
-
-	-- (legit juke driver -- runs while state juke)
-	if aad.state == "juke" then
 		if aad.dodgeUntil == 0 then aad.dodgeUntil = aad_now + aad.actDur end
-		aaj_now = aad_now
-		aaj_elapsed = aaj_now - (aad.dodgeUntil - aad.actDur)
-		aaj_travel = (aad_hrp.Position - aad.actStart)
+		aaj_elapsed = aad_now - (aad.dodgeUntil - aad.actDur)
+		aaj_travel = aad_hrp.Position - aad.actStart
 		aaj_traveled = aaj_travel.X * aad.actDir.X + aaj_travel.Z * aad.actDir.Z
 		aaj_canH = aaj_traveled < aad.actNeed
+		aaj_k = aad.actKind
 
-		if aad.actKind == "walk" then
+		if aaj_k == "walk" then
 			if aaj_canH and aadSafeAhead(aad.actDir) then aad_hum:Move(aad.actDir, false) else aad_hum:Move(Vector3.zero, false) end
-		elseif aad.actKind == "hop" then
+		elseif aaj_k == "hop" then
 			if not aad.actJumped then aad_hum:ChangeState(Enum.HumanoidStateType.Jumping); aad.actJumped = true end
 			if aad_hum.FloorMaterial ~= Enum.Material.Air then
-				if aaj_canH then aad_hum:Move(aad.actDir, false) else aad_hum:Move(Vector3.zero, false) end
+				if aaj_canH and aadSafeAhead(aad.actDir) then aad_hum:Move(aad.actDir, false) else aad_hum:Move(Vector3.zero, false) end
+				aadCleanupBV()
 			else
 				if aaj_canH then
 					aad_bv = aadEnsureBV(); aad_bv.MaxForce = Vector3.new(1e9, 0, 1e9)
@@ -13126,9 +13142,14 @@ function aadLoop(dt)
 					aadCleanupBV()
 				end
 			end
-		elseif aad.actKind == "jump" then
+		elseif aaj_k == "jump" then
 			if not aad.actJumped then aad_hum:ChangeState(Enum.HumanoidStateType.Jumping); aad.actJumped = true end
-		elseif aad.actKind == "air" then
+			if aad_hum.FloorMaterial ~= Enum.Material.Air then
+				if aad.actJumpStrafe and aadSafeAhead(aad.actDir) then aad_hum:Move(aad.actDir, false) else aad_hum:Move(Vector3.zero, false) end
+			else
+				aad_hum:Move(Vector3.zero, false)
+			end
+		elseif aaj_k == "air" then
 			if aaj_canH then
 				aad_bv = aadEnsureBV(); aad_bv.MaxForce = Vector3.new(1e9, 0, 1e9)
 				aad_bv.Velocity = Vector3.new(aad.actDir.X * AAD_AIR_SPEED, 0, aad.actDir.Z * AAD_AIR_SPEED)
@@ -13138,7 +13159,8 @@ function aadLoop(dt)
 		end
 
 		if aaj_elapsed >= aad.actDur then
-			aadCleanupBV(); aad.state = "idle"; aad.lastDodge = aad_now; aad.dodgeUntil = 0
+			aadCleanupBV(); aad_hum:Move(Vector3.zero, false)
+			aad.state = "idle"; aad.lastDodge = aad_now; aad.dodgeUntil = 0
 		end
 	end
 end
@@ -13157,5 +13179,9 @@ AutoArrowDodge.Callbacks.OnToggle = function(state)
 		if aad.evConn then pcall(function() aad.evConn:Disconnect() end); aad.evConn = nil end
 		if aad.netConn then pcall(function() aad.netConn:Disconnect() end); aad.netConn = nil end
 		aadCleanupBV(); aad.state = "idle"; aad.list = {}; aad.hist = {}; aad.dodgeUntil = 0
+		pcall(function()
+			aad_c2 = aadMyChar(); aad_h2 = aad_c2 and aad_c2:FindFirstChildOfClass("Humanoid")
+			if aad_h2 then aad_h2:Move(Vector3.zero, false) end
+		end)
 	end
 end
