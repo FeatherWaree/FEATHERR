@@ -926,7 +926,9 @@ end
 		["spin bot"] = false,
 		["auto charge bow"] = false,
 		["keep sprint"] = false,
-		["target strafe"] = false
+		["target strafe"] = false,
+		["health"] = false,
+		["shaders"] = false
  		}
  
 
@@ -2324,7 +2326,7 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 			tFrame.TextSize = 20
 			tFrame.TextXAlignment = Enum.TextXAlignment.Left
 			tFrame.FontFace = Font.fromName(textFont)
-
+			
 			local toggledState = default
 
 			if tCallback then tCallback(toggledState) end
@@ -2354,6 +2356,8 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 				if tCallback then tCallback(toggledState) end
 
 				if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(tName, toggledState) end
+				
+				return { SetVisible = function(esp_sv) tFrame.Visible = esp_sv end }
 			end)
 		end
 
@@ -2811,6 +2815,7 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 					pRemoving:Disconnect()
 				end)
 			end
+			return { SetVisible = function(esp_sv) dropCont.Visible = esp_sv end }
 		end
 
 		function mod:CreateKeybind(kName, defaultKey, kCallback)
@@ -3056,6 +3061,8 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 				bSlider.Text = tostring(math.floor(pickedColor.B * 255))
 
 				updateColor()
+				
+				return { SetVisible = function(esp_sv) cFrame.Visible = esp_sv end }
 			end
 
 			local function syncPinPosition()
@@ -4070,16 +4077,6 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 	WhiteHits = Visuals:CreateButton("White Hits", nil, true)
 	WhiteHits:CreateToggle("Use Custom Color")
 	WhiteHits:CreateColorPicker("Hit Color", Color3.new(0.333333, 0, 0.498039))
-
-	ESP = Visuals:CreateButton("ESP", nil, true)
-	ESP:CreateToggle("3D Box", true, nil)
-	ESP:CreateToggle("2D Box", true, nil)
-	ESP:CreateToggle("Chams", true, nil)
-	ESP:CreateToggle("ESP On Own Player", true, nil)
-	ESP:CreateToggle("ESP On NPCs", true, nil)
-	ESP:CreateColorPicker("3D Box Color", Color3.new(0.333333, 0, 0.498039))
-	ESP:CreateColorPicker("2D Box Color", Color3.new(0.333333, 0, 0.498039))
-	ESP:CreateColorPicker("Chams Color", Color3.new(0.333333, 0, 0.498039))
 
 	BedESP = Visuals:CreateButton("BedESP", nil, true)
 	BedESP:CreateColorPicker("FillColor", Color3.new(0.333333, 0, 0.498039), function(value)
@@ -7778,272 +7775,374 @@ end)
 	chamsESPFolder.Name = "chamsESPFolder"
 	chamsESPFolder.Parent = workspace
 
-	local espScreenGui = CoreGui:FindFirstChild("EspScreenGui") or Instance.new("ScreenGui")
-	espScreenGui.Name = "EspScreenGui"
-	espScreenGui.ResetOnSpawn = false
-	espScreenGui.Parent = CoreGui
+CoreGui = game:GetService("CoreGui")
+Players = game:GetService("Players")
+RunService = game:GetService("RunService")
+Workspace = game:GetService("Workspace")
+Player = Players.LocalPlayer
 
-	local activeESP = {}
-	local active2DFrames = {} 
-	local connections = {} 
+espScreenGui = CoreGui:FindFirstChild("EspScreenGui") or Instance.new("ScreenGui")
+espScreenGui.Name = "EspScreenGui"
+espScreenGui.ResetOnSpawn = false
+espScreenGui.IgnoreGuiInset = true -- FIXES THE DESYNC BUG
+espScreenGui.Parent = CoreGui
 
-	local function clearESP(model)
-		if activeESP[model] then
-			for _, instance in pairs(activeESP[model]) do
-				if instance then instance:Destroy() end
-			end
-			activeESP[model] = nil
+activeESPCache = {}
+espConnections = {}
+
+R6_JOINTS = {
+	{"Head", "Torso"},
+	{"Torso", "Left Arm"},
+	{"Torso", "Right Arm"},
+	{"Torso", "Left Leg"},
+	{"Torso", "Right Leg"}
+}
+
+R15_JOINTS = {
+	{"Head", "UpperTorso"},
+	{"UpperTorso", "LowerTorso"},
+	{"UpperTorso", "LeftUpperArm"},
+	{"LeftUpperArm", "LeftLowerArm"},
+	{"LeftLowerArm", "LeftHand"},
+	{"UpperTorso", "RightUpperArm"},
+	{"RightUpperArm", "RightLowerArm"},
+	{"RightLowerArm", "RightHand"},
+	{"LowerTorso", "LeftUpperLeg"},
+	{"LeftUpperLeg", "LeftLowerLeg"},
+	{"LeftLowerLeg", "LeftFoot"},
+	{"LowerTorso", "RightUpperLeg"},
+	{"RightUpperLeg", "RightLowerLeg"},
+	{"RightLowerLeg", "RightFoot"}
+}
+
+ESP = Visuals:CreateButton("ESP", nil, true)
+
+espTargetPlayers = ESP:CreateToggle("Target Players", true)
+espTargetNPCs = ESP:CreateToggle("Target NPCs", true)
+espOwnPlayer = ESP:CreateToggle("ESP On Own Player", false)
+
+esp2DColor = ESP:CreateColorPicker("2D Box Color", Color3.fromRGB(255, 0, 0))
+esp2DFill = ESP:CreateToggle("Fill 2D Box", false)
+
+esp3DColor = ESP:CreateColorPicker("3D Box Color", Color3.fromRGB(85, 0, 127))
+esp3DFill = ESP:CreateToggle("Fill 3D Box", true)
+
+espSkeletonColor = ESP:CreateColorPicker("Skeleton Color", Color3.fromRGB(255, 0, 0))
+
+function updateESPModeVisibility(selectedMode)
+	selectedMode = selectedMode or (ESP.Values and ESP.Values["ESP Mode"]) or "2D"
+
+	if esp2DColor and esp2DFill then
+		esp2DColor:SetVisible(selectedMode == "2D")
+		esp2DFill:SetVisible(selectedMode == "2D")
+	end
+
+	if esp3DColor and esp3DFill then
+		esp3DColor:SetVisible(selectedMode == "3D")
+		esp3DFill:SetVisible(selectedMode == "3D")
+	end
+
+	if espSkeletonColor then
+		espSkeletonColor:SetVisible(selectedMode == "Skeleton")
+	end
+end
+
+espModeDropdown = ESP:CreateDropdown("ESP Mode", {"2D", "3D", "Skeleton"}, "2D", function(selected)
+	updateESPModeVisibility(selected)
+end)
+
+updateESPModeVisibility("2D")
+
+function getSetting(name, defaultVal)
+	if ESP.Values and ESP.Values[name] ~= nil then
+		return ESP.Values[name]
+	end
+	return defaultVal
+end
+
+function isValidTarget(model)
+	if not model or not model.Parent then return false end
+
+	hum = model:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return false end
+
+	targetPlayer = Players:GetPlayerFromCharacter(model)
+	isOwn = (model == Player.Character)
+
+	if isOwn then
+		return getSetting("ESP On Own Player", false)
+	end
+
+	if targetPlayer then
+		if not getSetting("Target Players", true) then return false end
+		if targetPlayer.Team and Player.Team and targetPlayer.Team == Player.Team then
+			return false
 		end
+		return true
+	else
+		return getSetting("Target NPCs", true)
+	end
+end
 
-		if active2DFrames[model] then
-			active2DFrames[model]:Destroy()
-			active2DFrames[model] = nil
+function createESPContainer(model)
+	if activeESPCache[model] then return end
+
+	hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	head = model:FindFirstChild("Head")
+	hum = model:FindFirstChildOfClass("Humanoid")
+
+	if not hrp or not head then return end
+
+	container = {
+		Model = model,
+		HRP = hrp,
+		Head = head,
+		Frame2D = nil,
+		Stroke2D = nil,
+		Box3D = nil,
+		Selection3D = nil,
+		Weld3D = nil,
+		SkeletonLines = {},
+		CachedJoints = {}
+	}
+
+	frame2D = Instance.new("Frame")
+	frame2D.Name = "2D_ESP_Frame"
+	frame2D.BackgroundTransparency = 1
+	frame2D.BorderSizePixel = 0
+	frame2D.Size = UDim2.fromOffset(0, 0)
+	frame2D.Visible = false
+	frame2D.Parent = espScreenGui
+
+	stroke2D = Instance.new("UIStroke")
+	stroke2D.Thickness = 1.5
+	stroke2D.Parent = frame2D
+
+	container.Frame2D = frame2D
+	container.Stroke2D = stroke2D
+
+	cf, sz = model:GetBoundingBox()
+
+	box3D = Instance.new("Part")
+	box3D.Name = "3D_ESP_BOX"
+	box3D.Anchored = false
+	box3D.CanCollide = false
+	box3D.Material = Enum.Material.SmoothPlastic
+	box3D.Size = sz
+	box3D.CFrame = cf
+	box3D.Transparency = 1
+	box3D.Parent = model
+
+	weld3D = Instance.new("WeldConstraint")
+	weld3D.Part0 = box3D
+	weld3D.Part1 = hrp
+	weld3D.Parent = box3D
+
+	sel3D = Instance.new("SelectionBox")
+	sel3D.Adornee = box3D
+	sel3D.LineThickness = 0.05
+	sel3D.Visible = false
+	sel3D.Parent = box3D
+
+	container.Box3D = box3D
+	container.Selection3D = sel3D
+	container.Weld3D = weld3D
+
+	-- Pre-cache skeleton joints for heavy optimization
+	jointList = (hum and hum.RigType == Enum.HumanoidRigType.R15) and R15_JOINTS or R6_JOINTS
+	for _, pair in pairs(jointList) do
+		p1 = model:FindFirstChild(pair[1])
+		p2 = model:FindFirstChild(pair[2])
+		if p1 and p2 then
+			table.insert(container.CachedJoints, {p1, p2})
+
+			line = Instance.new("Frame")
+			line.Name = "SkeletonLine"
+			line.AnchorPoint = Vector2.new(0.5, 0.5)
+			line.BorderSizePixel = 0
+			line.BackgroundTransparency = 0
+			line.Visible = false
+			line.Parent = espScreenGui
+
+			stroke = Instance.new("UIStroke")
+			stroke.Thickness = 1
+			stroke.Color = Color3.new(0, 0, 0)
+			stroke.Parent = line
+
+			table.insert(container.SkeletonLines, line)
 		end
 	end
 
-	local function applyESP(model, isNPC)
-		if not model or not model.Parent then return end
-		clearESP(model) -- Clear any old instances to prevent duplicates on respawn
+	activeESPCache[model] = container
+end
 
-		local espOnOwn = ESP.Values["ESP On Own Player"]
-		local espOnNPCs = ESP.Values["ESP On NPCs"]
-		local isOwnPlayer = model == Player.Character
+function removeESPContainer(model)
+	data = activeESPCache[model]
+	if not data then return end
 
-		local ownerPlayer = Players:GetPlayerFromCharacter(model)
-
-		if ownerPlayer 
-			and ownerPlayer ~= Player
-			and ownerPlayer.Team == Player.Team then
-
-			return
-		end
-
-		if isOwnPlayer and not espOnOwn then return end
-		if isNPC and not espOnNPCs then return end
-
-		-- Initialize tracking array for this specific entity model
-		activeESP[model] = {}
-
-		-- 1. CHAMS HANDLER
-		if ESP.Values["Chams"] then
-			local highlight = Instance.new("Highlight")
-			highlight.FillColor = ESP.Values["Chams Color"] or Color3.new(0.333333, 0, 0.498039)
-			highlight.FillTransparency = 0.5 
-			highlight.OutlineColor = Color3.new(1, 1, 1)
-			highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-			highlight.Adornee = model
-			highlight.Parent = chamsESPFolder
-
-			table.insert(activeESP[model], highlight) -- Track it
-		end
-
-		-- 2. 3D BOX HANDLER
-		if ESP.Values["3D Box"] then
-			local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-			if hrp then
-				local espBOX = Instance.new("Part")
-				espBOX.Name = "3D_ESP_BOX"
-				espBOX.Anchored = false
-				espBOX.CanCollide = false
-				espBOX.Color = ESP.Values["3D Box Color"] or Color3.new(0.333333, 0, 0.498039)
-				espBOX.Transparency = 0.65
-				espBOX.Material = Enum.Material.SmoothPlastic
-				espBOX.Size = Vector3.new(4, 5, 2)
-				espBOX.CFrame = hrp.CFrame
-				espBOX.Parent = model
-
-				local weld = Instance.new("WeldConstraint")
-				weld.Part0 = espBOX
-				weld.Part1 = hrp
-				weld.Parent = espBOX
-
-				table.insert(activeESP[model], espBOX) -- Track it
-			end
-		end
-
-		-- 3. 2D BOX HANDLER (UPGRADED VISUALS)
-		if ESP.Values["2D Box"] then
-			local frame = Instance.new("Frame")
-			frame.BackgroundColor3 = Color3.new(0, 0, 0)
-			frame.BackgroundTransparency = 0.85 -- Slight dark fill for depth
-			frame.BorderSizePixel = 0
-			frame.Size = UDim2.fromOffset(0, 0)
-			frame.Visible = false
-			frame.Parent = espScreenGui
-			frame.ZIndex = 10
-
-			-- Modern slightly rounded corners
-			local corner = Instance.new("UICorner")
-			corner.CornerRadius = UDim.new(0, 2)
-			corner.Parent = frame
-
-			-- Outer black stroke for high visibility on bright backgrounds
-			local outerStroke = Instance.new("UIStroke")
-			outerStroke.Color = Color3.new(0, 0, 0)
-			outerStroke.Transparency = 0.2
-			outerStroke.Thickness = 3
-			outerStroke.Parent = frame
-
-			-- Inner colored stroke
-			local innerStroke = Instance.new("UIStroke")
-			innerStroke.Color = ESP.Values["2D Box Color"] or Color3.new(0.333333, 0, 0.498039)
-			innerStroke.Thickness = 1.5
-			innerStroke.Parent = frame
-
-			active2DFrames[model] = frame -- Track it
-		end
+	if data.Frame2D then data.Frame2D:Destroy() end
+	if data.Box3D then data.Box3D:Destroy() end
+	for _, line in pairs(data.SkeletonLines) do
+		if line then line:Destroy() end
 	end
 
-	local function update2DBoxes()
-		local camera = workspace.CurrentCamera
-		if not camera then return end
+	activeESPCache[model] = nil
+end
 
-		for model, frame in pairs(active2DFrames) do
-			if not model.Parent then
-				frame.Visible = false
-				continue
-			end
+function updateESP()
+	cam = Workspace.CurrentCamera
+	if not cam then return end
 
-			local humanoid = model:FindFirstChildOfClass("Humanoid")
-			if not humanoid or humanoid.Health <= 0 then
-				frame.Visible = false
-				continue
-			end
+	mode = getSetting("ESP Mode", "2D")
+	color2D = getSetting("2D Box Color", Color3.fromRGB(255, 0, 0))
+	fill2D = getSetting("Fill 2D Box", false)
+	color3D = getSetting("3D Box Color", Color3.fromRGB(85, 0, 127))
+	fill3D = getSetting("Fill 3D Box", true)
+	colorSkel = getSetting("Skeleton Color", Color3.fromRGB(255, 0, 0))
 
-			local hrp = model:FindFirstChild("HumanoidRootPart")
-			local head = model:FindFirstChild("Head")
-
-			if not hrp or not head then
-				frame.Visible = false
-				continue
-			end
-
-			-- FIXED: Calculate top and bottom points based on actual character parts
-			-- This prevents the "shifting" issue caused by GetBoundingBox()
-			local topPos = head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.1, 0)
-			local bottomPos = hrp.Position - Vector3.new(0, hrp.Size.Y * 0.5, 0)
-
-			local topScreen = camera:WorldToViewportPoint(topPos)
-			local bottomScreen = camera:WorldToViewportPoint(bottomPos)
-
-			-- Hide if both points are behind the camera
-			if topScreen.Z < 0 and bottomScreen.Z < 0 then
-				frame.Visible = false
-				continue
-			end
-
-			local height = math.abs(topScreen.Y - bottomScreen.Y)
-
-			-- Hide if too far away to be visible
-			if height < 5 then
-				frame.Visible = false
-				continue
-			end
-
-			-- FIXED: Clamp maximum height so it doesn't take up the entire screen when very close
-			local maxHeight = camera.ViewportSize.Y * 0.75
-			if height > maxHeight then
-				height = maxHeight
-			end
-
-			-- Width is proportional to height (standard character aspect ratio)
-			local width = height * 0.5 
-
-			local centerX = (topScreen.X + bottomScreen.X) / 2
-			local centerY = (topScreen.Y + bottomScreen.Y) / 2
-
-			frame.Position = UDim2.fromOffset(centerX - width / 2, centerY - height / 2)
-			frame.Size = UDim2.fromOffset(width, height)
-			frame.Visible = true
-		end
-	end
-
-	local function refreshAllESP()
-		for _, espPlayer in pairs(Players:GetPlayers()) do
-			if espPlayer.Character and espPlayer.Character:FindFirstChild("Humanoid") then
-				applyESP(espPlayer.Character, false)
-			end
+	for model, data in pairs(activeESPCache) do
+		if not isValidTarget(model) then
+			if data.Frame2D then data.Frame2D.Visible = false end
+			if data.Box3D then data.Box3D.Transparency = 1 end
+			if data.Selection3D then data.Selection3D.Visible = false end
+			for _, line in pairs(data.SkeletonLines) do line.Visible = false end
+			continue
 		end
 
-		for _, npc in pairs(workspace:GetChildren()) do
-			if npc and npc:IsA("Model") and npc:FindFirstChild("Humanoid") then
-				if not Players:GetPlayerFromCharacter(npc) then
-					applyESP(npc, true)
+		if mode == "2D" then
+			if data.Box3D then data.Box3D.Transparency = 1 end
+			if data.Selection3D then data.Selection3D.Visible = false end
+			for _, line in pairs(data.SkeletonLines) do line.Visible = false end
+
+			-- Optimized spatial math instead of 8-corner GetBoundingBox mapping
+			topPos = data.Head.Position + Vector3.new(0, data.Head.Size.Y * 0.5 + 0.2, 0)
+			botPos = data.HRP.Position - Vector3.new(0, data.HRP.Size.Y * 1.5, 0)
+
+			topScreen, topVis = cam:WorldToViewportPoint(topPos)
+			botScreen, botVis = cam:WorldToViewportPoint(botPos)
+
+			if topVis or botVis then
+				height = math.abs(topScreen.Y - botScreen.Y)
+				width = height * 0.55
+
+				data.Frame2D.Position = UDim2.fromOffset(topScreen.X - (width / 2), topScreen.Y)
+				data.Frame2D.Size = UDim2.fromOffset(width, height)
+
+				data.Stroke2D.Color = color2D
+				data.Frame2D.BackgroundColor3 = color2D
+				data.Frame2D.BackgroundTransparency = fill2D and 0.65 or 1
+				data.Frame2D.Visible = true
+			else
+				data.Frame2D.Visible = false
+			end
+
+		elseif mode == "3D" then
+			if data.Frame2D then data.Frame2D.Visible = false end
+			for _, line in pairs(data.SkeletonLines) do line.Visible = false end
+
+			if data.Box3D and data.Selection3D then
+				data.Box3D.Color = color3D
+				data.Box3D.Transparency = fill3D and 0.65 or 1
+				data.Selection3D.Color3 = color3D
+				data.Selection3D.Visible = true
+			end
+
+		elseif mode == "Skeleton" then
+			if data.Frame2D then data.Frame2D.Visible = false end
+			if data.Box3D then data.Box3D.Transparency = 1 end
+			if data.Selection3D then data.Selection3D.Visible = false end
+
+			for idx, pair in pairs(data.CachedJoints) do
+				v1, vis1 = cam:WorldToViewportPoint(pair[1].Position)
+				v2, vis2 = cam:WorldToViewportPoint(pair[2].Position)
+
+				lineFrame = data.SkeletonLines[idx]
+
+				if vis1 and vis2 and lineFrame then
+					ptA = Vector2.new(v1.X, v1.Y)
+					ptB = Vector2.new(v2.X, v2.Y)
+					dist = (ptB - ptA).Magnitude
+					center = (ptA + ptB) * 0.5
+					ang = math.deg(math.atan2(ptB.Y - ptA.Y, ptB.X - ptA.X))
+
+					lineFrame.Position = UDim2.fromOffset(center.X, center.Y)
+					lineFrame.Size = UDim2.fromOffset(dist, 3) -- Increased line thickness
+					lineFrame.Rotation = ang
+					lineFrame.BackgroundColor3 = colorSkel
+					lineFrame.Visible = true
+				elseif lineFrame then
+					lineFrame.Visible = false
 				end
 			end
 		end
 	end
+end
 
-	local function cleanAllESP()
-		for key, connection in pairs(connections) do
-			if connection then 
-				connection:Disconnect() 
+function scanAndTrackTargets()
+	for _, p in pairs(Players:GetPlayers()) do
+		if p.Character then createESPContainer(p.Character) end
+	end
+	for _, child in pairs(Workspace:GetChildren()) do
+		if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
+			if not Players:GetPlayerFromCharacter(child) then
+				createESPContainer(child)
 			end
 		end
-		connections = {}
-
-		-- Hard clear all active graphical elements
-		for model, _ in pairs(activeESP) do clearESP(model) end
-		for model, _ in pairs(active2DFrames) do clearESP(model) end
-		activeESP = {}
-		active2DFrames = {}
 	end
+end
 
-	ESP.Callbacks.OnToggle = function(state)
-		loops["esp"] = state
+function cleanAllESP()
+	for name, conn in pairs(espConnections) do
+		if conn then conn:Disconnect() end
+	end
+	espConnections = {}
+	for model, _ in pairs(activeESPCache) do
+		removeESPContainer(model)
+	end
+	activeESPCache = {}
+end
 
-		if loops["esp"] then
-			refreshAllESP()
+ESP.Callbacks.OnToggle = function(state)
+	if loops then loops["esp"] = state end
 
-			local lastESPUpdate = 0
+	if state then
+		scanAndTrackTargets()
 
-			connections["RenderStepped"] = RunService.RenderStepped:Connect(function()
-				local now = os.clock()
+		espConnections["RenderStepped"] = RunService.RenderStepped:Connect(updateESP)
 
-				-- Changed from 0.033 to 0.016 for smoother 60FPS tracking
-				if now - lastESPUpdate < 0.016 then
-					return
-				end
-
-				lastESPUpdate = now
-				update2DBoxes()
+		function hookPlayerEvents(p)
+			espConnections[p.Name .. "_charAdded"] = p.CharacterAdded:Connect(function(char)
+				char:WaitForChild("HumanoidRootPart", 5)
+				createESPContainer(char)
 			end)
-
-			local function hookPlayer(p)
-				connections[p.Name .. "_charAdded"] = p.CharacterAdded:Connect(function(char)
-					char:WaitForChild("HumanoidRootPart", 5)
-					if loops["esp"] then applyESP(char, false) end
-				end)
-				connections[p.Name .. "_charRemoving"] = p.CharacterRemoving:Connect(function(char)
-					clearESP(char)
-				end)
-			end
-
-			for _, p in pairs(Players:GetPlayers()) do hookPlayer(p) end
-			connections["PlayerAdded"] = Players.PlayerAdded:Connect(hookPlayer)
-
-			connections["PlayerRemoving"] = Players.PlayerRemoving:Connect(function(p)
-				if p.Character then clearESP(p.Character) end
-				if connections[p.Name .. "_charAdded"] then connections[p.Name .. "_charAdded"]:Disconnect() end
-				if connections[p.Name .. "_charRemoving"] then connections[p.Name .. "_charRemoving"]:Disconnect() end
+			espConnections[p.Name .. "_charRemoving"] = p.CharacterRemoving:Connect(function(char)
+				removeESPContainer(char)
 			end)
-
-			-- Dynamic NPC detection (Handles maps loading or workspace updates)
-			connections["WorkspaceAdded"] = workspace.ChildAdded:Connect(function(child)
-				task.wait(0.2) -- Let instances assemble
-				if child:IsA("Model") and child:FindFirstChild("Humanoid") then
-					if not Players:GetPlayerFromCharacter(child) then
-						applyESP(child, true)
-					end
-				end
-			end)
-			connections["WorkspaceRemoved"] = workspace.ChildRemoved:Connect(clearESP)
-		else
-			cleanAllESP()
 		end
+
+		for _, p in pairs(Players:GetPlayers()) do hookPlayerEvents(p) end
+		espConnections["PlayerAdded"] = Players.PlayerAdded:Connect(hookPlayerEvents)
+
+		espConnections["PlayerRemoving"] = Players.PlayerRemoving:Connect(function(p)
+			if p.Character then removeESPContainer(p.Character) end
+			if espConnections[p.Name .. "_charAdded"] then espConnections[p.Name .. "_charAdded"]:Disconnect() end
+			if espConnections[p.Name .. "_charRemoving"] then espConnections[p.Name .. "_charRemoving"]:Disconnect() end
+		end)
+
+		espConnections["WorkspaceAdded"] = Workspace.ChildAdded:Connect(function(child)
+			task.wait(0.2)
+			if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
+				if not Players:GetPlayerFromCharacter(child) then
+					createESPContainer(child)
+				end
+			end
+		end)
+
+		espConnections["WorkspaceRemoved"] = Workspace.ChildRemoved:Connect(removeESPContainer)
+	else
+		cleanAllESP()
 	end
-
-
+end
 	DeathEvent.OnClientEvent:Connect(function(data)
 		if data and loops["auto emote"] and AutoEmote.Values["Upon Kill"] then
 
@@ -13747,4 +13846,412 @@ TargetStrafe.Callbacks.OnToggle = function(state)
 			if ts_h2 and not tsUserMoving() then ts_h2:Move(Vector3.zero, false) end
 		end)
 	end
+end
+if hlth_charConn then pcall(function() hlth_charConn:Disconnect() end) end
+if hlth_humConn then pcall(function() hlth_humConn:Disconnect() end) end
+if hlth_maxConn then pcall(function() hlth_maxConn:Disconnect() end) end
+if hlth_gui then pcall(function() hlth_gui:Destroy() end) end
+hlth_hum = nil; hlth_charConn = nil; hlth_humConn = nil; hlth_maxConn = nil
+
+hlth_gui = Instance.new("ScreenGui")
+hlth_gui.Name = "Featherware_HealthGui"
+hlth_gui.ResetOnSpawn = false
+hlth_gui.IgnoreGuiInset = true
+hlth_gui.DisplayOrder = 200
+hlth_gui.Enabled = false
+hlth_gui.Parent =  PlayerGui
+print("")
+
+hlth_cont = Instance.new("Frame", hlth_gui)
+hlth_cont.Name = "HealthContainer"
+hlth_cont.AnchorPoint = Vector2.new(0.5, 0.5)
+hlth_cont.Position = UDim2.new(0.5, 0, 0.5, 0)
+hlth_cont.Size = UDim2.new(0, 0, 0, 0)
+hlth_cont.AutomaticSize = Enum.AutomaticSize.XY
+hlth_cont.BackgroundTransparency = 1
+hlth_cont.BorderSizePixel = 0
+hlth_cont.ZIndex = 5
+
+hlth_layout = Instance.new("UIListLayout", hlth_cont)
+-- [FIX] Added SortOrder so it respects the LayoutOrder instead of Alphabetical Name
+hlth_layout.SortOrder = Enum.SortOrder.LayoutOrder 
+hlth_layout.FillDirection = Enum.FillDirection.Horizontal
+hlth_layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+hlth_layout.VerticalAlignment = Enum.VerticalAlignment.Center
+hlth_layout.Padding = UDim.new(0, 8)
+
+hlth_pad = Instance.new("UIPadding", hlth_cont)
+hlth_pad.PaddingTop = UDim.new(0, 10)
+hlth_pad.PaddingBottom = UDim.new(0, 10)
+hlth_pad.PaddingLeft = UDim.new(0, 10)
+hlth_pad.PaddingRight = UDim.new(0, 10)
+
+hlth_corner = Instance.new("UICorner", hlth_cont)
+hlth_corner.CornerRadius = UDim.new(0, 8)
+
+hlth_stroke = Instance.new("UIStroke", hlth_cont)
+hlth_stroke.Enabled = false
+hlth_stroke.Thickness = 2
+hlth_stroke.Color = Color3.fromRGB(255, 255, 255)
+
+hlth_scale = Instance.new("UIScale", hlth_cont)
+hlth_scale.Scale = 1
+
+hlth_num = Instance.new("TextLabel", hlth_cont)
+hlth_num.Name = "HealthNumber"
+hlth_num.BackgroundTransparency = 1
+hlth_num.AutomaticSize = Enum.AutomaticSize.XY
+hlth_num.Size = UDim2.new(0, 0, 0, 0)
+hlth_num.Text = "100"
+hlth_num.TextColor3 = Color3.fromRGB(255, 255, 255)
+hlth_num.TextSize = 32
+hlth_num.Font = Enum.Font.GothamBold
+hlth_num.TextXAlignment = Enum.TextXAlignment.Center
+hlth_num.TextYAlignment = Enum.TextYAlignment.Center
+hlth_num.TextScaled = false
+hlth_num.RichText = false
+hlth_num.ZIndex = 6
+hlth_num.LayoutOrder = 0 -- [FIX] Set default to 0
+
+hlth_heart = Instance.new("TextLabel", hlth_cont)
+hlth_heart.Name = "HealthHeart"
+hlth_heart.BackgroundTransparency = 1
+hlth_heart.AutomaticSize = Enum.AutomaticSize.XY
+hlth_heart.Size = UDim2.new(0, 0, 0, 0)
+hlth_heart.Text = "❤️"
+hlth_heart.TextColor3 = Color3.fromRGB(255, 70, 90)
+hlth_heart.TextSize = 32
+hlth_heart.Font = Enum.Font.GothamBold
+hlth_heart.TextXAlignment = Enum.TextXAlignment.Center
+hlth_heart.TextYAlignment = Enum.TextYAlignment.Center
+hlth_heart.ZIndex = 6
+hlth_heart.LayoutOrder = 1 -- [FIX] Set default to 1 (After text)
+
+Health = Visuals:CreateButton("Health", nil, true)
+
+function healthVal(name, def)
+	hlth_v = Health.Values[name]
+	if hlth_v == nil then return def end
+	return hlth_v
+end
+
+function healthUpdateText()
+	if not hlth_num then return end
+
+	local hlth_frac = 1 -- Default fraction just in case
+
+	-- [FIX] Rewrote this so it doesn't "return" early. Color settings now apply even if Humanoid is dead/nil.
+	if not hlth_hum or not hlth_hum.Parent then
+		hlth_num.Text = "?"
+	else
+		hlth_hp = math.floor(hlth_hum.Health)
+		hlth_mx = math.max(1, math.floor(hlth_hum.MaxHealth))
+		hlth_frac = math.clamp(hlth_hum.Health / hlth_hum.MaxHealth, 0, 1)
+
+		if healthVal("Show Max Health", false) then
+			hlth_numText = hlth_hp .. " / " .. hlth_mx
+		else
+			hlth_numText = tostring(hlth_hp)
+		end
+
+		if healthVal("Show Percent", false) then
+			hlth_numText = hlth_numText .. "  " .. math.floor(hlth_frac * 100) .. "%"
+		end
+
+		hlth_num.Text = hlth_numText
+	end
+
+	-- Color logic moved outside the humanoid check so it always updates
+	if healthVal("Color By Health", false) then
+		hlth_hc = Color3.fromRGB(255 * (1 - hlth_frac), 255 * hlth_frac, 40)
+		hlth_num.TextColor3 = hlth_hc
+		hlth_heart.TextColor3 = hlth_hc
+	else
+		hlth_num.TextColor3 = healthVal("Text Color", Color3.fromRGB(255, 255, 255))
+		hlth_heart.TextColor3 = healthVal("Heart Color", Color3.fromRGB(255, 70, 90))
+	end
+end
+
+function healthApplyAll()
+	if not hlth_cont then return end
+	hlth_cont.Position = UDim2.new(healthVal("X Position", 50) / 100, 0, healthVal("Y Position", 50) / 100, 0)
+	hlth_scale.Scale = healthVal("Scale", 1)
+	hlth_num.TextSize = healthVal("Text Size", 32)
+	hlth_num.TextTransparency = healthVal("Text Transparency", 0)
+	hlth_ok, hlth_f = pcall(function() return Enum.Font[healthVal("Font", "GothamBold")] end)
+	hlth_num.Font = (hlth_ok and hlth_f) or Enum.Font.GothamBold
+	if healthVal("Text Stroke", false) then
+		hlth_num.TextStrokeTransparency = 0
+		hlth_num.TextStrokeColor3 = healthVal("Text Stroke Color", Color3.fromRGB(0, 0, 0))
+	else
+		hlth_num.TextStrokeTransparency = 1
+	end
+	if healthVal("Background", false) then
+		hlth_cont.BackgroundColor3 = healthVal("Background Color", Color3.fromRGB(18, 18, 22))
+		hlth_cont.BackgroundTransparency = healthVal("Background Transparency", 0.4)
+	else
+		hlth_cont.BackgroundTransparency = 1
+	end
+	hlth_corner.CornerRadius = UDim.new(0, healthVal("Corner Radius", 8))
+	hlth_p = healthVal("Padding", 10)
+	hlth_pad.PaddingTop = UDim.new(0, hlth_p)
+	hlth_pad.PaddingBottom = UDim.new(0, hlth_p)
+	hlth_pad.PaddingLeft = UDim.new(0, hlth_p)
+	hlth_pad.PaddingRight = UDim.new(0, hlth_p)
+	if healthVal("Border", false) then
+		hlth_stroke.Enabled = true
+		hlth_stroke.Color = healthVal("Border Color", Color3.fromRGB(255, 255, 255))
+		hlth_stroke.Thickness = healthVal("Border Thickness", 2)
+	else
+		hlth_stroke.Enabled = false
+	end
+	hlth_heart.Visible = healthVal("Show Heart", true)
+	hlth_heart.TextSize = healthVal("Text Size", 32) * healthVal("Heart Size", 1)
+	hlth_layout.Padding = UDim.new(0, healthVal("Heart Gap", 8))
+
+	if healthVal("Heart Side", "After") == "Before" then
+		hlth_heart.LayoutOrder = 0
+		hlth_num.LayoutOrder = 1
+	else
+		hlth_heart.LayoutOrder = 1
+		hlth_num.LayoutOrder = 0
+	end
+
+	healthUpdateText()
+end
+
+function healthUnbindHum()
+	if hlth_humConn then pcall(function() hlth_humConn:Disconnect() end); hlth_humConn = nil end
+	if hlth_maxConn then pcall(function() hlth_maxConn:Disconnect() end); hlth_maxConn = nil end
+	hlth_hum = nil
+end
+
+function healthBindHum(hum)
+	healthUnbindHum()
+	hlth_hum = hum
+	if not hum then healthUpdateText(); return end
+	hlth_humConn = hum.HealthChanged:Connect(function() healthUpdateText() end)
+	hlth_maxConn = hum:GetPropertyChangedSignal("MaxHealth"):Connect(function() healthUpdateText() end)
+	healthUpdateText()
+end
+
+function healthBindChar(char)
+	if not char then return end
+	hlth_hum2 = char:FindFirstChildOfClass("Humanoid")
+	if not hlth_hum2 then hlth_hum2 = char:WaitForChild("Humanoid", 5) end
+	healthBindHum(hlth_hum2)
+end
+
+hlth_cb = function() healthApplyAll() end
+
+Health:CreateSlider("X Position", 0, 100, 50, hlth_cb, 1)
+Health:CreateSlider("Y Position", 0, 100, 50, hlth_cb, 1)
+Health:CreateSlider("Text Size", 8, 90, 32, hlth_cb, 1)
+Health:CreateSlider("Scale", 0.3, 3, 1, hlth_cb, 0.1)
+Health:CreateDropdown("Font", {"GothamBold", "GothamBlack", "Gotham", "GothamMedium", "GothamSemibold", "Arial", "ArialBold", "SourceSans", "SourceSansBold", "SourceSansSemibold", "Legacy", "Code", "FredokaOne", "BurbankBigCondensed", "Cartoon", "Antique", "SciFi", "Title", "AmaticSC", "Creepster", "Den", "Merriweather", "Michroma", "Roboto", "RobotoMono", "Sarpanch", "SpecialElite", "TitilliumWeb", "Ubuntu", "Zekton"}, "GothamBold", hlth_cb, false)
+Health:CreateColorPicker("Text Color", Color3.fromRGB(255, 255, 255), hlth_cb)
+Health:CreateSlider("Text Transparency", 0, 1, 0, hlth_cb, 0.05)
+Health:CreateToggle("Text Stroke", false, hlth_cb)
+Health:CreateColorPicker("Text Stroke Color", Color3.fromRGB(0, 0, 0), hlth_cb)
+Health:CreateToggle("Background", false, hlth_cb)
+Health:CreateColorPicker("Background Color", Color3.fromRGB(18, 18, 22), hlth_cb)
+Health:CreateSlider("Background Transparency", 0, 1, 0.4, hlth_cb, 0.05)
+Health:CreateSlider("Corner Radius", 0, 24, 8, hlth_cb, 1)
+Health:CreateSlider("Padding", 0, 40, 10, hlth_cb, 1)
+Health:CreateToggle("Border", false, hlth_cb)
+Health:CreateColorPicker("Border Color", Color3.fromRGB(255, 255, 255), hlth_cb)
+Health:CreateSlider("Border Thickness", 1, 6, 2, hlth_cb, 1)
+Health:CreateToggle("Show Heart", true, hlth_cb)
+Health:CreateColorPicker("Heart Color", Color3.fromRGB(255, 70, 90), hlth_cb)
+Health:CreateSlider("Heart Size", 0.4, 2, 1, hlth_cb, 0.1)
+Health:CreateSlider("Heart Gap", 0, 30, 8, hlth_cb, 1)
+Health:CreateDropdown("Heart Side", {"After", "Before"}, "After", hlth_cb, false)
+Health:CreateToggle("Show Max Health", false, hlth_cb)
+Health:CreateToggle("Show Percent", false, hlth_cb)
+Health:CreateToggle("Color By Health", false, hlth_cb)
+
+healthApplyAll()
+
+Health.Callbacks.OnToggle = function(state)
+	loops["health"] = state
+	if state then
+		if hlth_gui then hlth_gui.Enabled = true end
+		healthApplyAll()
+		if not hlth_charConn then
+			hlth_charConn = Player.CharacterAdded:Connect(function(c) healthBindChar(c) end)
+		end
+		healthBindChar(Player.Character)
+	else
+		if hlth_gui then hlth_gui.Enabled = false end
+		healthUnbindHum()
+		if hlth_charConn then pcall(function() hlth_charConn:Disconnect() end); hlth_charConn = nil end
+	end
+end
+
+RunService = game:GetService("RunService")
+Workspace = game:GetService("Workspace")
+Terrain = Workspace:FindFirstChildOfClass("Terrain")
+Cam = Workspace.CurrentCamera
+
+Shaders = Visuals:CreateButton("Shaders", nil, true)
+
+WaterIsGenerated = false
+WaterCFrame = CFrame.new(0, 5, 0) 
+WaterSize = Vector3.new(2000, 10, 2000) 
+
+function UpdateShaderUI()
+	if not Shaders.Values then return end
+
+	CloudActive = Shaders.Values["Enable Clouds"] or false
+	WaterActive = Shaders.Values["Enable Water"] or false
+	WeatherActive = (Shaders.Values["Weather"] ~= "None" and Shaders.Values["Weather"] ~= nil)
+
+	if CloudCover and CloudDensity and CloudColor then
+		CloudCover:SetVisible(CloudActive)
+		CloudDensity:SetVisible(CloudActive)
+		CloudColor:SetVisible(CloudActive)
+	end
+
+	if WaterColor and WaterWaveSize and WaterWaveSpeed then
+		WaterColor:SetVisible(WaterActive)
+		WaterWaveSize:SetVisible(WaterActive)
+		WaterWaveSpeed:SetVisible(WaterActive)
+	end
+
+	if WeatherIntensity then
+		WeatherIntensity:SetVisible(WeatherActive)
+	end
+end
+
+function ApplyShaders()
+	if not Shaders.Values then return end
+
+	-- If the shader loop/toggle is turned off, force everything off
+	local shadersEnabled = loops and loops["shaders"] == true
+
+	-- Handle Clouds
+	fwClouds = Terrain:FindFirstChild("FeatherwareClouds")
+	if shadersEnabled and Shaders.Values["Enable Clouds"] then
+		if not fwClouds then
+			fwClouds = Instance.new("Clouds")
+			fwClouds.Name = "FeatherwareClouds"
+			fwClouds.Parent = Terrain
+		end
+		fwClouds.Cover = Shaders.Values["Cloud Cover"] or 0.5
+		fwClouds.Density = Shaders.Values["Cloud Density"] or 0.5
+	else
+		if fwClouds then fwClouds:Destroy() end
+	end
+
+	-- Handle Water
+	if shadersEnabled and Shaders.Values["Enable Water"] then
+		Terrain.WaterWaveSize = Shaders.Values["Wave Size"] or 0.15
+		Terrain.WaterWaveSpeed = Shaders.Values["Wave Speed"] or 15
+
+		if not WaterIsGenerated then
+			Terrain:FillBlock(WaterCFrame, WaterSize, Enum.Material.Water)
+			WaterIsGenerated = true
+		end
+	else
+		if WaterIsGenerated then
+			Terrain:FillBlock(WaterCFrame, WaterSize, Enum.Material.Air)
+			WaterIsGenerated = false
+		end
+	end
+
+	-- Handle Weather
+	fwWeatherPart = Cam:FindFirstChild("FeatherwareWeather")
+	if shadersEnabled then
+		if not fwWeatherPart then
+			fwWeatherPart = Instance.new("Part")
+			fwWeatherPart.Name = "FeatherwareWeather"
+			fwWeatherPart.Anchored = true
+			fwWeatherPart.CanCollide = false
+			fwWeatherPart.Transparency = 1
+			fwWeatherPart.Size = Vector3.new(150, 2, 150)
+			fwWeatherPart.Parent = Cam
+
+			fwWeatherEmitter = Instance.new("ParticleEmitter")
+			fwWeatherEmitter.Name = "Emitter"
+			fwWeatherEmitter.Parent = fwWeatherPart
+			fwWeatherEmitter.EmissionDirection = Enum.NormalId.Bottom
+			fwWeatherEmitter.Orientation = Enum.ParticleOrientation.FacingCamera
+		else
+			fwWeatherEmitter = fwWeatherPart:FindFirstChild("Emitter")
+		end
+
+		weatherType = Shaders.Values["Weather"] or "None"
+		intensity = Shaders.Values["Weather Intensity"] or 1500
+
+		if fwWeatherEmitter then
+			if weatherType == "Rain" then
+				fwWeatherEmitter.Enabled = true
+				fwWeatherEmitter.Texture = "rbxasset://textures/particles/smoke_main.dds"
+				fwWeatherEmitter.Color = ColorSequence.new(Color3.fromRGB(170, 200, 230))
+				fwWeatherEmitter.Transparency = NumberSequence.new(0.6)
+				fwWeatherEmitter.Size = NumberSequence.new(0.05, 0.1)
+				fwWeatherEmitter.Speed = NumberRange.new(200, 250) 
+				fwWeatherEmitter.Acceleration = Vector3.new(0, -300, 0) 
+				fwWeatherEmitter.Lifetime = NumberRange.new(0.5, 0.8)
+				fwWeatherEmitter.Rate = intensity
+				pcall(function() fwWeatherEmitter.Squash = NumberSequence.new(2) end) 
+
+			elseif weatherType == "Snow" then
+				fwWeatherEmitter.Enabled = true
+				fwWeatherEmitter.Texture = "rbxasset://textures/particles/smoke_main.dds"
+				fwWeatherEmitter.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+				fwWeatherEmitter.Transparency = NumberSequence.new(0.2)
+				fwWeatherEmitter.Size = NumberSequence.new(0.25, 0.4)
+				fwWeatherEmitter.Speed = NumberRange.new(15, 25) 
+				fwWeatherEmitter.Acceleration = Vector3.new(0, -5, 0)
+				fwWeatherEmitter.Lifetime = NumberRange.new(4, 6)
+				fwWeatherEmitter.Rate = intensity
+				pcall(function() fwWeatherEmitter.Squash = NumberSequence.new(0) end)
+			else
+				fwWeatherEmitter.Enabled = false
+			end
+		end
+	else
+		if fwWeatherPart then fwWeatherPart:Destroy() end
+	end
+end
+
+ToggleClouds = Shaders:CreateToggle("Enable Clouds", false, function() UpdateShaderUI() ApplyShaders() end)
+CloudCover = Shaders:CreateSlider("Cloud Cover", 0, 1, 0.5, function() ApplyShaders() end, 0.05)
+CloudDensity = Shaders:CreateSlider("Cloud Density", 0, 1, 0.5, function() ApplyShaders() end, 0.05)
+CloudColor = Shaders:CreateColorPicker("Cloud Color", Color3.fromRGB(255, 255, 255))
+
+ToggleWater = Shaders:CreateToggle("Enable Water", false, function() UpdateShaderUI() ApplyShaders() end)
+WaterColor = Shaders:CreateColorPicker("Water Color", Color3.fromRGB(0, 150, 255))
+WaterWaveSize = Shaders:CreateSlider("Wave Size", 0, 1, 0.15, function() ApplyShaders() end, 0.05)
+WaterWaveSpeed = Shaders:CreateSlider("Wave Speed", 0, 100, 15, function() ApplyShaders() end, 1)
+
+WeatherDropdown = Shaders:CreateDropdown("Weather", {"None", "Rain", "Snow"}, "None", function() UpdateShaderUI() ApplyShaders() end)
+WeatherIntensity = Shaders:CreateSlider("Weather Intensity", 100, 5000, 1500, function() ApplyShaders() end, 100)
+
+UpdateShaderUI()
+
+if WeatherRenderLoop then WeatherRenderLoop:Disconnect() end
+WeatherRenderLoop = RunService.RenderStepped:Connect(function()
+	if not loops or not loops["shaders"] then return end
+
+	if Shaders.Values["Enable Clouds"] then
+		fwC = Terrain:FindFirstChild("FeatherwareClouds")
+		if fwC then fwC.Color = Shaders.Values["Cloud Color"] or Color3.fromRGB(255, 255, 255) end
+	end
+
+	if Shaders.Values["Enable Water"] then
+		Terrain.WaterColor = Shaders.Values["Water Color"] or Color3.fromRGB(0, 150, 255)
+	end
+
+	if Cam and Cam:FindFirstChild("FeatherwareWeather") then
+		Cam.FeatherwareWeather.Position = Cam.CFrame.Position + Vector3.new(0, 60, 0)
+	end
+end)
+
+Shaders.Callbacks.OnToggle = function(state)
+	if not loops then loops = {} end
+	loops["shaders"] = state
+	UpdateShaderUI()
+	ApplyShaders()
 end
