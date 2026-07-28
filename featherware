@@ -928,8 +928,20 @@ end
 		["keep sprint"] = false,
 		["target strafe"] = false,
 		["health"] = false,
-		["shaders"] = false
- 		}
+		["shaders"] = false,
+		["chams"] = false,
+		["tracers"] = false,
+		["richshader"]  = false,
+		["metal esp"] = false,
+		["star esp"] = false,
+		["bee esp"] = false,
+		["auto bee"] = false,
+		["gompy esp"] = false,
+		["sheep esp"] = false,
+		["auto sheep"] = false,
+		["elder esp"] = false,
+		["auto elder"] = false
+		}
  
 
 	--REMOTE EVENTS/FUNCTIONS--
@@ -1011,6 +1023,8 @@ end
 		blockPlacer = BlockPlacementController and BlockPlacementController.blockPlace
 		SprintConstants = require(replicatedStorage.TS.sprint:WaitForChild("sprint-constants")).SprintConstants
 		SprintController = KnitClient.Controllers.SprintController
+		SoundManager = require(game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("game-core"):WaitForChild("out")).SoundManager
+		GameSound = require(game:GetService("ReplicatedStorage"):WaitForChild("TS"):WaitForChild("sound"):WaitForChild("game-sound")).GameSound
 		local origStopSprinting
 
 		pcall(function()
@@ -1094,6 +1108,8 @@ end
 	}
 
 	local currentArmorState = "unknown"
+	
+	activeProcesses = {}
 
 	DIRECTION_MODES = {
 		["Normal"] = "Normal",
@@ -1168,8 +1184,46 @@ end
 			["3D Box Target"] = true,
 			["Require Sword Equipped"] = true,
 			["Check If Sophia Frozen"] = true
+		},
+		
+		["auto metal"] = {
+			["Range"] = 8,
+			["Proximity Hold Time"] = 1,
+			["Use Collect Animation"] = true,
+			["Require Metal Detector Held"] = true
+		},
+		
+		["auto star"] = {
+			["Range"] = 5,
+			["Use Collect Animation"] = true
+		},
+		
+		["auto bee"] = {
+			["Collect Range"] = 10,
+			["Collect Hold Time"] = 0.1,
+			["Require Net Held"] = true,
+			["Auto Deposit Bees"] = true,
+			["Deposit Range"] = 10,
+			["Deposit Hold Time"] = 0.5,
+			["Use Deposit Animation"] = true,
+			["Require Bee Held"] = true,
+			["Max Bees In Hive"] = 14
+		},
+		
+		["auto sheep"] = {
+			["Auto Tame"] = true,
+			["Tame Range"] = 10,
+			["Tame Delay"] = 0.5,
+			["Play Tame Animation"] = true
+		},
+		
+		["auto elder"] = {
+			["Auto Collect"] = true,
+			["Collect Range"] = 11,
+			["Collect Delay"] = 0.25,
+			["Play Collect Animation"] = true
 		}
-	}
+      	}
 
 	swords = {
 		"wood_sword",
@@ -3828,6 +3882,14 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 					elseif not GPE and not _G.IsBindingKey and currentBind and input.KeyCode == currentBind and mainScreenUI and mainScreenUI:GetAttribute("Running") == true then
 						setToggleState(not mod.Toggled)
 					end
+					_G.__FW_PANIC_REG = _G.__FW_PANIC_REG or {}
+					_G.__FW_PANIC_REG[btnName] = _G.__FW_PANIC_REG[btnName] or {}
+					_G.__FW_PANIC_REG[btnName].resetKey = function()
+						currentBind = nil
+						_G.SavedConfig[hotkeyID] = nil
+						bindLabel.Text = "[ - ]"
+						pcall(saveConfigToPC)
+					end
 				end)
 			end
 
@@ -3840,8 +3902,8 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 			local sLayout = Instance.new("UIListLayout", settingsCont)
 			sLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-			-- Click Connections
 			btn.MouseButton1Click:Connect(function()
+				if _G.__FW_NO_TOGGLE and _G.__FW_NO_TOGGLE[btnName] then return end
 				setToggleState(not mod.Toggled)
 			end)
 
@@ -3878,6 +3940,26 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 			function mod:SetState(state)
 				setToggleState(state)
 			end
+			
+			_G.__FW_PANIC_REG = _G.__FW_PANIC_REG or {}
+			if not (_G.__FW_NO_TOGGLE and _G.__FW_NO_TOGGLE[btnName]) then
+				_G.__FW_PANIC_REG[btnName] = _G.__FW_PANIC_REG[btnName] or {}
+				_G.__FW_PANIC_REG[btnName].off = function()
+					if not (mainScreenUI and mainScreenUI:GetAttribute("Running")) then return end
+					if mod.Toggled == false then return end
+					mod.Toggled = false
+					nameLabel.TextColor3 = Color3.new(1, 1, 1)
+					loops[string.lower(btnName)] = false
+					_G.SavedConfig[toggleID] = false
+					pcall(saveConfigToPC)
+					task.spawn(function()
+						if callback then pcall(callback, false) end
+						if mod.Callbacks.OnToggle then pcall(mod.Callbacks.OnToggle, false) end
+					end)
+				end
+			end
+			_G.__FW_ACTION_CLICK = _G.__FW_ACTION_CLICK or {}
+			_G.__FW_ACTION_CLICK[btnName] = function(fn) btn.MouseButton1Click:Connect(fn) end
 
 			return mod
 		end
@@ -4149,27 +4231,144 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 		end
 	end)
 
-	SwordSkinChanger = Visuals:CreateButton("Sword Skin Changer", nil, true)
-	SwordSkinChanger:CreateDropdown("Sword Skin", {"pixel", "short_pixel", "valentine", "heartbeam", "darkvalentine", "scythe", banana}, "pixel", function(value)
-		currentSelectedSkin = value 
+SwordSkinChanger = Visuals:CreateButton("Sword Skin Changer", nil, true)
+SwordSkinChanger:CreateDropdown("Sword Skin", {"pixel", "short_pixel", "valentine", "heartbeam", "darkvalentine", "scythe", "banana"}, "pixel", function(value)
+	currentSelectedSkin = value
+	if loops["sword skin changer"] then
+		sscApplyAll()
+	end
+end)
 
-		if loops["sword skin changer"] then
-			-- 1. Update the 3rd Person Character
-			if Player.Character then
-				for _, item in ipairs(Player.Character:GetChildren()) do
-					applySkin(Player.Character, item)
-				end
-			end
-
-			-- 2. Update the 1st Person Viewmodel
-			local viewmodel = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
-			if viewmodel then
-				for _, item in ipairs(viewmodel:GetChildren()) do
-					applySkin(viewmodel, item)
-				end
-			end
+function sscRemoveSkin(item)
+	if not item or typeof(item) ~= "Instance" then return end
+	ssc_old = item:FindFirstChild(item.Name .. "_Skin")
+	if ssc_old then ssc_old:Destroy() end
+	for _, ssc_v in ipairs(item:GetDescendants()) do
+		if ssc_v:IsA("BasePart") then
+			ssc_ot = ssc_v:GetAttribute("_sscOrigTransp")
+			if ssc_ot ~= nil then ssc_v.Transparency = ssc_ot; ssc_v:SetAttribute("_sscOrigTransp", nil) end
+			ssc_olm = ssc_v:GetAttribute("_sscOrigLTM")
+			if ssc_olm ~= nil then ssc_v.LocalTransparencyModifier = ssc_olm; ssc_v:SetAttribute("_sscOrigLTM", nil) end
+		elseif ssc_v:IsA("ParticleEmitter") or ssc_v:IsA("Trail") or ssc_v:IsA("Beam") then
+			ssc_oe = ssc_v:GetAttribute("_sscOrigEnabled")
+			if ssc_oe ~= nil then ssc_v.Enabled = ssc_oe; ssc_v:SetAttribute("_sscOrigEnabled", nil) end
 		end
+	end
+end
+
+function sscApplySkin(item)
+	if not item or typeof(item) ~= "Instance" then return end
+	if not loops["sword skin changer"] then return end
+	if not currentSelectedSkin or not itemsFolder then return end
+
+	ssc_target = string.lower(item.Name .. "_" .. currentSelectedSkin)
+	ssc_alt = string.lower(currentSelectedSkin .. "_" .. item.Name)
+	ssc_replacement = itemsFolder:FindFirstChild(ssc_target) or itemsFolder:FindFirstChild(ssc_alt)
+	if not ssc_replacement then return end
+
+	ssc_handle = item:FindFirstChild("Handle")
+	if not ssc_handle then return end
+	ssc_skinHandle = ssc_replacement:FindFirstChild("Handle")
+	if not ssc_skinHandle then return end
+
+	sscRemoveSkin(item)
+
+	for _, ssc_v in ipairs(item:GetDescendants()) do
+		if ssc_v:IsA("BasePart") then
+			ssc_v:SetAttribute("_sscOrigTransp", ssc_v.Transparency)
+			ssc_v:SetAttribute("_sscOrigLTM", ssc_v.LocalTransparencyModifier)
+			ssc_v.Transparency = 1
+			ssc_v.LocalTransparencyModifier = 1
+		elseif ssc_v:IsA("ParticleEmitter") or ssc_v:IsA("Trail") or ssc_v:IsA("Beam") then
+			ssc_v:SetAttribute("_sscOrigEnabled", ssc_v.Enabled)
+			ssc_v.Enabled = false
+		end
+	end
+
+	ssc_model = Instance.new("Model")
+	ssc_model.Name = item.Name .. "_Skin"
+	ssc_model.Parent = item
+
+	ssc_skin = ssc_skinHandle:Clone()
+	ssc_skin.Parent = ssc_model
+	ssc_skin.Anchored = false
+	ssc_skin.CanCollide = false
+	ssc_skin.CanQuery = false
+	ssc_skin.CanTouch = false
+	ssc_skin.CastShadow = false
+	ssc_skin.Massless = true
+
+	ssc_offset = skinOffsets[currentSelectedSkin] or CFrame.new()
+	ssc_skin.CFrame = ssc_handle.CFrame * ssc_offset
+
+	ssc_weld = Instance.new("WeldConstraint")
+	ssc_weld.Part0 = ssc_handle
+	ssc_weld.Part1 = ssc_skin
+	ssc_weld.Parent = ssc_skin
+
+	ssc_model.PrimaryPart = ssc_skin
+end
+
+function sscApplyAll()
+	if Player.Character then
+		for _, ssc_item in ipairs(Player.Character:GetChildren()) do sscApplySkin(ssc_item) end
+	end
+	ssc_vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+	if ssc_vm then
+		for _, ssc_item in ipairs(ssc_vm:GetChildren()) do sscApplySkin(ssc_item) end
+	end
+end
+
+function sscClearAll()
+	if Player.Character then
+		for _, ssc_item in ipairs(Player.Character:GetChildren()) do sscRemoveSkin(ssc_item) end
+	end
+	ssc_vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+	if ssc_vm then
+		for _, ssc_item in ipairs(ssc_vm:GetChildren()) do sscRemoveSkin(ssc_item) end
+	end
+end
+
+camera.ChildAdded:Connect(function(ssc_child)
+	if string.find(string.lower(ssc_child.Name), "viewmodel") then
+		ssc_child.ChildAdded:Connect(function(ssc_item)
+			task.wait(0.05)
+			sscApplySkin(ssc_item)
+		end)
+		task.wait(0.05)
+		for _, ssc_item in ipairs(ssc_child:GetChildren()) do sscApplySkin(ssc_item) end
+	end
+end)
+
+ssc_vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+if ssc_vm then
+	ssc_vm.ChildAdded:Connect(function(ssc_item)
+		task.wait(0.05)
+		sscApplySkin(ssc_item)
 	end)
+end
+
+if Player.Character then
+	Player.Character.ChildAdded:Connect(function(ssc_item)
+		task.wait(0.05)
+		sscApplySkin(ssc_item)
+	end)
+end
+Player.CharacterAdded:Connect(function(ssc_char)
+	ssc_char.ChildAdded:Connect(function(ssc_item)
+		task.wait(0.05)
+		sscApplySkin(ssc_item)
+	end)
+end)
+
+SwordSkinChanger.Callbacks.OnToggle = function(state)
+	loops["sword skin changer"] = state
+	if state then
+		sscApplyAll()
+	else
+		sscClearAll()
+	end
+end
 
 	DamageIndictatorChanger = Visuals:CreateButton("Damage Indictator Changer", nil, true)
 	DamageIndictatorChanger:CreateToggle("Random Color", false)
@@ -4558,11 +4757,11 @@ local oldGui = PlayerGui:FindFirstChild("FeatherWare")
 	AutoMiner:CreateSlider("Mine Duration", 0, 2.5, 2.5, nil, 0.01)
 	AutoMiner:CreateToggle("Use Mine Animation", true, nil)
 
-	AutoStar = Kits:CreateButton("Auto Star", nil, true)
+	AutoStar = Kits:CreateButton("Auto Star", nil, true, true)
 	AutoStar:CreateSlider("Range", 1, 20, 10, nil, 1)
 	AutoStar:CreateToggle("Use Collect Animation", true, nil)
 
-	AutoMetal = Kits:CreateButton("Auto Metal", nil, true)
+	AutoMetal = Kits:CreateButton("Auto Metal", nil, true, true)
 	AutoMetal:CreateSlider("Range", 1, 20, 10, nil, 1)
 	AutoMetal:CreateSlider("Proximity Hold Time", 0, 1, 1, nil, 0.05)
 	AutoMetal:CreateToggle("Use Collect Animation", true, nil)
@@ -8299,6 +8498,10 @@ end
 
 						track.Looped = false
 						track:Play()
+						
+						if canRequire then
+							SoundManager:playSound(GameSound.STAR_PICKUP)
+						end
 
 						task.spawn(function()
 							track.Stopped:Wait()
@@ -8418,7 +8621,9 @@ end
 
 								track.Looped = false
 								track:Play()
-
+								if canRequire then
+								SoundManager:playSound(GameSound.SNAP_TRAP_CONSUME_MARK)
+                                end
 								task.spawn(function()
 									track.Stopped:Wait()
 									anim:Destroy()
@@ -10070,37 +10275,7 @@ end
 			end
 		end
 	end)
-
-	camera.ChildAdded:Connect(function(child)
-		if string.find(string.lower(child.Name), "viewmodel") then
-
-			child.ChildAdded:Connect(function(item)
-				task.wait(0.05)
-				applySkin(child, item)
-			end)
-
-			for _, item in ipairs(child:GetChildren()) do
-				applySkin(child, item)
-			end
-		end
-	end)
-
-	viewmodel = camera:WaitForChild("Viewmodel")
-
-	viewmodel.ChildAdded:Connect(function(child)
-		task.wait(0.05)
-		applySkin(viewmodel, child)
-	end)
-
-	SwordSkinChanger.Callbacks.OnToggle = function(state)
-		loops["sword skin changer"] = state
-
-		if Player.Character then
-			for _, item in ipairs(Player.Character:GetChildren()) do
-				applySkin(Player.Character, item)
-			end
-		end
-	end
+ 
 
 
 	Player.CharacterAdded:Connect(function(character)
@@ -14254,4 +14429,2344 @@ Shaders.Callbacks.OnToggle = function(state)
 	loops["shaders"] = state
 	UpdateShaderUI()
 	ApplyShaders()
+end
+
+chams_gen = (chams_gen or 0) + 1
+if chams_active then
+	for chams_m, chams_hl in pairs(chams_active) do pcall(function() chams_hl:Destroy() end) end
+end
+chams_active = {}
+chams_lastFC = nil; chams_lastOC = nil; chams_lastFT = nil; chams_lastOT = nil
+
+chamsFolder = workspace:FindFirstChild("Chams_Highlights")
+if not chamsFolder then
+	chamsFolder = Instance.new("Folder")
+	chamsFolder.Name = "Chams_Highlights"
+	chamsFolder.Parent = workspace
+else
+	chamsFolder:ClearAllChildren()
+end
+
+Chams = Visuals:CreateButton("Chams", nil, true)
+Chams:CreateToggle("Target Players", true, nil)
+Chams:CreateToggle("Target NPCs/Dummies", false, nil)
+Chams:CreateColorPicker("Cham Color", Color3.fromRGB(140, 120, 255), nil)
+Chams:CreateColorPicker("Outline Color", Color3.fromRGB(255, 255, 255), nil)
+Chams:CreateSlider("Cham Transparency", 0, 1, 0.5, nil, 0.05)
+Chams:CreateSlider("Outline Transparency", 0, 1, 0, nil, 0.05)
+
+function chamsV(name, def)
+	chams_vv = Chams.Values[name]
+	if chams_vv == nil then return def end
+	return chams_vv
+end
+
+function chamsMake(model)
+	chams_ok, chams_hl = pcall(function()
+		chams_h = Instance.new("Highlight")
+		chams_h.Adornee = model
+		chams_h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		chams_h.FillColor = chamsV("Cham Color", Color3.fromRGB(140, 120, 255))
+		chams_h.OutlineColor = chamsV("Outline Color", Color3.fromRGB(255, 255, 255))
+		chams_h.FillTransparency = chamsV("Cham Transparency", 0.5)
+		chams_h.OutlineTransparency = chamsV("Outline Transparency", 0)
+		chams_h.Parent = chamsFolder
+		return chams_h
+	end)
+	if chams_ok and chams_hl then chams_active[model] = chams_hl end
+end
+
+function chamsReconcile()
+	chams_desired = {}
+
+	if Chams.Values["Target Players"] then
+		for _, chams_pl in pairs(Players:GetPlayers()) do
+			if chams_pl ~= Player then
+				chams_c = chams_pl.Character
+				if chams_c then
+					chams_hum = chams_c:FindFirstChildOfClass("Humanoid")
+					if chams_hum and chams_hum.Health > 0 then
+						chams_sameTeam = (chams_pl.Team ~= nil and Player.Team ~= nil and chams_pl.Team == Player.Team)
+						chams_isSpec = (chams_pl.Team ~= nil and tostring(chams_pl.Team.Name):lower():find("spectat") ~= nil)
+						if not chams_sameTeam and not chams_isSpec then
+							chams_desired[chams_c] = true
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if Chams.Values["Target NPCs/Dummies"] then
+		for _, chams_m in ipairs(EntityCache.npcs) do
+			if chams_m and chams_m.Parent then
+				chams_hum2 = chams_m:FindFirstChildOfClass("Humanoid")
+				if chams_hum2 and chams_hum2.Health > 0 then chams_desired[chams_m] = true end
+			end
+		end
+	end
+
+	for chams_m, chams_hl in pairs(chams_active) do
+		if not chams_desired[chams_m] or not chams_m.Parent then
+			pcall(function() chams_hl:Destroy() end)
+			chams_active[chams_m] = nil
+		end
+	end
+
+	for chams_m in pairs(chams_desired) do
+		chams_hl = chams_active[chams_m]
+		if not chams_hl or not chams_hl.Parent then chamsMake(chams_m) end
+	end
+
+	chams_fc = chamsV("Cham Color", Color3.fromRGB(140, 120, 255))
+	chams_oc = chamsV("Outline Color", Color3.fromRGB(255, 255, 255))
+	chams_ft = chamsV("Cham Transparency", 0.5)
+	chams_ot = chamsV("Outline Transparency", 0)
+	if chams_fc ~= chams_lastFC or chams_oc ~= chams_lastOC or chams_ft ~= chams_lastFT or chams_ot ~= chams_lastOT then
+		for _, chams_hl in pairs(chams_active) do
+			chams_hl.FillColor = chams_fc
+			chams_hl.OutlineColor = chams_oc
+			chams_hl.FillTransparency = chams_ft
+			chams_hl.OutlineTransparency = chams_ot
+		end
+		chams_lastFC = chams_fc; chams_lastOC = chams_oc; chams_lastFT = chams_ft; chams_lastOT = chams_ot
+	end
+end
+
+Chams.Callbacks.OnToggle = function(state)
+	loops["chams"] = state
+	if state then
+		startEntityCache()
+		chams_gen = chams_gen + 1
+		pcall(chamsReconcile)
+		task.spawn(function(g)
+			while loops["chams"] and chams_gen == g do
+				pcall(chamsReconcile)
+				task.wait(0.15)
+			end
+		end, chams_gen)
+	else
+		for chams_m, chams_hl in pairs(chams_active) do pcall(function() chams_hl:Destroy() end) end
+		chams_active = {}
+	end
+end
+
+
+
+if tr_renderConn then pcall(function() tr_renderConn:Disconnect() end) end
+tr_renderConn = nil
+if tr_gui then pcall(function() tr_gui:Destroy() end) end
+tr_pool = {}
+
+tr_gui = Instance.new("ScreenGui")
+tr_gui.Name = "Featherware_TracersGui"
+tr_gui.ResetOnSpawn = false
+tr_gui.IgnoreGuiInset = true
+tr_gui.DisplayOrder = 90
+tr_gui.Enabled = true
+tr_gui.Parent = PlayerGui
+
+Tracers = Visuals:CreateButton("Tracers", nil, true)
+Tracers:CreateToggle("Target Players", true, nil)
+Tracers:CreateToggle("Target NPCs/Dummies", false, nil)
+Tracers:CreateDropdown("Start Position", {"Mouse", "Bottom", "Middle"}, "Bottom", nil, false)
+Tracers:CreateDropdown("End Position", {"Head", "Torso"}, "Torso", nil, false)
+Tracers:CreateColorPicker("Tracer Color", Color3.fromRGB(255, 255, 255), nil)
+Tracers:CreateSlider("Tracer Transparency", 0, 1, 0, nil, 0.05)
+Tracers:CreateSlider("Tracer Thickness", 1, 6, 2, nil, 1)
+
+function trGetLine(trg_i)
+	if not tr_pool[trg_i] then
+		trg_f = Instance.new("Frame")
+		trg_f.BorderSizePixel = 0
+		trg_f.AnchorPoint = Vector2.new(0.5, 0.5)
+		trg_f.ZIndex = 1
+		trg_f.Visible = false
+		trg_f.Parent = tr_gui
+		tr_pool[trg_i] = trg_f
+	end
+	return tr_pool[trg_i]
+end
+
+function trIncludePlayer(trip_pl)
+	if trip_pl == Player then return false end
+	trip_c = trip_pl.Character
+	if not trip_c then return false end
+	trip_hum = trip_c:FindFirstChildOfClass("Humanoid")
+	if not trip_hum or trip_hum.Health <= 0 then return false end
+	trip_pt = trip_pl.Team; trip_mt = Player.Team
+	if trip_pt and trip_mt and trip_pt == trip_mt then return false end
+	if trip_pt and tostring(trip_pt.Name):lower():find("spectat") then return false end
+	return true
+end
+
+function trProcessTarget(trpt_model)
+	if not trpt_model then return end
+	trpt_part = nil
+	if trr_endMode == "Head" then trpt_part = trpt_model:FindFirstChild("Head") end
+	if not trpt_part then trpt_part = trpt_model:FindFirstChild("HumanoidRootPart") or trpt_model.PrimaryPart end
+	if not trpt_part then return end
+	trpt_hum = trpt_model:FindFirstChildOfClass("Humanoid")
+	if not trpt_hum or trpt_hum.Health <= 0 then return end
+	trpt_sp = trr_cam:WorldToViewportPoint(trpt_part.Position)
+	if trpt_sp.Z < 0 then return end
+	trpt_dx = trpt_sp.X - trr_start.X
+	trpt_dy = trpt_sp.Y - trr_start.Y
+	trpt_len = math.sqrt(trpt_dx * trpt_dx + trpt_dy * trpt_dy)
+	if trpt_len < 1 then return end
+	trr_used = trr_used + 1
+	trpt_line = trGetLine(trr_used)
+	trpt_line.Visible = true
+	trpt_line.BackgroundColor3 = trr_color
+	trpt_line.BackgroundTransparency = trr_transp
+	trpt_line.Position = UDim2.fromOffset((trr_start.X + trpt_sp.X) * 0.5, (trr_start.Y + trpt_sp.Y) * 0.5)
+	trpt_line.Size = UDim2.fromOffset(trpt_len, trr_thick)
+	trpt_line.Rotation = math.deg(math.atan2(trpt_dy, trpt_dx))
+end
+
+function trRender()
+	if not loops["tracers"] then return end
+	trr_cam = workspace.CurrentCamera
+	if not trr_cam then return end
+
+	trr_endMode = Tracers.Values["End Position"] or "Torso"
+	trr_color = Tracers.Values["Tracer Color"] or Color3.fromRGB(255, 255, 255)
+	trr_transp = Tracers.Values["Tracer Transparency"] or 0
+	trr_thick = Tracers.Values["Tracer Thickness"] or 2
+	trr_startMode = Tracers.Values["Start Position"] or "Bottom"
+	trr_vs = trr_cam.ViewportSize
+
+	if trr_startMode == "Mouse" then
+		trr_m = UserInputService:GetMouseLocation()
+		trr_start = Vector2.new(trr_m.X, trr_m.Y)
+	elseif trr_startMode == "Middle" then
+		trr_start = Vector2.new(trr_vs.X * 0.5, trr_vs.Y * 0.5)
+	else
+		trr_start = Vector2.new(trr_vs.X * 0.5, trr_vs.Y)
+	end
+
+	trr_used = 0
+
+	if Tracers.Values["Target Players"] then
+		for _, trr_pl in pairs(Players:GetPlayers()) do
+			if trIncludePlayer(trr_pl) then trProcessTarget(trr_pl.Character) end
+		end
+	end
+
+	if Tracers.Values["Target NPCs/Dummies"] then
+		for _, trr_npc in ipairs(EntityCache.npcs) do
+			if trr_npc and trr_npc.Parent then trProcessTarget(trr_npc) end
+		end
+	end
+
+	for trr_j = trr_used + 1, #tr_pool do
+		tr_pool[trr_j].Visible = false
+	end
+end
+
+Tracers.Callbacks.OnToggle = function(state)
+	loops["tracers"] = state
+	if state then
+		startEntityCache()
+		if not tr_renderConn then tr_renderConn = RunService.RenderStepped:Connect(trRender) end
+	else
+		if tr_renderConn then tr_renderConn:Disconnect(); tr_renderConn = nil end
+		for trg_k = 1, #tr_pool do tr_pool[trg_k].Visible = false end
+	end
+end
+
+function rsApply(on)
+	rs_L = game:GetService("Lighting")
+	if on then
+		rs_col = RichShader.Values["Main Color"] or Color3.fromRGB(210, 100, 80)
+		rs_L.Ambient = Color3.fromRGB(59, 33, 27)
+		rs_L.ColorShift_Bottom = rs_col
+		rs_L.ColorShift_Top = rs_col
+		rs_L.OutdoorAmbient = rs_col
+		rs_L.ExposureCompensation = 0.24
+		rs_L.ClockTime = 8.7
+		rs_L.TimeOfDay = "08:42:00"
+	else
+		rs_L.Ambient = Color3.fromRGB(89, 60, 86)
+		rs_L.ColorShift_Bottom = Color3.fromRGB(0, 0, 0)
+		rs_L.ColorShift_Top = Color3.fromRGB(117, 57, 57)
+		rs_L.OutdoorAmbient = Color3.fromRGB(216, 191, 161)
+		rs_L.ExposureCompensation = 0.1
+		rs_L.ClockTime = 14
+		rs_L.TimeOfDay = "14:00:00"
+	end
+end
+
+RichShader = Visuals:CreateButton("RichShader", nil, true)
+RichShader:CreateColorPicker("Main Color", Color3.fromRGB(210, 100, 80), function()
+	if loops["richshader"] then rsApply(true) end
+end)
+
+
+RichShader.Callbacks.OnToggle = function(state)
+	loops["richshader"] = state
+	rsApply(state)
+end
+
+metal_gen = (metal_gen or 0) + 1
+if metal_active then
+	for metal_m in pairs(metal_active) do
+		metal_e = metal_active[metal_m]
+		if metal_e then
+			if metal_e.hl then pcall(function() metal_e.hl:Destroy() end) end
+			if metal_e.bb then pcall(function() metal_e.bb:Destroy() end) end
+			if metal_e.part and metal_e.orig then
+				pcall(function()
+					metal_e.part.Transparency = metal_e.orig.transp
+					metal_e.part.Color = metal_e.orig.color
+					metal_e.part.Material = metal_e.orig.mat
+					metal_e.part.CastShadow = true
+				end)
+			end
+		end
+	end
+end
+
+metal_active = {}
+if metal_folder then pcall(function() metal_folder:Destroy() end) end
+metal_folder = nil
+
+if metal_conns then
+	for _, metal_c in ipairs(metal_conns) do pcall(function() metal_c:Disconnect() end) end
+end
+metal_conns = {}
+
+if metal_distConn then pcall(function() metal_distConn:Disconnect() end) end
+metal_distConn = nil
+
+metal_cs = game:GetService("CollectionService")
+metal_coregui = game:GetService("CoreGui")
+metal_ready = false
+
+function metalRemoveVisuals(model)
+	metal_e = metal_active[model]
+	if not metal_e then return end
+	if metal_e.hl then pcall(function() metal_e.hl:Destroy() end) end
+	if metal_e.bb then pcall(function() metal_e.bb:Destroy() end) end
+	if metal_e.part and metal_e.orig then
+		pcall(function()
+			metal_e.part.Transparency = metal_e.orig.transp
+			metal_e.part.Color = metal_e.orig.color
+			metal_e.part.Material = metal_e.orig.mat
+			metal_e.part.CastShadow = true
+		end)
+	end
+	metal_active[model] = nil
+end
+
+function metalApplyVisuals(model)
+	if not metal_folder then return end
+	if metal_active[model] then return end
+	metal_part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+	if not metal_part then return end
+
+	metal_entry = {part = metal_part}
+	metal_entry.orig = {transp = metal_part.Transparency, color = metal_part.Color, mat = metal_part.Material}
+
+	if MetalESP.Values["Show Part"] then
+		metal_part.Transparency = MetalESP.Values["Part Transparency"] or 0
+		metal_part.Color = MetalESP.Values["Part Color"] or Color3.fromRGB(255, 180, 50)
+		metal_part.Material = Enum.Material.Neon
+		metal_part.CastShadow = false
+	end
+
+	if MetalESP.Values["Show Highlight"] then
+		metal_hl = Instance.new("Highlight")
+		metal_hl.Adornee = model
+		metal_hl.FillColor = MetalESP.Values["Highlight Fill Color"] or Color3.fromRGB(255, 180, 50)
+		metal_hl.OutlineColor = MetalESP.Values["Highlight Outline Color"] or Color3.fromRGB(255, 255, 255)
+
+		metal_hl.FillTransparency = MetalESP.Values["Highlight Fill Transparency"]
+		if metal_hl.FillTransparency == nil then metal_hl.FillTransparency = 0.85 end
+
+		metal_hl.OutlineTransparency = MetalESP.Values["Highlight Outline Transparency"]
+		if metal_hl.OutlineTransparency == nil then metal_hl.OutlineTransparency = 0.1 end
+
+		metal_hl.DepthMode = (MetalESP.Values["Through Walls"] ~= false) and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+		metal_hl.Parent = metal_folder
+		metal_entry.hl = metal_hl
+	end
+
+	if MetalESP.Values["Show Distance"] then
+		metal_bb = Instance.new("BillboardGui")
+		metal_bb.Adornee = metal_part
+		metal_bb.Size = UDim2.fromOffset(100, 30)
+		metal_bb.StudsOffset = Vector3.new(0, 1.5, 0)
+		metal_bb.AlwaysOnTop = MetalESP.Values["Through Walls"] ~= false
+		metal_bb.Parent = metal_folder
+
+		metal_dl = Instance.new("TextLabel")
+		metal_dl.Size = UDim2.fromScale(1, 1)
+		metal_dl.BackgroundTransparency = 1
+		metal_dl.Text = ""
+		metal_dl.TextColor3 = MetalESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+		metal_dl.TextSize = MetalESP.Values["Text Size"] or 12
+		metal_dl.Font = Enum.Font.GothamBlack
+		metal_dl.TextStrokeTransparency = 0
+		metal_dl.TextStrokeColor3 = Color3.fromRGB(20, 20, 20)
+		metal_dl.Parent = metal_bb
+
+		metal_entry.bb = metal_bb
+		metal_entry.dl = metal_dl
+	end
+
+	metal_active[model] = metal_entry
+end
+
+function metalRebuildAll()
+	if not metal_ready then return end
+	for metal_m in pairs(metal_active) do metalRemoveVisuals(metal_m) end
+	metal_tagged = metal_cs:GetTagged("hidden-metal")
+	for _, metal_m in ipairs(metal_tagged) do
+		if metal_m.Parent and metal_m:IsA("Model") then
+			metalApplyVisuals(metal_m)
+		end
+	end
+end
+
+function metalApplyProps()
+	if not metal_ready then return end
+	metal_walls = MetalESP.Values["Through Walls"] ~= false
+	for _, metal_e in pairs(metal_active) do
+		if metal_e.hl then
+			metal_e.hl.FillColor = MetalESP.Values["Highlight Fill Color"] or Color3.fromRGB(255, 180, 50)
+			metal_e.hl.OutlineColor = MetalESP.Values["Highlight Outline Color"] or Color3.fromRGB(255, 255, 255)
+			metal_e.hl.FillTransparency = MetalESP.Values["Highlight Fill Transparency"] or 0.85
+			metal_e.hl.OutlineTransparency = MetalESP.Values["Highlight Outline Transparency"] or 0.1
+			metal_e.hl.DepthMode = metal_walls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+		end
+		if metal_e.part and metal_e.orig then
+			if MetalESP.Values["Show Part"] then
+				metal_e.part.Transparency = MetalESP.Values["Part Transparency"] or 0
+				metal_e.part.Color = MetalESP.Values["Part Color"] or Color3.fromRGB(255, 180, 50)
+				metal_e.part.Material = Enum.Material.Neon
+				metal_e.part.CastShadow = false
+			else
+				metal_e.part.Transparency = metal_e.orig.transp
+				metal_e.part.Color = metal_e.orig.color
+				metal_e.part.Material = metal_e.orig.mat
+				metal_e.part.CastShadow = true
+			end
+		end
+		if metal_e.dl then
+			metal_e.dl.TextColor3 = MetalESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+			metal_e.dl.TextSize = MetalESP.Values["Text Size"] or 12
+		end
+		if metal_e.bb then
+			metal_e.bb.AlwaysOnTop = metal_walls
+		end
+	end
+end
+
+function metalUpdateDistances()
+	if not loops["metal esp"] then return end
+
+	metal_char = game:GetService("Players").LocalPlayer.Character
+	if not metal_char then return end
+	metal_hrp = metal_char:FindFirstChild("HumanoidRootPart")
+	if not metal_hrp then return end
+	metal_pPos = metal_hrp.Position
+
+	for metal_m, metal_e in pairs(metal_active) do
+		if metal_e.part and metal_e.part.Parent then
+			if metal_e.dl then
+				metal_dist = (metal_e.part.Position - metal_pPos).Magnitude
+				metal_e.dl.Text = tostring(math.floor(metal_dist)) .. "m"
+			end
+		else
+			metalRemoveVisuals(metal_m)
+		end
+	end
+end
+
+MetalESP = Visuals:CreateButton("Metal ESP", nil, true)
+MetalESP:CreateToggle("Show Highlight", true, function() metalRebuildAll() end)
+MetalESP:CreateToggle("Show Part", true, function() metalRebuildAll() end)
+MetalESP:CreateToggle("Show Distance", true, function() metalRebuildAll() end)
+MetalESP:CreateToggle("Through Walls", true, function() metalApplyProps() end)
+
+MetalESP:CreateColorPicker("Highlight Fill Color", Color3.fromRGB(255, 255,255), function() metalApplyProps() end)
+MetalESP:CreateColorPicker("Highlight Outline Color", Color3.fromRGB(255, 255, 255), function() metalApplyProps() end)
+MetalESP:CreateColorPicker("Part Color", Color3.fromRGB(0, 0, 255), function() metalApplyProps() end)
+MetalESP:CreateColorPicker("Distance Text Color", Color3.fromRGB(255, 255, 255), function() metalApplyProps() end)
+MetalESP:CreateSlider("Highlight Fill Transparency", 0, 1, 0, function() metalApplyProps() end, 0.05)
+MetalESP:CreateSlider("Highlight Outline Transparency", 0, 1, 0, function() metalApplyProps() end, 0.05)
+MetalESP:CreateSlider("Part Transparency", 0, 1, 0, function() metalApplyProps() end, 0.05)
+MetalESP:CreateSlider("Text Size", 8, 24, 24, function() metalApplyProps() end, 1)
+
+metal_ready = true
+
+MetalESP.Callbacks.OnToggle = function(state)
+	loops["metal esp"] = state
+	if state then
+		if not metal_folder or not metal_folder.Parent then
+			metal_folder = Instance.new("Folder")
+			metal_folder.Name = "Featherware_MetalVisuals"
+			metal_folder.Parent = workspace
+		end
+
+		metalRebuildAll()
+
+		metal_conns = {}
+		table.insert(metal_conns, metal_cs:GetInstanceAddedSignal("hidden-metal"):Connect(function(metal_m)
+			if not loops["metal esp"] then return end
+			if metal_m:IsA("Model") and metal_m.Parent then
+				metalApplyVisuals(metal_m)
+			end
+		end))
+		table.insert(metal_conns, metal_cs:GetInstanceRemovedSignal("hidden-metal"):Connect(function(metal_m)
+			metalRemoveVisuals(metal_m)
+		end))
+
+		metal_lastDist = 0
+		metal_distConn = game:GetService("RunService").Heartbeat:Connect(function()
+			metal_now = os.clock()
+			if metal_now - metal_lastDist < 0.25 then return end
+			metal_lastDist = metal_now
+			pcall(metalUpdateDistances)
+		end)
+	else
+		for metal_m in pairs(metal_active) do metalRemoveVisuals(metal_m) end
+		if metal_conns then
+			for _, metal_c in ipairs(metal_conns) do pcall(function() metal_c:Disconnect() end) end
+		end
+		metal_conns = {}
+		if metal_distConn then pcall(function() metal_distConn:Disconnect() end) end
+		metal_distConn = nil
+		if metal_folder then pcall(function() metal_folder:Destroy() end); metal_folder = nil end
+	end
+end
+
+
+star_gen = (star_gen or 0) + 1
+if star_active then
+	for star_m in pairs(star_active) do
+		star_e = star_active[star_m]
+		if star_e then
+			if star_e.hl then pcall(function() star_e.hl:Destroy() end) end
+			if star_e.bb then pcall(function() star_e.bb:Destroy() end) end
+			if star_e.glow then pcall(function() star_e.glow:Destroy() end) end
+		end
+	end
+end
+star_active = {}
+star_allModels = {}
+if star_folder then pcall(function() star_folder:Destroy() end) end
+star_folder = nil
+if star_conns then
+	for _, star_c in ipairs(star_conns) do pcall(function() star_c:Disconnect() end) end
+end
+star_conns = {}
+if star_distConn then pcall(function() star_distConn:Disconnect() end) end
+star_distConn = nil
+star_ready = false
+
+function starColor(starType)
+	if starType == "VitalityStar" then
+		return StarESP.Values["Vitality Star Color"] or Color3.fromRGB(50, 255, 100)
+	end
+	return StarESP.Values["Crit Star Color"] or Color3.fromRGB(255, 80, 80)
+end
+
+function starRemoveVisuals(model)
+	star_e = star_active[model]
+	if not star_e then return end
+	if star_e.hl then pcall(function() star_e.hl:Destroy() end) end
+	if star_e.bb then pcall(function() star_e.bb:Destroy() end) end
+	if star_e.glow then pcall(function() star_e.glow:Destroy() end) end
+	star_active[model] = nil
+end
+
+function starApplyVisuals(model)
+	if not star_folder then return end
+	if star_active[model] then return end
+	star_part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+	if not star_part then return end
+
+	star_type = model.Name
+	if star_type == "VitalityStar" and StarESP.Values["Show Vitality Stars"] == false then return end
+	if star_type == "CritStar" and StarESP.Values["Show Crit Stars"] == false then return end
+
+	star_col = starColor(star_type)
+	star_entry = {part = star_part, starType = star_type}
+
+	if StarESP.Values["Show Highlight"] then
+		star_hl = Instance.new("Highlight")
+		star_hl.Adornee = model
+		star_hl.FillColor = star_col
+		star_hl.OutlineColor = StarESP.Values["Highlight Outline Color"] or Color3.fromRGB(255, 255, 255)
+		star_hl.FillTransparency = StarESP.Values["Highlight Fill Transparency"]
+		if star_hl.FillTransparency == nil then star_hl.FillTransparency = 0.85 end
+		star_hl.OutlineTransparency = StarESP.Values["Highlight Outline Transparency"]
+		if star_hl.OutlineTransparency == nil then star_hl.OutlineTransparency = 0.1 end
+		star_hl.DepthMode = (StarESP.Values["Through Walls"] ~= false) and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+		star_hl.Parent = star_folder
+		star_entry.hl = star_hl
+	end
+
+	if StarESP.Values["Show Distance"] or StarESP.Values["Show Star Type"] then
+		star_bb = Instance.new("BillboardGui")
+		star_bb.Adornee = star_part
+		star_bb.Size = UDim2.fromOffset(120, 30)
+		star_bb.StudsOffset = Vector3.new(0, 2, 0)
+		star_bb.AlwaysOnTop = StarESP.Values["Through Walls"] ~= false
+		star_bb.Parent = star_folder
+
+		star_dl = Instance.new("TextLabel")
+		star_dl.Size = UDim2.fromScale(1, 1)
+		star_dl.BackgroundTransparency = 1
+		star_dl.Text = ""
+		star_dl.TextColor3 = StarESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+		star_dl.TextSize = StarESP.Values["Text Size"] or 12
+		star_dl.Font = Enum.Font.GothamBlack
+		star_dl.TextStrokeTransparency = 0
+		star_dl.TextStrokeColor3 = Color3.fromRGB(20, 20, 20)
+		star_dl.Parent = star_bb
+
+		star_entry.bb = star_bb
+		star_entry.dl = star_dl
+	end
+
+	if StarESP.Values["Show Glow"] then
+		star_glow = Instance.new("PointLight")
+		star_glow.Color = star_col
+		star_glow.Range = StarESP.Values["Glow Range"] or 12
+		star_glow.Brightness = StarESP.Values["Glow Brightness"] or 2
+		star_glow.Parent = star_part
+		star_entry.glow = star_glow
+	end
+
+	star_active[model] = star_entry
+end
+
+function starRebuildVisuals()
+	if not star_ready then return end
+	for star_m in pairs(star_active) do starRemoveVisuals(star_m) end
+	for star_m in pairs(star_allModels) do
+		if star_m.Parent then
+			starApplyVisuals(star_m)
+		else
+			star_allModels[star_m] = nil
+		end
+	end
+end
+
+function starRebuildAll()
+	if not star_ready then return end
+	for star_m in pairs(star_active) do starRemoveVisuals(star_m) end
+	star_allModels = {}
+	for _, star_m in ipairs(workspace:GetDescendants()) do
+		if star_m:IsA("Model") and (star_m.Name == "VitalityStar" or star_m.Name == "CritStar") and star_m.Parent then
+			star_allModels[star_m] = true
+			starApplyVisuals(star_m)
+		end
+	end
+end
+
+function starApplyProps()
+	if not star_ready then return end
+	star_walls = StarESP.Values["Through Walls"] ~= false
+	for _, star_e in pairs(star_active) do
+		star_col = starColor(star_e.starType)
+		if star_e.hl then
+			star_e.hl.FillColor = star_col
+			star_e.hl.OutlineColor = StarESP.Values["Highlight Outline Color"] or Color3.fromRGB(255, 255, 255)
+			star_e.hl.FillTransparency = StarESP.Values["Highlight Fill Transparency"] or 0.85
+			star_e.hl.OutlineTransparency = StarESP.Values["Highlight Outline Transparency"] or 0.1
+			star_e.hl.DepthMode = star_walls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+		end
+		if star_e.dl then
+			star_e.dl.TextColor3 = StarESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+			star_e.dl.TextSize = StarESP.Values["Text Size"] or 12
+		end
+		if star_e.bb then
+			star_e.bb.AlwaysOnTop = star_walls
+		end
+		if star_e.glow then
+			star_e.glow.Color = star_col
+			star_e.glow.Range = StarESP.Values["Glow Range"] or 12
+			star_e.glow.Brightness = StarESP.Values["Glow Brightness"] or 2
+		end
+	end
+end
+
+function starUpdateDistances()
+	if not loops["star esp"] then return end
+	star_char = game:GetService("Players").LocalPlayer.Character
+	if not star_char then return end
+	star_hrp = star_char:FindFirstChild("HumanoidRootPart")
+	if not star_hrp then return end
+	star_pPos = star_hrp.Position
+
+	for star_m, star_e in pairs(star_active) do
+		if star_e.part and star_e.part.Parent then
+			if star_e.dl then
+				star_dist = (star_e.part.Position - star_pPos).Magnitude
+				star_text = ""
+				if StarESP.Values["Show Star Type"] then
+					star_text = (star_e.starType == "VitalityStar") and "Vitality" or "Crit"
+				end
+				if StarESP.Values["Show Distance"] then
+					if star_text ~= "" then star_text = star_text .. " • " end
+					star_text = star_text .. tostring(math.floor(star_dist)) .. "m"
+				end
+				star_e.dl.Text = star_text
+			end
+		else
+			starRemoveVisuals(star_m)
+			star_allModels[star_m] = nil
+		end
+	end
+end
+
+StarESP = Visuals:CreateButton("Star ESP", nil, true)
+StarESP:CreateToggle("Show Highlight", true, function() starRebuildVisuals() end)
+StarESP:CreateToggle("Show Distance", true, function() starRebuildVisuals() end)
+StarESP:CreateToggle("Show Star Type", true, function() starRebuildVisuals() end)
+StarESP:CreateToggle("Show Glow", false, function() starRebuildVisuals() end)
+StarESP:CreateToggle("Through Walls", true, function() starApplyProps() end)
+StarESP:CreateToggle("Show Vitality Stars", true, function() starRebuildVisuals() end)
+StarESP:CreateToggle("Show Crit Stars", true, function() starRebuildVisuals() end)
+StarESP:CreateColorPicker("Vitality Star Color", Color3.fromRGB(50, 255, 100), function() starApplyProps() end)
+StarESP:CreateColorPicker("Crit Star Color", Color3.fromRGB(255, 80, 80), function() starApplyProps() end)
+StarESP:CreateColorPicker("Highlight Outline Color", Color3.fromRGB(255, 255, 255), function() starApplyProps() end)
+StarESP:CreateColorPicker("Distance Text Color", Color3.fromRGB(255, 255, 255), function() starApplyProps() end)
+StarESP:CreateSlider("Highlight Fill Transparency", 0, 1, 0.85, function() starApplyProps() end, 0.05)
+StarESP:CreateSlider("Highlight Outline Transparency", 0, 1, 0.1, function() starApplyProps() end, 0.05)
+StarESP:CreateSlider("Text Size", 8, 24, 24, function() starApplyProps() end, 1)
+StarESP:CreateSlider("Glow Range", 5, 30, 12, function() starApplyProps() end, 1)
+StarESP:CreateSlider("Glow Brightness", 0.5, 5, 2, function() starApplyProps() end, 0.5)
+
+star_ready = true
+
+StarESP.Callbacks.OnToggle = function(state)
+	loops["star esp"] = state
+	if state then
+		if not star_folder or not star_folder.Parent then
+			star_folder = Instance.new("Folder")
+			star_folder.Name = "Featherware_StarVisuals"
+			star_folder.Parent = workspace
+		end
+
+		starRebuildAll()
+
+		star_conns = {}
+		table.insert(star_conns, workspace.DescendantAdded:Connect(function(star_child)
+			if not loops["star esp"] then return end
+			if star_child:IsA("Model") and (star_child.Name == "VitalityStar" or star_child.Name == "CritStar") and star_child.Parent then
+				star_allModels[star_child] = true
+				starApplyVisuals(star_child)
+			end
+		end))
+
+		star_lastDist = 0
+		star_distConn = game:GetService("RunService").Heartbeat:Connect(function()
+			star_now = os.clock()
+			if star_now - star_lastDist < 0.25 then return end
+			star_lastDist = star_now
+			pcall(starUpdateDistances)
+		end)
+	else
+		for star_m in pairs(star_active) do starRemoveVisuals(star_m) end
+		star_allModels = {}
+		if star_conns then
+			for _, star_c in ipairs(star_conns) do pcall(function() star_c:Disconnect() end) end
+		end
+		star_conns = {}
+		if star_distConn then pcall(function() star_distConn:Disconnect() end) end
+		star_distConn = nil
+		if star_folder then pcall(function() star_folder:Destroy() end); star_folder = nil end
+	end
+end
+
+bee_gen = (bee_gen or 0) + 1
+if bee_active then
+	for bee_m in pairs(bee_active) do
+		bee_e = bee_active[bee_m]
+		if bee_e then
+			if bee_e.hl then pcall(function() bee_e.hl:Destroy() end) end
+			if bee_e.bb then pcall(function() bee_e.bb:Destroy() end) end
+			if bee_e.glow then pcall(function() bee_e.glow:Destroy() end) end
+			if bee_e.line then pcall(function() bee_e.line:Destroy() end) end
+		end
+	end
+end
+bee_active = {}
+bee_allModels = {}
+if bee_folder then pcall(function() bee_folder:Destroy() end) end
+bee_folder = nil
+if bee_conns then
+	for _, bee_c in ipairs(bee_conns) do pcall(function() bee_c:Disconnect() end) end
+end
+bee_conns = {}
+if bee_distConn then pcall(function() bee_distConn:Disconnect() end) end
+bee_distConn = nil
+bee_cs = game:GetService("CollectionService")
+bee_ready = false
+
+function beeColor(isWild)
+	if isWild then
+		return BeeESP.Values["Bee Color"] or Color3.fromRGB(255, 200, 50)
+	end
+	return BeeESP.Values["Hive Bee Color"] or Color3.fromRGB(150, 255, 150)
+end
+
+function beeRemoveVisuals(model)
+	bee_e = bee_active[model]
+	if not bee_e then return end
+	if bee_e.hl then pcall(function() bee_e.hl:Destroy() end) end
+	if bee_e.bb then pcall(function() bee_e.bb:Destroy() end) end
+	if bee_e.glow then pcall(function() bee_e.glow:Destroy() end) end
+	if bee_e.line then pcall(function() bee_e.line:Destroy() end) end
+	bee_active[model] = nil
+end
+
+function beeApplyVisuals(model)
+	if not bee_folder then return end
+	if bee_active[model] then return end
+	bee_part = model.PrimaryPart or model:FindFirstChild("Root") or model:FindFirstChildWhichIsA("BasePart")
+	if not bee_part then return end
+
+	bee_maxDist = model:GetAttribute("MaxDistanceFromOrigin") or 6
+	bee_isWild = bee_maxDist > 3
+
+	if bee_isWild and BeeESP.Values["Show Bees"] == false then return end
+	if not bee_isWild and BeeESP.Values["Show Hive Bees"] == false then return end
+
+	bee_col = beeColor(bee_isWild)
+	bee_entry = {part = bee_part, isWild = bee_isWild}
+
+	if BeeESP.Values["Show Highlight"] then
+		bee_hl = Instance.new("Highlight")
+		bee_hl.Adornee = model
+		bee_hl.FillColor = bee_col
+		bee_hl.OutlineColor = BeeESP.Values["Highlight Outline Color"] or Color3.fromRGB(255, 255, 255)
+		bee_hl.FillTransparency = BeeESP.Values["Highlight Fill Transparency"]
+		if bee_hl.FillTransparency == nil then bee_hl.FillTransparency = 0.85 end
+		bee_hl.OutlineTransparency = BeeESP.Values["Highlight Outline Transparency"]
+		if bee_hl.OutlineTransparency == nil then bee_hl.OutlineTransparency = 0.1 end
+		bee_hl.DepthMode = (BeeESP.Values["Through Walls"] ~= false) and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+		bee_hl.Parent = bee_folder
+		bee_entry.hl = bee_hl
+	end
+
+	if BeeESP.Values["Show Distance"] or BeeESP.Values["Show Bee Id"] then
+		bee_bb = Instance.new("BillboardGui")
+		bee_bb.Adornee = bee_part
+		bee_bb.Size = UDim2.fromOffset(140, 30)
+		bee_bb.StudsOffset = Vector3.new(0, 1.5, 0)
+		bee_bb.AlwaysOnTop = BeeESP.Values["Through Walls"] ~= false
+		bee_bb.Parent = bee_folder
+
+		bee_dl = Instance.new("TextLabel")
+		bee_dl.Size = UDim2.fromScale(1, 1)
+		bee_dl.BackgroundTransparency = 1
+		bee_dl.Text = ""
+		bee_dl.TextColor3 = BeeESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+		bee_dl.TextSize = BeeESP.Values["Text Size"] or 12
+		bee_dl.Font = Enum.Font.GothamBlack
+		bee_dl.TextStrokeTransparency = 0
+		bee_dl.TextStrokeColor3 = Color3.fromRGB(20, 20, 20)
+		bee_dl.Parent = bee_bb
+
+		bee_entry.bb = bee_bb
+		bee_entry.dl = bee_dl
+	end
+
+	if BeeESP.Values["Show Glow"] then
+		bee_glow = Instance.new("PointLight")
+		bee_glow.Color = bee_col
+		bee_glow.Range = BeeESP.Values["Glow Range"] or 10
+		bee_glow.Brightness = BeeESP.Values["Glow Brightness"] or 2
+		bee_glow.Parent = bee_part
+		bee_entry.glow = bee_glow
+	end
+
+	if BeeESP.Values["Show Origin Line"] then
+		bee_line = Instance.new("Part")
+		bee_line.Anchored = true
+		bee_line.CanCollide = false
+		bee_line.CanQuery = false
+		bee_line.CanTouch = false
+		bee_line.CastShadow = false
+		bee_line.Material = Enum.Material.Neon
+		bee_line.Color = bee_col
+		bee_line.Transparency = 0.3
+		bee_line.Size = Vector3.new(0.1, 0.1, 1)
+		bee_line.Parent = bee_folder
+		bee_entry.line = bee_line
+	end
+
+	bee_active[model] = bee_entry
+end
+
+function beeRebuildVisuals()
+	if not bee_ready then return end
+	for bee_m in pairs(bee_active) do beeRemoveVisuals(bee_m) end
+	for bee_m in pairs(bee_allModels) do
+		if bee_m.Parent then
+			beeApplyVisuals(bee_m)
+		else
+			bee_allModels[bee_m] = nil
+		end
+	end
+end
+
+function beeRebuildAll()
+	if not bee_ready then return end
+	for bee_m in pairs(bee_active) do beeRemoveVisuals(bee_m) end
+	bee_allModels = {}
+	for _, bee_m in ipairs(bee_cs:GetTagged("bee")) do
+		if bee_m:IsA("Model") and bee_m.Parent then
+			bee_allModels[bee_m] = true
+			beeApplyVisuals(bee_m)
+		end
+	end
+end
+
+function beeApplyProps()
+	if not bee_ready then return end
+	bee_walls = BeeESP.Values["Through Walls"] ~= false
+	for _, bee_e in pairs(bee_active) do
+		bee_col = beeColor(bee_e.isWild)
+		if bee_e.hl then
+			bee_e.hl.FillColor = bee_col
+			bee_e.hl.OutlineColor = BeeESP.Values["Highlight Outline Color"] or Color3.fromRGB(255, 255, 255)
+			bee_e.hl.FillTransparency = BeeESP.Values["Highlight Fill Transparency"] or 0.85
+			bee_e.hl.OutlineTransparency = BeeESP.Values["Highlight Outline Transparency"] or 0.1
+			bee_e.hl.DepthMode = bee_walls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+		end
+		if bee_e.dl then
+			bee_e.dl.TextColor3 = BeeESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+			bee_e.dl.TextSize = BeeESP.Values["Text Size"] or 12
+		end
+		if bee_e.bb then
+			bee_e.bb.AlwaysOnTop = bee_walls
+		end
+		if bee_e.glow then
+			bee_e.glow.Color = bee_col
+			bee_e.glow.Range = BeeESP.Values["Glow Range"] or 10
+			bee_e.glow.Brightness = BeeESP.Values["Glow Brightness"] or 2
+		end
+		if bee_e.line then
+			bee_e.line.Color = bee_col
+		end
+	end
+end
+
+function beeUpdateDistances()
+	if not loops["bee esp"] then return end
+	bee_char = game:GetService("Players").LocalPlayer.Character
+	if not bee_char then return end
+	bee_hrp = bee_char:FindFirstChild("HumanoidRootPart")
+	if not bee_hrp then return end
+	bee_pPos = bee_hrp.Position
+
+	for bee_m, bee_e in pairs(bee_active) do
+		if bee_e.part and bee_e.part.Parent then
+			if bee_e.dl then
+				bee_dist = (bee_e.part.Position - bee_pPos).Magnitude
+				bee_text = ""
+				if BeeESP.Values["Show Bee Id"] then
+					bee_id = bee_m:GetAttribute("BeeId") or "?"
+					bee_text = "#" .. tostring(bee_id):sub(1, 4)
+				end
+				if BeeESP.Values["Show Distance"] then
+					if bee_text ~= "" then bee_text = bee_text .. " • " end
+					bee_text = bee_text .. tostring(math.floor(bee_dist)) .. "m"
+				end
+				if bee_text == "" then
+					bee_text = bee_e.isWild and "Wild" or "Hive"
+				end
+				bee_e.dl.Text = bee_text
+			end
+			if bee_e.line and bee_e.line.Parent then
+				bee_origin = bee_m:GetAttribute("BeeOrigin")
+				if bee_origin then
+					bee_beePos = bee_e.part.Position
+					bee_dir = bee_origin - bee_beePos
+					bee_len = bee_dir.Magnitude
+					if bee_len > 0.1 then
+						bee_mid = bee_beePos + bee_dir / 2
+						bee_e.line.Size = Vector3.new(0.1, 0.1, bee_len)
+						bee_e.line.CFrame = CFrame.new(bee_mid, bee_origin)
+					end
+				end
+			end
+		else
+			beeRemoveVisuals(bee_m)
+			bee_allModels[bee_m] = nil
+		end
+	end
+end
+
+BeeESP = Visuals:CreateButton("Bee ESP", nil, true)
+BeeESP:CreateToggle("Show Highlight", true, function() beeRebuildVisuals() end)
+BeeESP:CreateToggle("Show Distance", true, function() beeRebuildVisuals() end)
+BeeESP:CreateToggle("Show Bee Id", false, function() beeRebuildVisuals() end)
+BeeESP:CreateToggle("Show Bees", true, function() beeRebuildVisuals() end)
+BeeESP:CreateToggle("Show Hive Bees", false, function() beeRebuildVisuals() end)
+BeeESP:CreateToggle("Through Walls", true, function() beeApplyProps() end)
+BeeESP:CreateToggle("Show Glow", false, function() beeRebuildVisuals() end)
+BeeESP:CreateToggle("Show Origin Line", false, function() beeRebuildVisuals() end)
+BeeESP:CreateColorPicker("Bee Color", Color3.fromRGB(255, 200, 50), function() beeApplyProps() end)
+BeeESP:CreateColorPicker("Hive Bee Color", Color3.fromRGB(150, 255, 150), function() beeApplyProps() end)
+BeeESP:CreateColorPicker("Highlight Outline Color", Color3.fromRGB(255, 255, 255), function() beeApplyProps() end)
+BeeESP:CreateColorPicker("Distance Text Color", Color3.fromRGB(255, 255, 255), function() beeApplyProps() end)
+BeeESP:CreateSlider("Highlight Fill Transparency", 0, 1, 0.5, function() beeApplyProps() end, 0.05)
+BeeESP:CreateSlider("Highlight Outline Transparency", 0, 1, 0, function() beeApplyProps() end, 0.05)
+BeeESP:CreateSlider("Text Size", 8, 24, 24, function() beeApplyProps() end, 1)
+BeeESP:CreateSlider("Glow Range", 5, 30, 10, function() beeApplyProps() end, 1)
+BeeESP:CreateSlider("Glow Brightness", 0.5, 5, 2, function() beeApplyProps() end, 0.5)
+
+bee_ready = true
+
+BeeESP.Callbacks.OnToggle = function(state)
+	loops["bee esp"] = state
+	if state then
+		if not bee_folder or not bee_folder.Parent then
+			bee_folder = Instance.new("Folder")
+			bee_folder.Name = "Featherware_BeeVisuals"
+			bee_folder.Parent = workspace
+		end
+
+		beeRebuildAll()
+
+		bee_conns = {}
+		table.insert(bee_conns, bee_cs:GetInstanceAddedSignal("bee"):Connect(function(bee_child)
+			if not loops["bee esp"] then return end
+			if bee_child:IsA("Model") and bee_child.Parent then
+				bee_allModels[bee_child] = true
+				beeApplyVisuals(bee_child)
+			end
+		end))
+		table.insert(bee_conns, bee_cs:GetInstanceRemovedSignal("bee"):Connect(function(bee_child)
+			beeRemoveVisuals(bee_child)
+			bee_allModels[bee_child] = nil
+		end))
+
+		bee_lastDist = 0
+		bee_distConn = game:GetService("RunService").Heartbeat:Connect(function()
+			bee_now = os.clock()
+			if bee_now - bee_lastDist < 0.25 then return end
+			bee_lastDist = bee_now
+			pcall(beeUpdateDistances)
+		end)
+	else
+		for bee_m in pairs(bee_active) do beeRemoveVisuals(bee_m) end
+		bee_allModels = {}
+		if bee_conns then
+			for _, bee_c in ipairs(bee_conns) do pcall(function() bee_c:Disconnect() end) end
+		end
+		bee_conns = {}
+		if bee_distConn then pcall(function() bee_distConn:Disconnect() end) end
+		bee_distConn = nil
+		if bee_folder then pcall(function() bee_folder:Destroy() end); bee_folder = nil end
+	end
+end
+
+ab_gen = (ab_gen or 0) + 1
+if ab_loopConn then pcall(function() ab_loopConn:Disconnect() end) end
+ab_loopConn = nil
+if ab_conns then for _, ab_c in ipairs(ab_conns) do pcall(function() ab_c:Disconnect() end) end end
+ab_conns = {}
+ab_beeProc = {}
+ab_hiveProc = {}
+ab_hiveSet = {}
+ab_cs = game:GetService("CollectionService")
+ab_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+ab_diagInit = false
+ab_firePrinted = false
+ab_ownerPrinted = false
+
+ab_pickUpRemote = nil
+pcall(function()
+	ab_nm = ab_rs:WaitForChild("rbxts_include", 4):WaitForChild("node_modules", 4):WaitForChild("@rbxts", 4):WaitForChild("net", 4):WaitForChild("out", 4):WaitForChild("_NetManaged", 4)
+	ab_pickUpRemote = ab_nm:WaitForChild("PickUpBee", 4)
+end)
+
+ab_animUtil = nil
+ab_animType = nil
+pcall(function()
+	ab_animUtil = require(ab_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-util", 4)).GameAnimationUtil
+	ab_animType = require(ab_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-type", 4)).AnimationType
+end)
+
+AutoBee = Kits:CreateButton("Auto Bee", nil, true, true)
+AutoBee:CreateToggle("Collect Bees", true, nil)
+AutoBee:CreateSlider("Collect Range", 1, 18, 10, nil, 1)
+AutoBee:CreateSlider("Collect Hold Time", 0, 0.1, 0.1, nil, 0.01)
+AutoBee:CreateToggle("Require Net Held", true, nil)
+AutoBee:CreateToggle("Auto Deposit Bees", true, nil)
+AutoBee:CreateSlider("Deposit Range", 1, 20, 10, nil, 1)
+AutoBee:CreateSlider("Deposit Hold Time", 0, 0.5, 0.5, nil, 0.05)
+AutoBee:CreateToggle("Use Deposit Animation", true, nil)
+AutoBee:CreateToggle("Require Bee Held", true, nil)
+AutoBee:CreateSlider("Max Bees In Hive", 1, 20, 14, nil, 1)
+
+function abHeldName()
+	ab_c = Player.Character
+	if not ab_c then return nil end
+	ab_hi = ab_c:FindFirstChild("HandInvItem")
+	ab_hv = ab_hi and ab_hi.Value
+	if not ab_hv then return nil end
+	return (typeof(ab_hv) == "Instance") and ab_hv.Name or tostring(ab_hv)
+end
+
+-- the part to use for position + prompt lookup (works whether the hive is a Model OR a bare Part)
+function abHivePart(h)
+	if h:IsA("BasePart") then return h end
+	return h.PrimaryPart or h:FindFirstChildWhichIsA("BasePart")
+end
+
+function abIsHiveObj(o)
+	if not o then return false end
+	if not (o:IsA("BasePart") or o:IsA("Model")) then return false end
+	return o.Name:lower():find("beehive") ~= nil
+end
+
+function abHoldingBee(hive)
+	ab_pr = hive and hive:FindFirstChildOfClass("ProximityPrompt")
+	if ab_pr and ab_pr.Enabled then return true end
+	ab_n = abHeldName()
+	if ab_n then
+		ab_nl = ab_n:lower()
+		if ab_nl:find("bee") and not ab_nl:find("net") then return true end
+	end
+	return false
+end
+
+function abHiveIsMine(hive)
+	ab_uid = hive:GetAttribute("PlacedByUserId") or hive:GetAttribute("PlacedByUserID") or hive:GetAttribute("placedByUserId")
+	if ab_uid then
+		ab_uidn = tonumber(ab_uid)
+		if ab_uidn and ab_uidn == Player.UserId then return true end
+		ab_op = ab_uidn and Players:GetPlayerByUserId(ab_uidn) or nil
+		if ab_op == Player then return true end
+		if ab_op and ab_op.Team and Player.Team and ab_op.Team == Player.Team then return true end
+	end
+	return false
+end
+
+function abFirePickUp(beeId)
+	if ab_pickUpRemote then pcall(function() ab_pickUpRemote:FireServer({beeId = beeId}) end) end
+end
+
+function abFirePrompt(prompt)
+	if not prompt then return end
+	if type(fireproximityprompt) == "function" then
+		pcall(function() fireproximityprompt(prompt) end)
+	else
+		pcall(function() prompt:InputHoldBegin() end)
+		task.wait(prompt.HoldDuration or 0.2)
+		pcall(function() prompt:InputHoldEnd() end)
+	end
+end
+
+function abPlayCollectSound()
+	if SoundManager and GameSound and GameSound.BEE_NET_SWING then
+		pcall(function() SoundManager:playSound(GameSound.BEE_NET_SWING) end)
+	end
+end
+
+function abPlayDepositAnim()
+	if ab_animUtil and ab_animType and ab_animType.PUNCH then
+		pcall(function() ab_animUtil:playAnimation(Player, ab_animType.PUNCH) end)
+	end
+end
+
+ab_lastTick = 0
+function abLoop()
+	if not loops["auto bee"] then return end
+	ab_now = os.clock()
+	if ab_now - ab_lastTick < 0.2 then return end
+	ab_lastTick = ab_now
+	pcall(function()
+		ab_char = Player.Character
+		ab_hrp = ab_char and ab_char:FindFirstChild("HumanoidRootPart")
+		ab_hum = ab_char and ab_char:FindFirstChildOfClass("Humanoid")
+		if not ab_hrp or not ab_hum or ab_hum.Health <= 0 then return end
+
+		if AutoBee.Values["Collect Bees"] then
+			ab_colRange = AutoBee.Values["Collect Range"] or 8
+			ab_colHold = AutoBee.Values["Collect Hold Time"] or 0
+			ab_reqNet = AutoBee.Values["Require Net Held"]
+			for _, ab_bee in ipairs(ab_cs:GetTagged("bee")) do
+				if not (ab_beeProc[ab_bee] and ab_now - ab_beeProc[ab_bee] < 0.6) and ab_bee.Parent and (ab_bee:GetAttribute("MaxDistanceFromOrigin") or 6) > 3 then
+					ab_bp = ab_bee.PrimaryPart or ab_bee:FindFirstChild("Root") or ab_bee:FindFirstChildWhichIsA("BasePart")
+					if ab_bp and (ab_bp.Position - ab_hrp.Position).Magnitude <= ab_colRange then
+						ab_netHeldC = (abHeldName() == "bee_net")
+						if (not ab_reqNet) or ab_netHeldC then
+							ab_beeProc[ab_bee] = ab_now
+							ab_mygen = ab_gen
+							task.spawn(function()
+								task.wait(ab_colHold)
+								if ab_mygen == ab_gen and loops["auto bee"] and AutoBee.Values["Collect Bees"] and ab_bee.Parent then
+									ab_hrp3 = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+									ab_bp2 = ab_bee.PrimaryPart or ab_bee:FindFirstChild("Root") or ab_bee:FindFirstChildWhichIsA("BasePart")
+									ab_netHeldC2 = (abHeldName() == "bee_net")
+									ab_reqNet2 = AutoBee.Values["Require Net Held"]
+									if ab_hrp3 and ab_bp2 and (ab_bp2.Position - ab_hrp3.Position).Magnitude <= (AutoBee.Values["Collect Range"] or 8) and ((not ab_reqNet2) or ab_netHeldC2) then
+										ab_bid = ab_bee:GetAttribute("BeeId")
+										if ab_bid then
+											abFirePickUp(ab_bid)
+											if ab_netHeldC2 then abPlayCollectSound() end
+										end
+									end
+								end
+							end)
+						end
+					end
+				end
+			end
+		end
+
+		if AutoBee.Values["Auto Deposit Bees"] then
+			ab_maxBees = AutoBee.Values["Max Bees In Hive"] or 14
+			ab_depRange = AutoBee.Values["Deposit Range"] or 6
+			ab_depHold = AutoBee.Values["Deposit Hold Time"] or 0
+			ab_reqBee = AutoBee.Values["Require Bee Held"]
+			ab_anyHive = false
+			for ab_hive in pairs(ab_hiveSet) do
+				if not ab_hive.Parent then
+					ab_hiveSet[ab_hive] = nil
+				else
+					ab_anyHive = true
+					if not (ab_hiveProc[ab_hive] and ab_now - ab_hiveProc[ab_hive] < 0.6) then
+						if abHiveIsMine(ab_hive) then
+							if (ab_hive:GetAttribute("Level") or 0) < ab_maxBees then
+								ab_holdBee = (not ab_reqBee) or abHoldingBee(ab_hive)
+								if ab_holdBee then
+									ab_hp = abHivePart(ab_hive)
+									if ab_hp then
+										ab_dist = (ab_hp.Position - ab_hrp.Position).Magnitude
+										if ab_dist <= ab_depRange then
+											if not ab_firePrinted then
+												ab_firePrinted = true
+												ab_pr2 = ab_hive:FindFirstChildOfClass("ProximityPrompt")
+												print("[AutoBee] DEPOSIT attempt ->", ab_hive.Name, "| isPart:", ab_hive:IsA("BasePart"), "| prompt:", ab_pr2 ~= nil, "| enabled:", ab_pr2 and ab_pr2.Enabled, "| held:", tostring(abHeldName()), "| dist:", math.floor(ab_dist), "| level:", ab_hive:GetAttribute("Level"))
+											end
+											ab_hiveProc[ab_hive] = ab_now
+											ab_mygen2 = ab_gen
+											task.spawn(function()
+												task.wait(ab_depHold)
+												if ab_mygen2 == ab_gen and loops["auto bee"] and AutoBee.Values["Auto Deposit Bees"] and ab_hive.Parent and abHiveIsMine(ab_hive) then
+													ab_hrp2 = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+													ab_hp2 = abHivePart(ab_hive)
+													ab_holdBee2 = (not AutoBee.Values["Require Bee Held"]) or abHoldingBee(ab_hive)
+													if ab_hrp2 and ab_hp2 and (ab_hive:GetAttribute("Level") or 0) < (AutoBee.Values["Max Bees In Hive"] or 14) and ab_holdBee2 and (ab_hp2.Position - ab_hrp2.Position).Magnitude <= (AutoBee.Values["Deposit Range"] or 6) then
+														abFirePrompt(ab_hive:FindFirstChildOfClass("ProximityPrompt"))
+														if AutoBee.Values["Use Deposit Animation"] then abPlayDepositAnim() end
+													end
+												end
+											end)
+										end
+									end
+								end
+							end
+						elseif not ab_ownerPrinted then
+							ab_ownerPrinted = true
+							ab_u = ab_hive:GetAttribute("PlacedByUserId") or ab_hive:GetAttribute("PlacedByUserID")
+							print("[AutoBee] hive found but NOT owned by you -> owner uid attr:", tostring(ab_u), "| your uid:", Player.UserId, "| your team:", tostring(Player.Team))
+						end
+					end
+				end
+			end
+			if not ab_anyHive and not ab_diagInit then
+				ab_diagInit = true
+				print("[AutoBee] NO hives in tracked set yet (waiting on spawn signals)")
+			end
+		end
+	end)
+end
+
+AutoBee.Callbacks.OnToggle = function(state)
+	loops["auto bee"] = state
+	if state then
+		ab_beeProc = {}; ab_hiveProc = {}; ab_hiveSet = {}; ab_lastTick = 0
+		ab_diagInit = false; ab_firePrinted = false; ab_ownerPrinted = false
+		ab_tagCount = 0
+		for _, ab_h in ipairs(ab_cs:GetTagged("beehive")) do
+			if ab_h:IsA("Model") or ab_h:IsA("BasePart") then ab_hiveSet[ab_h] = true; ab_tagCount = ab_tagCount + 1 end
+		end
+		ab_nameCount = 0
+		pcall(function()
+			for _, ab_d in ipairs(workspace:GetDescendants()) do
+				if abIsHiveObj(ab_d) and not ab_hiveSet[ab_d] then
+					ab_hiveSet[ab_d] = true; ab_nameCount = ab_nameCount + 1
+				end
+			end
+		end)
+		print("[AutoBee] init hives -> via tag:", ab_tagCount, "| via name search:", ab_nameCount, "| total tracked:", (function() local n=0 for _ in pairs(ab_hiveSet) do n=n+1 end return n end)())
+
+		ab_conns = {}
+		table.insert(ab_conns, ab_cs:GetInstanceAddedSignal("beehive"):Connect(function(m)
+			if loops["auto bee"] and (m:IsA("Model") or m:IsA("BasePart")) then ab_hiveSet[m] = true end
+		end))
+		table.insert(ab_conns, ab_cs:GetInstanceRemovedSignal("beehive"):Connect(function(m)
+			ab_hiveSet[m] = nil; ab_hiveProc[m] = nil
+		end))
+		table.insert(ab_conns, workspace.DescendantAdded:Connect(function(d)
+			if loops["auto bee"] and abIsHiveObj(d) then ab_hiveSet[d] = true end
+		end))
+
+		if not ab_loopConn then ab_loopConn = game:GetService("RunService").Heartbeat:Connect(abLoop) end
+	else
+		if ab_loopConn then ab_loopConn:Disconnect(); ab_loopConn = nil end
+		if ab_conns then for _, ab_c in ipairs(ab_conns) do pcall(function() ab_c:Disconnect() end) end end
+		ab_conns = {}
+		ab_beeProc = {}; ab_hiveProc = {}; ab_hiveSet = {}
+	end
+end
+gompy_gen = (gompy_gen or 0) + 1
+if gompy_loopConn then pcall(function() gompy_loopConn:Disconnect() end) end
+gompy_loopConn = nil
+if gompy_conns then for _, gc in ipairs(gompy_conns) do pcall(function() gc:Disconnect() end) end end
+gompy_conns = {}
+gompy_esp_set = {}
+gompy_esp_data = {}
+gompy_cs = game:GetService("CollectionService")
+
+GompyESP = Visuals:CreateButton("Gompy ESP", nil, true)
+GompyESP:CreateToggle("Show Highlight", true, nil)
+GompyESP:CreateToggle("Show Distance", true, nil)
+GompyESP:CreateToggle("Show Glow", false, nil)
+GompyESP:CreateColorPicker("Ghost Color", Color3.fromRGB(180, 120, 255), nil)
+GompyESP:CreateSlider("Part Transparency", 0, 1, 0.3, nil, 0.05)
+GompyESP:CreateColorPicker("Distance Text Color", Color3.fromRGB(255, 255, 255), nil)
+GompyESP:CreateSlider("Text Size", 8, 24, 24, nil, 1)
+GompyESP:CreateSlider("Glow Range", 5, 30, 10, nil, 1)
+GompyESP:CreateSlider("Glow Brightness", 0.5, 5, 2, nil, 0.5)
+
+function gompyGetPos(g)
+	if g:IsA("BasePart") then return g.Position end
+	if g:IsA("Model") then
+		gompy_pp = g.PrimaryPart or g:FindFirstChildWhichIsA("BasePart")
+		if gompy_pp then return gompy_pp.Position end
+		pcall(function() return g:GetPivot().Position end)
+	end
+	return nil
+end
+
+function gompyIsGhostObj(o)
+	if not o then return false end
+	if not (o:IsA("BasePart") or o:IsA("Model")) then return false end
+	return o.Name:lower():find("ghost") ~= nil
+end
+
+function gompyColorParts(g, col, transp)
+	gompy_orig = {}
+	for _, gp in ipairs(g:GetDescendants()) do
+		if gp:IsA("BasePart") then
+			table.insert(gompy_orig, {part = gp, color = gp.Color, transp = gp.Transparency, mat = gp.Material})
+			gp.Color = col
+			gp.Transparency = transp
+			gp.Material = Enum.Material.Neon
+		end
+	end
+	return gompy_orig
+end
+
+function gompyRestoreParts(orig)
+	if not orig then return end
+	for _, op in ipairs(orig) do
+		pcall(function()
+			op.part.Color = op.color
+			op.part.Transparency = op.transp
+			op.part.Material = op.mat
+		end)
+	end
+end
+
+function gompyUpdatePartColors(orig, col, transp)
+	if not orig then return end
+	for _, op in ipairs(orig) do
+		pcall(function()
+			op.part.Color = col
+			op.part.Transparency = transp
+			op.part.Material = Enum.Material.Neon
+		end)
+	end
+end
+
+function gompyCleanupEntry(g)
+	gompy_d = gompy_esp_data[g]
+	if not gompy_d then return end
+	if gompy_d.origParts then gompyRestoreParts(gompy_d.origParts) end
+	if gompy_d.bb then pcall(function() gompy_d.bb:Destroy() end) end
+	if gompy_d.glow then pcall(function() gompy_d.glow:Destroy() end) end
+	gompy_esp_data[g] = nil
+end
+
+gompy_lastTick = 0
+function gompyEspLoop()
+	if not loops["gompy esp"] then return end
+	gompy_now = os.clock()
+	if gompy_now - gompy_lastTick < 0.2 then return end
+	gompy_lastTick = gompy_now
+	pcall(function()
+		gompy_char = Player.Character
+		gompy_hrp = gompy_char and gompy_char:FindFirstChild("HumanoidRootPart")
+		if not gompy_hrp then return end
+
+		gompy_col = GompyESP.Values["Ghost Color"] or Color3.fromRGB(180, 120, 255)
+		gompy_partTransp = GompyESP.Values["Part Transparency"] or 0.3
+		gompy_showHL = GompyESP.Values["Show Highlight"]
+		gompy_showDist = GompyESP.Values["Show Distance"]
+		gompy_showGlow = GompyESP.Values["Show Glow"]
+
+		for gompy_g in pairs(gompy_esp_set) do
+			if not gompy_g.Parent then
+				gompyCleanupEntry(gompy_g)
+				gompy_esp_set[gompy_g] = nil
+			else
+				gompy_pos = gompyGetPos(gompy_g)
+				if gompy_pos then
+					gompy_dist = (gompy_pos - gompy_hrp.Position).Magnitude
+
+					if not gompy_esp_data[gompy_g] then
+						gompy_entry = {}
+
+						if gompy_showHL then
+							gompy_entry.origParts = gompyColorParts(gompy_g, gompy_col, gompy_partTransp)
+						end
+
+						if gompy_showDist then
+							gompy_bb = Instance.new("BillboardGui")
+							gompy_bb.Adornee = gompy_g:IsA("BasePart") and gompy_g or (gompy_g.PrimaryPart or gompy_g:FindFirstChildWhichIsA("BasePart"))
+							gompy_bb.Size = UDim2.fromOffset(120, 30)
+							gompy_bb.StudsOffset = Vector3.new(0, 2, 0)
+							gompy_bb.AlwaysOnTop = true
+							gompy_bb.Parent = workspace
+							gompy_dl = Instance.new("TextLabel")
+							gompy_dl.Size = UDim2.fromScale(1, 1)
+							gompy_dl.BackgroundTransparency = 1
+							gompy_dl.Text = "Ghost • " .. tostring(math.floor(gompy_dist)) .. "m"
+							gompy_dl.TextColor3 = GompyESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+							gompy_dl.TextSize = GompyESP.Values["Text Size"] or 12
+							gompy_dl.Font = Enum.Font.GothamBlack
+							gompy_dl.TextStrokeTransparency = 0
+							gompy_dl.TextStrokeColor3 = Color3.fromRGB(20, 20, 20)
+							gompy_dl.Parent = gompy_bb
+							gompy_entry.bb = gompy_bb
+							gompy_entry.dl = gompy_dl
+						end
+
+						if gompy_showGlow then
+							gompy_glowPart = gompy_g:IsA("BasePart") and gompy_g or (gompy_g.PrimaryPart or gompy_g:FindFirstChildWhichIsA("BasePart"))
+							if gompy_glowPart then
+								gompy_glow = Instance.new("PointLight")
+								gompy_glow.Color = gompy_col
+								gompy_glow.Range = GompyESP.Values["Glow Range"] or 10
+								gompy_glow.Brightness = GompyESP.Values["Glow Brightness"] or 2
+								gompy_glow.Parent = gompy_glowPart
+								gompy_entry.glow = gompy_glow
+							end
+						end
+
+						gompy_esp_data[gompy_g] = gompy_entry
+					else
+						gompy_entry = gompy_esp_data[gompy_g]
+
+						if gompy_showHL and gompy_entry.origParts then
+							gompyUpdatePartColors(gompy_entry.origParts, gompy_col, gompy_partTransp)
+						elseif not gompy_showHL and gompy_entry.origParts then
+							gompyRestoreParts(gompy_entry.origParts)
+							gompy_entry.origParts = nil
+						elseif gompy_showHL and not gompy_entry.origParts then
+							gompy_entry.origParts = gompyColorParts(gompy_g, gompy_col, gompy_partTransp)
+						end
+
+						if gompy_entry.dl then
+							gompy_entry.dl.Text = "Ghost • " .. tostring(math.floor(gompy_dist)) .. "m"
+							gompy_entry.dl.TextColor3 = GompyESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+							gompy_entry.dl.TextSize = GompyESP.Values["Text Size"] or 12
+						end
+
+						if gompy_showGlow and not gompy_entry.glow then
+							gompy_glowPart = gompy_g:IsA("BasePart") and gompy_g or (gompy_g.PrimaryPart or gompy_g:FindFirstChildWhichIsA("BasePart"))
+							if gompy_glowPart then
+								gompy_glow = Instance.new("PointLight")
+								gompy_glow.Color = gompy_col
+								gompy_glow.Range = GompyESP.Values["Glow Range"] or 10
+								gompy_glow.Brightness = GompyESP.Values["Glow Brightness"] or 2
+								gompy_glow.Parent = gompy_glowPart
+								gompy_entry.glow = gompy_glow
+							end
+						elseif not gompy_showGlow and gompy_entry.glow then
+							pcall(function() gompy_entry.glow:Destroy() end)
+							gompy_entry.glow = nil
+						elseif gompy_entry.glow then
+							gompy_entry.glow.Color = gompy_col
+							gompy_entry.glow.Range = GompyESP.Values["Glow Range"] or 10
+							gompy_entry.glow.Brightness = GompyESP.Values["Glow Brightness"] or 2
+						end
+
+						if not gompy_showDist and gompy_entry.bb then
+							pcall(function() gompy_entry.bb:Destroy() end)
+							gompy_entry.bb = nil
+							gompy_entry.dl = nil
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
+GompyESP.Callbacks.OnToggle = function(state)
+	loops["gompy esp"] = state
+	if state then
+		gompy_esp_set = {}
+		gompy_esp_data = {}
+		gompy_tagCount = 0
+		for _, gg in ipairs(gompy_cs:GetTagged("ghost")) do
+			if gg:IsA("Model") or gg:IsA("BasePart") then gompy_esp_set[gg] = true; gompy_tagCount = gompy_tagCount + 1 end
+		end
+		gompy_nameCount = 0
+		pcall(function()
+			for _, gd in ipairs(workspace:GetDescendants()) do
+				if gompyIsGhostObj(gd) and not gompy_esp_set[gd] then gompy_esp_set[gd] = true; gompy_nameCount = gompy_nameCount + 1 end
+			end
+		end)
+		print("[Gompy ESP] init -> via tag:", gompy_tagCount, "| via name:", gompy_nameCount)
+
+		gompy_conns = {}
+		table.insert(gompy_conns, gompy_cs:GetInstanceAddedSignal("ghost"):Connect(function(m)
+			if loops["gompy esp"] and (m:IsA("Model") or m:IsA("BasePart")) then gompy_esp_set[m] = true end
+		end))
+		table.insert(gompy_conns, gompy_cs:GetInstanceRemovedSignal("ghost"):Connect(function(m)
+			gompyCleanupEntry(m)
+			gompy_esp_set[m] = nil
+		end))
+		table.insert(gompy_conns, workspace.DescendantAdded:Connect(function(d)
+			if loops["gompy esp"] and gompyIsGhostObj(d) then gompy_esp_set[d] = true end
+		end))
+
+		if not gompy_loopConn then gompy_loopConn = game:GetService("RunService").Heartbeat:Connect(gompyEspLoop) end
+	else
+		if gompy_loopConn then gompy_loopConn:Disconnect(); gompy_loopConn = nil end
+		if gompy_conns then for _, gc in ipairs(gompy_conns) do pcall(function() gc:Disconnect() end) end end
+		gompy_conns = {}
+		for gompy_g in pairs(gompy_esp_data) do gompyCleanupEntry(gompy_g) end
+		gompy_esp_set = {}
+		gompy_esp_data = {}
+	end
+end
+
+sheep_gen = (sheep_gen or 0) + 1
+if sheep_loopConn then pcall(function() sheep_loopConn:Disconnect() end) end
+sheep_loopConn = nil
+if sheep_autoConn then pcall(function() sheep_autoConn:Disconnect() end) end
+sheep_autoConn = nil
+if sheep_conns then for _, sc in ipairs(sheep_conns) do pcall(function() sc:Disconnect() end) end end
+sheep_conns = {}
+sheep_esp_set = {}
+sheep_esp_data = {}
+sheep_cs = game:GetService("CollectionService")
+sheep_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+sheep_auto_active = false
+sheep_collected = 0
+sheep_last_tame = 0
+sheep_walking = false
+sheep_autoPrinted = false
+
+sheep_remotes = nil
+pcall(function()
+	sheep_remotes = require(sheep_rs:WaitForChild("TS", 4):WaitForChild("remotes", 4)).default
+end)
+
+sheep_stateEnum = nil
+pcall(function()
+	sheep_stateEnum = require(sheep_rs:WaitForChild("TS", 4):WaitForChild("games", 4):WaitForChild("bedwars", 4):WaitForChild("kit", 4):WaitForChild("kits", 4):WaitForChild("sheep-herder", 4):WaitForChild("sheep-state", 4)).SheepState
+end)
+
+sheep_animUtil = nil
+sheep_animType = nil
+pcall(function()
+	sheep_animUtil = require(sheep_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-util", 4)).GameAnimationUtil
+	sheep_animType = require(sheep_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-type", 4)).AnimationType
+end)
+
+SheepESP = Visuals:CreateButton("Sheep ESP", nil, true)
+SheepESP:CreateToggle("Show Highlight", true, nil)
+SheepESP:CreateToggle("Show Distance", true, nil)
+SheepESP:CreateToggle("Show State", true, nil)
+SheepESP:CreateToggle("Only My Sheep", true, nil)
+SheepESP:CreateToggle("Show Glow", false, nil)
+SheepESP:CreateColorPicker("Idle Sheep Color", Color3.fromRGB(80, 255, 120), nil)
+SheepESP:CreateColorPicker("Tamed Sheep Color", Color3.fromRGB(100, 160, 255), nil)
+SheepESP:CreateSlider("Part Transparency", 0, 1, 0.3, nil, 0.05)
+SheepESP:CreateColorPicker("Distance Text Color", Color3.fromRGB(255, 255, 255), nil)
+SheepESP:CreateSlider("Text Size", 8, 24, 12, nil, 1)
+SheepESP:CreateSlider("Glow Range", 5, 30, 10, nil, 1)
+SheepESP:CreateSlider("Glow Brightness", 0.5, 5, 2, nil, 0.5)
+
+function sheepGetData(model)
+	if not model then return nil end
+	sheep_dv = model:FindFirstChild("SheepData")
+	if sheep_dv and sheep_dv:IsA("ObjectValue") then return sheep_dv.Value end
+	return nil
+end
+
+function sheepIsIdle(data)
+	if not data then return false end
+	sheep_st = data:GetAttribute("SheepState")
+	if sheep_stateEnum then return sheep_st == sheep_stateEnum.IDLE end
+	return sheep_st == 0 or sheep_st == "IDLE"
+end
+
+function sheepIsTamed(data)
+	if not data then return false end
+	sheep_st = data:GetAttribute("SheepState")
+	if sheep_stateEnum then return sheep_st == sheep_stateEnum.TAMED end
+	return sheep_st == 1 or sheep_st == "TAMED"
+end
+
+function sheepIsMine(data)
+	if not data then return false end
+	return data:GetAttribute("SheepOwnerUserId") == Player.UserId
+end
+
+function sheepGetPos(model)
+	if model:IsA("BasePart") then return model.Position end
+	if model:IsA("Model") then
+		sheep_pp = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+		if sheep_pp then return sheep_pp.Position end
+		pcall(function() return model:GetPivot().Position end)
+	end
+	return nil
+end
+
+function sheepColorParts(model, col, transp)
+	sheep_orig = {}
+	for _, sp in ipairs(model:GetDescendants()) do
+		if sp:IsA("BasePart") then
+			table.insert(sheep_orig, {part = sp, color = sp.Color, transp = sp.Transparency, mat = sp.Material})
+			sp.Color = col
+			sp.Transparency = transp
+			sp.Material = Enum.Material.Neon
+		end
+	end
+	return sheep_orig
+end
+
+function sheepRestoreParts(orig)
+	if not orig then return end
+	for _, op in ipairs(orig) do
+		pcall(function()
+			op.part.Color = op.color
+			op.part.Transparency = op.transp
+			op.part.Material = op.mat
+		end)
+	end
+end
+
+function sheepUpdatePartColors(orig, col, transp)
+	if not orig then return end
+	for _, op in ipairs(orig) do
+		pcall(function()
+			op.part.Color = col
+			op.part.Transparency = transp
+			op.part.Material = Enum.Material.Neon
+		end)
+	end
+end
+
+function sheepCleanupEntry(model)
+	sheep_d = sheep_esp_data[model]
+	if not sheep_d then return end
+	if sheep_d.origParts then sheepRestoreParts(sheep_d.origParts) end
+	if sheep_d.bb then pcall(function() sheep_d.bb:Destroy() end) end
+	if sheep_d.glow then pcall(function() sheep_d.glow:Destroy() end) end
+	sheep_esp_data[model] = nil
+end
+
+function sheepFireTame(data)
+	if not data or not sheep_remotes then return end
+	pcall(function()
+		sheep_ns = sheep_remotes.Client:GetNamespace("SheepHerder")
+		sheep_ns:Get("TameSheep"):SendToServer(data)
+	end)
+end
+
+function sheepPlayTameAnim()
+	if sheep_animUtil and sheep_animType and sheep_animType.TAME_SHEEP then
+		pcall(function() sheep_animUtil:playAnimation(Player, sheep_animType.TAME_SHEEP) end)
+	end
+end
+
+function sheepPlayTameSound()
+	if SoundManager and GameSound then
+		pcall(function()
+			sheep_snd = GameSound.SHEEP_TAME_1 or GameSound.SHEEP_TAME_2 or GameSound.SHEEP_TAME_3
+			if sheep_snd then SoundManager:playSound(sheep_snd) end
+		end)
+	end
+end
+
+function sheepFindNearestIdle(range)
+	sheep_char = Player.Character
+	sheep_hrp = sheep_char and sheep_char:FindFirstChild("HumanoidRootPart")
+	if not sheep_hrp then return nil, nil end
+	sheep_best = nil
+	sheep_bestData = nil
+	sheep_bestDist = range
+	for sheep_m in pairs(sheep_esp_set) do
+		if sheep_m.Parent then
+			sheep_data = sheepGetData(sheep_m)
+			if sheep_data and sheepIsIdle(sheep_data) and sheepIsMine(sheep_data) then
+				sheep_pos = sheepGetPos(sheep_m)
+				if sheep_pos then
+					sheep_d = (sheep_pos - sheep_hrp.Position).Magnitude
+					if sheep_d <= sheep_bestDist then
+						sheep_bestDist = sheep_d
+						sheep_best = sheep_m
+						sheep_bestData = sheep_data
+					end
+				end
+			end
+		else
+			sheep_esp_set[sheep_m] = nil
+		end
+	end
+	return sheep_best, sheep_bestData
+end
+
+sheep_lastTick = 0
+function sheepEspLoop()
+	if not loops["sheep esp"] then return end
+	sheep_now = os.clock()
+	if sheep_now - sheep_lastTick < 0.2 then return end
+	sheep_lastTick = sheep_now
+	pcall(function()
+		sheep_char = Player.Character
+		sheep_hrp = sheep_char and sheep_char:FindFirstChild("HumanoidRootPart")
+		if not sheep_hrp then return end
+
+		sheep_onlyMine = SheepESP.Values["Only My Sheep"]
+		sheep_showHL = SheepESP.Values["Show Highlight"]
+		sheep_showDist = SheepESP.Values["Show Distance"]
+		sheep_showState = SheepESP.Values["Show State"]
+		sheep_showGlow = SheepESP.Values["Show Glow"]
+		sheep_idleCol = SheepESP.Values["Idle Sheep Color"] or Color3.fromRGB(80, 255, 120)
+		sheep_tamedCol = SheepESP.Values["Tamed Sheep Color"] or Color3.fromRGB(100, 160, 255)
+		sheep_partTransp = SheepESP.Values["Part Transparency"] or 0.3
+
+		for sheep_m in pairs(sheep_esp_set) do
+			if not sheep_m.Parent then
+				sheepCleanupEntry(sheep_m)
+				sheep_esp_set[sheep_m] = nil
+			else
+				sheep_data = sheepGetData(sheep_m)
+				if sheep_data then
+					sheep_mine = sheepIsMine(sheep_data)
+					if sheep_onlyMine and not sheep_mine then
+						if sheep_esp_data[sheep_m] then sheepCleanupEntry(sheep_m) end
+					else
+						sheep_pos = sheepGetPos(sheep_m)
+						if sheep_pos then
+							sheep_dist = (sheep_pos - sheep_hrp.Position).Magnitude
+							sheep_idle = sheepIsIdle(sheep_data)
+							sheep_col = sheep_idle and sheep_idleCol or sheep_tamedCol
+
+							if not sheep_esp_data[sheep_m] then
+								sheep_entry = {}
+								if sheep_showHL then
+									sheep_entry.origParts = sheepColorParts(sheep_m, sheep_col, sheep_partTransp)
+								end
+								if sheep_showDist or sheep_showState then
+									sheep_bb = Instance.new("BillboardGui")
+									sheep_bb.Adornee = sheep_m:IsA("BasePart") and sheep_m or (sheep_m.PrimaryPart or sheep_m:FindFirstChildWhichIsA("BasePart"))
+									sheep_bb.Size = UDim2.fromOffset(140, 30)
+									sheep_bb.StudsOffset = Vector3.new(0, 2, 0)
+									sheep_bb.AlwaysOnTop = true
+									sheep_bb.Parent = workspace
+									sheep_dl = Instance.new("TextLabel")
+									sheep_dl.Size = UDim2.fromScale(1, 1)
+									sheep_dl.BackgroundTransparency = 1
+									sheep_dl.Text = ""
+									sheep_dl.TextColor3 = SheepESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+									sheep_dl.TextSize = SheepESP.Values["Text Size"] or 12
+									sheep_dl.Font = Enum.Font.GothamBlack
+									sheep_dl.TextStrokeTransparency = 0
+									sheep_dl.TextStrokeColor3 = Color3.fromRGB(20, 20, 20)
+									sheep_dl.Parent = sheep_bb
+									sheep_entry.bb = sheep_bb
+									sheep_entry.dl = sheep_dl
+								end
+								if sheep_showGlow then
+									sheep_glowPart = sheep_m:IsA("BasePart") and sheep_m or (sheep_m.PrimaryPart or sheep_m:FindFirstChildWhichIsA("BasePart"))
+									if sheep_glowPart then
+										sheep_glow = Instance.new("PointLight")
+										sheep_glow.Color = sheep_col
+										sheep_glow.Range = SheepESP.Values["Glow Range"] or 10
+										sheep_glow.Brightness = SheepESP.Values["Glow Brightness"] or 2
+										sheep_glow.Parent = sheep_glowPart
+										sheep_entry.glow = sheep_glow
+									end
+								end
+								sheep_esp_data[sheep_m] = sheep_entry
+							else
+								sheep_entry = sheep_esp_data[sheep_m]
+								if sheep_showHL and sheep_entry.origParts then
+									sheepUpdatePartColors(sheep_entry.origParts, sheep_col, sheep_partTransp)
+								elseif not sheep_showHL and sheep_entry.origParts then
+									sheepRestoreParts(sheep_entry.origParts)
+									sheep_entry.origParts = nil
+								elseif sheep_showHL and not sheep_entry.origParts then
+									sheep_entry.origParts = sheepColorParts(sheep_m, sheep_col, sheep_partTransp)
+								end
+								if sheep_entry.dl then
+									sheep_label = ""
+									if sheep_showState then
+										sheep_label = sheep_idle and "IDLE" or "TAMED"
+									end
+									if sheep_showDist then
+										if sheep_label ~= "" then sheep_label = sheep_label .. " • " end
+										sheep_label = sheep_label .. tostring(math.floor(sheep_dist)) .. "m"
+									end
+									sheep_entry.dl.Text = sheep_label
+									sheep_entry.dl.TextColor3 = SheepESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+									sheep_entry.dl.TextSize = SheepESP.Values["Text Size"] or 12
+								end
+								if sheep_showGlow and not sheep_entry.glow then
+									sheep_glowPart = sheep_m:IsA("BasePart") and sheep_m or (sheep_m.PrimaryPart or sheep_m:FindFirstChildWhichIsA("BasePart"))
+									if sheep_glowPart then
+										sheep_glow = Instance.new("PointLight")
+										sheep_glow.Color = sheep_col
+										sheep_glow.Range = SheepESP.Values["Glow Range"] or 10
+										sheep_glow.Brightness = SheepESP.Values["Glow Brightness"] or 2
+										sheep_glow.Parent = sheep_glowPart
+										sheep_entry.glow = sheep_glow
+									end
+								elseif not sheep_showGlow and sheep_entry.glow then
+									pcall(function() sheep_entry.glow:Destroy() end)
+									sheep_entry.glow = nil
+								elseif sheep_entry.glow then
+									sheep_entry.glow.Color = sheep_col
+									sheep_entry.glow.Range = SheepESP.Values["Glow Range"] or 10
+									sheep_entry.glow.Brightness = SheepESP.Values["Glow Brightness"] or 2
+								end
+								if not sheep_showDist and not sheep_showState and sheep_entry.bb then
+									pcall(function() sheep_entry.bb:Destroy() end)
+									sheep_entry.bb = nil
+									sheep_entry.dl = nil
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
+
+SheepESP.Callbacks.OnToggle = function(state)
+	loops["sheep esp"] = state
+	if state then
+		sheep_esp_set = {}
+		sheep_esp_data = {}
+		sheep_tagCount = 0
+		for _, sm in ipairs(sheep_cs:GetTagged("SheepModel")) do
+			if sm:IsA("Model") or sm:IsA("BasePart") then sheep_esp_set[sm] = true; sheep_tagCount = sheep_tagCount + 1 end
+		end
+		sheep_nameCount = 0
+		pcall(function()
+			sheep_folder = workspace:FindFirstChild("SheepModel")
+			if sheep_folder then
+				for _, sd in ipairs(sheep_folder:GetDescendants()) do
+					if (sd:IsA("Model") or sd:IsA("BasePart")) and not sheep_esp_set[sd] then
+						sheep_esp_set[sd] = true; sheep_nameCount = sheep_nameCount + 1
+					end
+				end
+			end
+		end)
+		print("[Sheep ESP] init -> via tag:", sheep_tagCount, "| via folder:", sheep_nameCount)
+
+		sheep_conns = {}
+		table.insert(sheep_conns, sheep_cs:GetInstanceAddedSignal("SheepModel"):Connect(function(m)
+			if loops["sheep esp"] and (m:IsA("Model") or m:IsA("BasePart")) then sheep_esp_set[m] = true end
+		end))
+		table.insert(sheep_conns, sheep_cs:GetInstanceRemovedSignal("SheepModel"):Connect(function(m)
+			sheepCleanupEntry(m)
+			sheep_esp_set[m] = nil
+		end))
+
+		if not sheep_loopConn then sheep_loopConn = game:GetService("RunService").Heartbeat:Connect(sheepEspLoop) end
+	else
+		if sheep_loopConn then sheep_loopConn:Disconnect(); sheep_loopConn = nil end
+		if sheep_conns then for _, sc in ipairs(sheep_conns) do pcall(function() sc:Disconnect() end) end end
+		sheep_conns = {}
+		for sheep_m in pairs(sheep_esp_data) do sheepCleanupEntry(sheep_m) end
+		sheep_esp_set = {}
+		sheep_esp_data = {}
+	end
+end
+
+AutoSheep = Kits:CreateButton("Auto Sheep", nil, true, true)
+AutoSheep:CreateToggle("Auto Tame", true, nil)
+AutoSheep:CreateSlider("Tame Range", 1, 28, 10, nil, 1)
+AutoSheep:CreateSlider("Tame Delay", 0, 2, 0.5, nil, 0.1)
+AutoSheep:CreateToggle("Play Tame Animation", true, nil)
+AutoSheep:CreateToggle("Play Tame Sound", true, nil)
+sheep_busy = false
+function sheepAutoLoop()
+	if not loops["auto sheep"] then return end
+	if not AutoSheep.Values["Auto Tame"] then return end
+	if sheep_busy then return end
+	if os.clock() - sheep_last_tame < 0.6 then return end
+
+	sheep_range = AutoSheep.Values["Tame Range"] or 10
+	sheep_model, sheep_data = sheepFindNearestIdle(sheep_range)
+	if not sheep_model or not sheep_data then return end
+
+	sheep_busy = true
+	sheep_mygen = sheep_gen
+
+	task.spawn(function()
+		task.wait(AutoSheep.Values["Tame Delay"] or 0.5)
+		if sheep_mygen ~= sheep_gen or not loops["auto sheep"] then sheep_busy = false return end
+
+		sheep_hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+		if not sheep_hrp or not sheep_model.Parent then sheep_busy = false return end
+		sheep_pos = sheepGetPos(sheep_model)
+		if not sheep_pos or (sheep_pos - sheep_hrp.Position).Magnitude > (AutoSheep.Values["Tame Range"] or 10) then sheep_busy = false return end
+
+		sheep_data2 = sheepGetData(sheep_model)
+		if sheep_data2 and sheepIsIdle(sheep_data2) then
+			if AutoSheep.Values["Play Tame Animation"] then sheepPlayTameAnim(); task.wait(0.3) end
+			if AutoSheep.Values["Play Tame Sound"] then sheepPlayTameSound() end
+			sheepFireTame(sheep_data2)
+			sheep_last_tame = os.clock()
+		end
+
+		sheep_busy = false
+	end)
+end
+
+AutoSheep.Callbacks.OnToggle = function(state)
+	loops["auto sheep"] = state
+	if state then
+		sheep_last_tame = 0
+		sheep_busy = false
+		if not sheep_autoConn then sheep_autoConn = game:GetService("RunService").Heartbeat:Connect(sheepAutoLoop) end
+	else
+		if sheep_autoConn then sheep_autoConn:Disconnect(); sheep_autoConn = nil end
+	end
+end
+
+elder_gen = (elder_gen or 0) + 1
+if elder_loopConn then pcall(function() elder_loopConn:Disconnect() end) end
+elder_loopConn = nil
+if elder_autoConn then pcall(function() elder_autoConn:Disconnect() end) end
+elder_autoConn = nil
+if elder_conns then for _, ec in ipairs(elder_conns) do pcall(function() ec:Disconnect() end) end end
+elder_conns = {}
+elder_esp_set = {}
+elder_esp_data = {}
+elder_tracking = false
+elder_cs = game:GetService("CollectionService")
+elder_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+elder_walking = false
+elder_last_collect = 0
+
+elder_remotes = nil
+pcall(function()
+	elder_remotes = require(elder_rs:WaitForChild("TS", 4):WaitForChild("remotes", 4)).default
+end)
+
+elder_animUtil = nil
+elder_animType = nil
+pcall(function()
+	elder_animUtil = require(elder_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-util", 4)).GameAnimationUtil
+	elder_animType = require(elder_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-type", 4)).AnimationType
+end)
+
+ElderESP = Visuals:CreateButton("Elder ESP", nil, true)
+ElderESP:CreateToggle("Show Highlight", true, nil)
+ElderESP:CreateToggle("Show Distance", true, nil)
+ElderESP:CreateToggle("Show Glow", false, nil)
+ElderESP:CreateColorPicker("Orb Color", Color3.fromRGB(100, 255, 140), nil)
+ElderESP:CreateSlider("Part Transparency", 0, 1, 0.3, nil, 0.05)
+ElderESP:CreateColorPicker("Distance Text Color", Color3.fromRGB(255, 255, 255), nil)
+ElderESP:CreateSlider("Text Size", 8, 24, 12, nil, 1)
+ElderESP:CreateSlider("Glow Range", 5, 30, 10, nil, 1)
+ElderESP:CreateSlider("Glow Brightness", 0.5, 5, 2, nil, 0.5)
+
+function elderGetPos(m)
+	if m:IsA("BasePart") then return m.Position end
+	if m:IsA("Model") then
+		elder_pp = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+		if elder_pp then return elder_pp.Position end
+		pcall(function() return m:GetPivot().Position end)
+	end
+	return nil
+end
+
+function elderColorParts(m, col, transp)
+	elder_orig = {}
+	for _, ep in ipairs(m:GetDescendants()) do
+		if ep:IsA("BasePart") then
+			table.insert(elder_orig, {part = ep, color = ep.Color, transp = ep.Transparency, mat = ep.Material})
+			ep.Color = col
+			ep.Transparency = transp
+			ep.Material = Enum.Material.Neon
+		end
+	end
+	return elder_orig
+end
+
+function elderRestoreParts(orig)
+	if not orig then return end
+	for _, op in ipairs(orig) do
+		pcall(function()
+			op.part.Color = op.color
+			op.part.Transparency = op.transp
+			op.part.Material = op.mat
+		end)
+	end
+end
+
+function elderUpdatePartColors(orig, col, transp)
+	if not orig then return end
+	for _, op in ipairs(orig) do
+		pcall(function()
+			op.part.Color = col
+			op.part.Transparency = transp
+			op.part.Material = Enum.Material.Neon
+		end)
+	end
+end
+
+function elderCleanupEntry(m)
+	elder_d = elder_esp_data[m]
+	if not elder_d then return end
+	if elder_d.origParts then elderRestoreParts(elder_d.origParts) end
+	if elder_d.bb then pcall(function() elder_d.bb:Destroy() end) end
+	if elder_d.glow then pcall(function() elder_d.glow:Destroy() end) end
+	elder_esp_data[m] = nil
+end
+
+function elderFireConsume(orb)
+	if not orb or not elder_remotes then return false end
+	elder_secret = orb:GetAttribute("TreeOrbSecret")
+	if not elder_secret then return false end
+	elder_ok, elder_ret = pcall(function()
+		return elder_remotes.Client:Get("ConsumeTreeOrb"):CallServer({treeOrbSecret = elder_secret})
+	end)
+	if not elder_ok then return false end
+	return elder_ret ~= nil and elder_ret ~= false
+end
+
+function elderPlayCollectAnim()
+	if elder_animUtil and elder_animType and elder_animType.PUNCH then
+		pcall(function() elder_animUtil:playAnimation(Player, elder_animType.PUNCH) end)
+	end
+end
+
+function elderPlayCollectSound()
+	if SoundManager and GameSound and GameSound.CROP_HARVEST then
+		pcall(function() SoundManager:playSound(GameSound.CROP_HARVEST) end)
+	end
+end
+
+function elderFindNearestOrb(range)
+	elder_char = Player.Character
+	elder_hrp = elder_char and elder_char:FindFirstChild("HumanoidRootPart")
+	if not elder_hrp then return nil end
+	elder_best = nil
+	elder_bestDist = range
+	for elder_m in pairs(elder_esp_set) do
+		if elder_m.Parent then
+			elder_pos = elderGetPos(elder_m)
+			if elder_pos then
+				elder_d = (elder_pos - elder_hrp.Position).Magnitude
+				if elder_d <= elder_bestDist then
+					elder_bestDist = elder_d
+					elder_best = elder_m
+				end
+			end
+		else
+			elder_esp_set[elder_m] = nil
+		end
+	end
+	return elder_best
+end
+
+function elderStartTracking()
+	if elder_tracking then return end
+	elder_tracking = true
+	for _, em in ipairs(elder_cs:GetTagged("treeOrb")) do
+		if em:IsA("Model") or em:IsA("BasePart") then elder_esp_set[em] = true end
+	end
+	pcall(function()
+		for _, ec in ipairs(workspace:GetChildren()) do
+			if (ec:IsA("Model") or ec:IsA("BasePart")) and ec.Name:lower():find("treeorb") then elder_esp_set[ec] = true end
+		end
+	end)
+	elder_conns = elder_conns or {}
+	table.insert(elder_conns, elder_cs:GetInstanceAddedSignal("treeOrb"):Connect(function(m)
+		if m:IsA("Model") or m:IsA("BasePart") then elder_esp_set[m] = true end
+	end))
+	table.insert(elder_conns, elder_cs:GetInstanceRemovedSignal("treeOrb"):Connect(function(m)
+		elderCleanupEntry(m)
+		elder_esp_set[m] = nil
+	end))
+	table.insert(elder_conns, workspace.DescendantAdded:Connect(function(d)
+		if (d:IsA("Model") or d:IsA("BasePart")) and d.Name:lower():find("treeorb") then elder_esp_set[d] = true end
+	end))
+end
+
+function elderStopTracking()
+	if loops["elder esp"] or loops["auto elder"] then return end
+	if elder_conns then for _, ec in ipairs(elder_conns) do pcall(function() ec:Disconnect() end) end end
+	elder_conns = {}
+	for em in pairs(elder_esp_data) do elderCleanupEntry(em) end
+	elder_esp_set = {}
+	elder_esp_data = {}
+	elder_tracking = false
+end
+
+elder_lastTick = 0
+function elderEspLoop()
+	if not loops["elder esp"] then return end
+	elder_now = os.clock()
+	if elder_now - elder_lastTick < 0.2 then return end
+	elder_lastTick = elder_now
+	pcall(function()
+		elder_char = Player.Character
+		elder_hrp = elder_char and elder_char:FindFirstChild("HumanoidRootPart")
+		if not elder_hrp then return end
+
+		elder_showHL = ElderESP.Values["Show Highlight"]
+		elder_showDist = ElderESP.Values["Show Distance"]
+		elder_showGlow = ElderESP.Values["Show Glow"]
+		elder_col = ElderESP.Values["Orb Color"] or Color3.fromRGB(100, 255, 140)
+		elder_partTransp = ElderESP.Values["Part Transparency"] or 0.3
+
+		for elder_m in pairs(elder_esp_set) do
+			if not elder_m.Parent then
+				elderCleanupEntry(elder_m)
+				elder_esp_set[elder_m] = nil
+			else
+				elder_pos = elderGetPos(elder_m)
+				if elder_pos then
+					elder_dist = (elder_pos - elder_hrp.Position).Magnitude
+
+					if not elder_esp_data[elder_m] then
+						elder_entry = {}
+						if elder_showHL then
+							elder_entry.origParts = elderColorParts(elder_m, elder_col, elder_partTransp)
+						end
+						if elder_showDist then
+							elder_bb = Instance.new("BillboardGui")
+							elder_bb.Adornee = elder_m:IsA("BasePart") and elder_m or (elder_m.PrimaryPart or elder_m:FindFirstChildWhichIsA("BasePart"))
+							elder_bb.Size = UDim2.fromOffset(120, 30)
+							elder_bb.StudsOffset = Vector3.new(0, 2, 0)
+							elder_bb.AlwaysOnTop = true
+							elder_bb.Parent = workspace
+							elder_dl = Instance.new("TextLabel")
+							elder_dl.Size = UDim2.fromScale(1, 1)
+							elder_dl.BackgroundTransparency = 1
+							elder_dl.Text = "Orb • " .. tostring(math.floor(elder_dist)) .. "m"
+							elder_dl.TextColor3 = ElderESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+							elder_dl.TextSize = ElderESP.Values["Text Size"] or 12
+							elder_dl.Font = Enum.Font.GothamBlack
+							elder_dl.TextStrokeTransparency = 0
+							elder_dl.TextStrokeColor3 = Color3.fromRGB(20, 20, 20)
+							elder_dl.Parent = elder_bb
+							elder_entry.bb = elder_bb
+							elder_entry.dl = elder_dl
+						end
+						if elder_showGlow then
+							elder_glowPart = elder_m:IsA("BasePart") and elder_m or (elder_m.PrimaryPart or elder_m:FindFirstChildWhichIsA("BasePart"))
+							if elder_glowPart then
+								elder_glow = Instance.new("PointLight")
+								elder_glow.Color = elder_col
+								elder_glow.Range = ElderESP.Values["Glow Range"] or 10
+								elder_glow.Brightness = ElderESP.Values["Glow Brightness"] or 2
+								elder_glow.Parent = elder_glowPart
+								elder_entry.glow = elder_glow
+							end
+						end
+						elder_esp_data[elder_m] = elder_entry
+					else
+						elder_entry = elder_esp_data[elder_m]
+						if elder_showHL and elder_entry.origParts then
+							elderUpdatePartColors(elder_entry.origParts, elder_col, elder_partTransp)
+						elseif not elder_showHL and elder_entry.origParts then
+							elderRestoreParts(elder_entry.origParts)
+							elder_entry.origParts = nil
+						elseif elder_showHL and not elder_entry.origParts then
+							elder_entry.origParts = elderColorParts(elder_m, elder_col, elder_partTransp)
+						end
+						if elder_entry.dl then
+							elder_entry.dl.Text = "Orb • " .. tostring(math.floor(elder_dist)) .. "m"
+							elder_entry.dl.TextColor3 = ElderESP.Values["Distance Text Color"] or Color3.fromRGB(255, 255, 255)
+							elder_entry.dl.TextSize = ElderESP.Values["Text Size"] or 12
+						end
+						if elder_showGlow and not elder_entry.glow then
+							elder_glowPart = elder_m:IsA("BasePart") and elder_m or (elder_m.PrimaryPart or elder_m:FindFirstChildWhichIsA("BasePart"))
+							if elder_glowPart then
+								elder_glow = Instance.new("PointLight")
+								elder_glow.Color = elder_col
+								elder_glow.Range = ElderESP.Values["Glow Range"] or 10
+								elder_glow.Brightness = ElderESP.Values["Glow Brightness"] or 2
+								elder_glow.Parent = elder_glowPart
+								elder_entry.glow = elder_glow
+							end
+						elseif not elder_showGlow and elder_entry.glow then
+							pcall(function() elder_entry.glow:Destroy() end)
+							elder_entry.glow = nil
+						elseif elder_entry.glow then
+							elder_entry.glow.Color = elder_col
+							elder_entry.glow.Range = ElderESP.Values["Glow Range"] or 10
+							elder_entry.glow.Brightness = ElderESP.Values["Glow Brightness"] or 2
+						end
+						if not elder_showDist and elder_entry.bb then
+							pcall(function() elder_entry.bb:Destroy() end)
+							elder_entry.bb = nil
+							elder_entry.dl = nil
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
+
+ElderESP.Callbacks.OnToggle = function(state)
+	loops["elder esp"] = state
+	if state then
+		elder_esp_data = elder_esp_data or {}
+		elderStartTracking()
+		if not elder_loopConn then elder_loopConn = game:GetService("RunService").Heartbeat:Connect(elderEspLoop) end
+	else
+		if elder_loopConn then elder_loopConn:Disconnect(); elder_loopConn = nil end
+		for em in pairs(elder_esp_data) do elderCleanupEntry(em) end
+		elder_esp_data = {}
+		elderStopTracking()
+	end
+end
+
+AutoElder = Kits:CreateButton("Auto Elder", nil, true, true)
+AutoElder:CreateToggle("Auto Collect", true, nil)
+AutoElder:CreateSlider("Collect Range", 1, 11, 10, nil, 1)
+AutoElder:CreateSlider("Collect Delay", 0, 2, 0.3, nil, 0.1)
+AutoElder:CreateToggle("Play Collect Animation", true, nil)
+AutoElder:CreateToggle("Play Collect Sound", true, nil)
+
+elder_busy = false
+elder_busy = false
+function elderAutoLoop()
+	if not loops["auto elder"] then return end
+	if not AutoElder.Values["Auto Collect"] then return end
+	if elder_busy then return end
+	if os.clock() - elder_last_collect < 0.6 then return end
+
+	elder_range = AutoElder.Values["Collect Range"] or 10
+	elder_orb = elderFindNearestOrb(elder_range)
+	if not elder_orb then return end
+
+	elder_busy = true
+	elder_mygen = elder_gen
+
+	task.spawn(function()
+		task.wait(AutoElder.Values["Collect Delay"] or 0.3)
+		if elder_mygen ~= elder_gen or not loops["auto elder"] then elder_busy = false return end
+
+		elder_hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+		if not elder_hrp or not elder_orb.Parent then elder_busy = false return end
+		elder_pos = elderGetPos(elder_orb)
+		if not elder_pos or (elder_pos - elder_hrp.Position).Magnitude > (AutoElder.Values["Collect Range"] or 10) then elder_busy = false return end
+
+		if elder_orb:GetAttribute("TreeOrbSecret") then
+			if AutoElder.Values["Play Collect Animation"] then elderPlayCollectAnim(); task.wait(0.2) end
+			if AutoElder.Values["Play Collect Sound"] then elderPlayCollectSound() end
+			if elderFireConsume(elder_orb) then
+				elderCleanupEntry(elder_orb)
+				elder_esp_set[elder_orb] = nil
+				pcall(function() elder_orb:Destroy() end)
+			end
+			elder_last_collect = os.clock()
+		end
+
+		elder_busy = false
+	end)
+end
+
+AutoElder.Callbacks.OnToggle = function(state)
+	loops["auto elder"] = state
+	if state then
+		elderStartTracking()
+		elder_last_collect = 0
+		elder_busy = false
+		if not elder_autoConn then elder_autoConn = game:GetService("RunService").Heartbeat:Connect(elderAutoLoop) end
+	else
+		if elder_autoConn then elder_autoConn:Disconnect(); elder_autoConn = nil end
+		elderStopTracking()
+	end
+end
+
+panic_lastClick = 0
+panic_hintToken = 0
+panic_DOUBLE = 0.4
+
+function panicTurnOffAll()
+	if not _G.__FW_PANIC_REG then return end
+	for panic_n, panic_reg in pairs(_G.__FW_PANIC_REG) do
+		if panic_reg.off then pcall(panic_reg.off) end
+	end
+end
+
+function panicResetAllKeys()
+	if not _G.__FW_PANIC_REG then return end
+	for panic_n, panic_reg in pairs(_G.__FW_PANIC_REG) do
+		if panic_reg.resetKey then pcall(panic_reg.resetKey) end
+	end
+end
+
+function panicOnClick()
+	panic_now = tick()
+	if panic_lastClick ~= 0 and panic_now - panic_lastClick <= panic_DOUBLE then
+		panic_hintToken = panic_hintToken + 1
+		panic_lastClick = 0
+		panicTurnOffAll()
+		panicResetAllKeys()
+		for panic_k in pairs(loops) do loops[panic_k] = false end
+		pcall(NotificationSystem.Notify, "Panic", "all modules and hotkeys reset", 1)
+		return
+	end
+
+	panic_lastClick = panic_now
+	panicTurnOffAll()
+	for panic_k in pairs(loops) do loops[panic_k] = false end
+	pcall(NotificationSystem.Notify, "Panic", "Disabled all modules", 1)
+
+	panic_token = panic_hintToken + 1
+	panic_hintToken = panic_token
+	task.delay(0.5, function()
+		if panic_hintToken == panic_token then
+			pcall(NotificationSystem.Notify, "Panic", "If you want to disable hotkeys aswell, double click it", 1)
+		end
+	end)
+end
+
+_G.__FW_NO_TOGGLE = _G.__FW_NO_TOGGLE or {}
+_G.__FW_NO_TOGGLE["Panic"] = true
+
+Panic = Utility:CreateButton("Panic", nil, false)
+
+if _G.__FW_ACTION_CLICK and _G.__FW_ACTION_CLICK["Panic"] then
+	_G.__FW_ACTION_CLICK["Panic"](panicOnClick)
+else
+	warn("[Panic] action-click hook missing -> add the 3 CreateButton hooks")
 end
