@@ -940,9 +940,11 @@ loops = {
 	["sheep esp"] = false,
 	["auto sheep"] = false,
 	["elder esp"] = false,
-	["auto elder"] = false
+	["auto elder"] = false,
+	["quickpopper"] = false,
+	["autostarpop"] = false,
+	["vulcan aimbot"] = false
 }
-
 
 --REMOTE EVENTS/FUNCTIONS--
 easyGamesNode = nil
@@ -1222,7 +1224,13 @@ closetSettings = {
 		["Collect Range"] = 11,
 		["Collect Delay"] = 0.25,
 		["Play Collect Animation"] = true
+	},
+	
+	["starpopper"] = {
+		["Consume Time"] = 0.9,
+		["All Consumables"] = false
 	}
+	
 }
 
 swords = {
@@ -4110,13 +4118,143 @@ AutoClicker:CreateSlider("Sword CPS", 1,9,9, nil)
 AutoClicker:CreateToggle("Shop Purchasing", true, nil)
 AutoClicker:CreateSlider("Shop CPS", 1,50,7, nil)
 
+hb_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+hb_itemMeta = nil
+hb_items = nil
+hb_origRanges = {}
+hb_objects = {}
+hb_conn = nil
+hb_lastScan = 0
+
+pcall(function()
+	hb_itemMeta = require(hb_rs:WaitForChild("TS", 4):WaitForChild("item", 4):WaitForChild("item-meta", 4))
+	hb_items = hb_itemMeta.items
+end)
+
+if hb_items then
+	for hb_type, hb_meta in pairs(hb_items) do
+		if hb_meta.sword and hb_meta.sword.attackRange then
+			hb_origRanges[hb_type] = hb_meta.sword.attackRange
+		end
+	end
+end
+
+function hbSetSwordRange(expand)
+	if not hb_items then return end
+	for hb_type, hb_meta in pairs(hb_items) do
+		if hb_meta.sword then
+			hb_base = hb_origRanges[hb_type] or (3.5 * 3)
+			hb_meta.sword.attackRange = hb_base + expand
+		end
+	end
+end
+
+function hbRestoreRanges()
+	if not hb_items then return end
+	for hb_type, hb_meta in pairs(hb_items) do
+		if hb_meta.sword and hb_origRanges[hb_type] ~= nil then
+			hb_meta.sword.attackRange = hb_origRanges[hb_type]
+		end
+	end
+end
+
+function hbCreateHitbox(entity)
+	if not entity or not entity.Parent then return end
+	if hb_objects[entity] and hb_objects[entity].Parent then return end
+	hb_hrp = entity:FindFirstChild("HumanoidRootPart")
+	if not hb_hrp then return end
+	hb_expand = HitBoxes.Values["Expand Amount"] or 14.4
+	hb_part = Instance.new("Part")
+	hb_part.Name = "HB_Hitbox"
+	hb_part.Size = Vector3.new(3, 6, 3) + Vector3.one * (hb_expand / 5)
+	hb_part.CFrame = hb_hrp.CFrame
+	hb_part.Transparency = 1
+	hb_part.CanCollide = false
+	hb_part.CanQuery = true
+	hb_part.CanTouch = false
+	hb_part.Anchored = false
+	hb_part.Massless = true
+	hb_part.Parent = entity
+	hb_weld = Instance.new("WeldConstraint")
+	hb_weld.Part0 = hb_hrp
+	hb_weld.Part1 = hb_part
+	hb_weld.Parent = hb_part
+	hb_objects[entity] = hb_part
+end
+
+function hbClearAllHitboxes()
+	for hb_ent, hb_part in pairs(hb_objects) do
+		pcall(function() hb_part:Destroy() end)
+	end
+	hb_objects = {}
+end
+
+function hbUpdatePlayerHitboxes()
+	if typeof(EntityCache) ~= "table" then return end
+	for _, hb_plr in ipairs(EntityCache.players or {}) do
+		if hb_plr ~= Player and hb_plr.Character then
+			hbCreateHitbox(hb_plr.Character)
+		end
+	end
+	for _, hb_npc in ipairs(EntityCache.npcs or {}) do
+		hbCreateHitbox(hb_npc)
+	end
+	for hb_ent, hb_part in pairs(hb_objects) do
+		if not hb_ent.Parent then
+			pcall(function() hb_part:Destroy() end)
+			hb_objects[hb_ent] = nil
+		end
+	end
+end
+
+HitBoxes = Combat:CreateButton("Hit Boxes", nil, true)
+HitBoxes:CreateDropdown("Mode", {"Sword", "Player"}, "Sword", function()
+	if loops["hit boxes"] then
+		loops["hit boxes"] = false
+		HitBoxes.Callbacks.OnToggle(false)
+		HitBoxes.Callbacks.OnToggle(true)
+		loops["hit boxes"] = true
+	end
+end)
+HitBoxes:CreateSlider("Expand Amount", 0, 14.4, 14.4, function(val)
+	if loops["hit boxes"] and (HitBoxes.Values["Mode"] or "Sword") == "Sword" then
+		hbSetSwordRange(val)
+	else
+		hbClearAllHitboxes()
+		hbUpdatePlayerHitboxes()
+	end
+end, 0.1)
+
+HitBoxes.Callbacks.OnToggle = function(state)
+	loops["hit boxes"] = state
+	if state then
+		hb_mode = HitBoxes.Values["Mode"] or "Sword"
+		if hb_mode == "Sword" then
+			hbSetSwordRange(HitBoxes.Values["Expand Amount"] or 14.4)
+		else
+			hbUpdatePlayerHitboxes()
+			hb_conn = game:GetService("RunService").Heartbeat:Connect(function()
+				if not loops["hit boxes"] then return end
+				hb_now = os.clock()
+				if hb_now - hb_lastScan < 0.5 then return end
+				hb_lastScan = hb_now
+				hbUpdatePlayerHitboxes()
+			end)
+		end
+	else
+		hbRestoreRanges()
+		hbClearAllHitboxes()
+		if hb_conn then hb_conn:Disconnect(); hb_conn = nil end
+	end
+end
+
 
 Reach = Combat:CreateButton("Reach", nil, true, true)
 Reach:CreateToggle("Sword", true, nil)
 Reach:CreateToggle("Placing", true, nil)
 Reach:CreateToggle("Mining", true, nil)
 Reach:CreateSlider("Sword Reach", 1, 28, 14.8, function(val)
-
+	if loops["reach"] then hbSetSwordRange(val) end
 end, 0.25)
 
 
@@ -4536,10 +4674,6 @@ AutoBalloon = Utility:CreateButton("Auto Balloon", nil, true)
 AutoBalloon:CreateSlider("Void range", 1, 250, 100, nil)
 AutoBalloon:CreateSlider("Amount of Balloons", 1, 3, 3, nil, 1)
 
-AutoPearl = Utility:CreateButton("Auto Pearl", nil, true)
-AutoPearl:CreateSlider("Void range", 1, 250, 100, nil)
-AutoPearl:CreateSlider("Shoot Duration", 0, 1, 0.25, nil)
-
 VoidDrop = Utility:CreateButton("Void Drop", nil, true)
 VoidDrop:CreateSlider("Void range", 1, 250, 100, nil)
 VoidDrop:CreateToggle("During Balloons")
@@ -4591,7 +4725,6 @@ ShopTierBypass = Utility:CreateButton("Shop Tier Bypass", function(state)
 		end
 	end
 end, true)
-TaxBypass = Utility:CreateButton("Tax Bypass", nil, true)
 AutoMushRoom = Utility:CreateButton("Auto MushRoom", nil, true)
 AutoMushRoom:CreateToggle("Bypass Dizzy Effect", false, nil)
 
@@ -4993,6 +5126,7 @@ Reach.Callbacks.OnToggle = function(state)
 		-- Sword
 		if Reach.Values["Sword"] == true then
 			CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = Reach.Values["Sword Reach"]
+			hbSetSwordRange(Reach.Values["Sword Reach"] or 14.4)
 		end
 
 		-- Placing & Mining
@@ -5013,6 +5147,7 @@ Reach.Callbacks.OnToggle = function(state)
 	if not loops["reach"] then
 		CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = 14.4
 		CombatConstant.REGION_SWORD_CHARACTER_DISTANCE = 12.6
+		hbRestoreRanges()
 
 		if canRequire and BlockSelector and originalGetMouseInfo then
 			BlockSelector.getMouseInfo = originalGetMouseInfo
@@ -7293,115 +7428,209 @@ local function thirdPOS(HRP)
 	return vector.create(velocity.X, velocity.Y, velocity.Z)
 end
 
-local function autoPearl()
-	local randomID = generateId()
-	local shotID = generateId()
-	if not Character then return end
+if ap_loopAlive then ap_loopAlive = false end
+ap_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+ap_net = nil
+pcall(function()
+	ap_net = ap_rs:WaitForChild("rbxts_include", 4):WaitForChild("node_modules", 4):WaitForChild("@rbxts", 4):WaitForChild("net", 4):WaitForChild("out", 4):WaitForChild("_NetManaged", 4)
+end)
+ap_ray = RaycastParams.new()
+ap_ray.FilterType = Enum.RaycastFilterType.Exclude
+ap_ray.IgnoreWater = true
+ap_busy = false
+ap_lastFire = 0
+ap_lastScan = 0
+ap_hasPearl = false
+ap_voidPrinted = false
+ap_PEARL_SPEED = 125
 
-	local HRP = Character:FindFirstChild("HumanoidRootPart")
-	if not HRP then return end
+AutoPearl = Utility:CreateButton("Auto Pearl", nil, true)
+AutoPearl:CreateSlider("Void range", 1, 250, 100, nil, 1)
+AutoPearl:CreateSlider("Shoot Duration", 0, 1, 0.25, nil, 0.05)
 
-	local orgin = HRP.Position + Vector3.new(1,1,1)	
+function apGenId()
+	if type(paGenId) == "function" then return paGenId() end
+	ap_cs = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	ap_s = {}
+	for ap_i = 1, 8 do ap_s[ap_i] = ap_cs:sub(math.random(1, #ap_cs), math.random(1, #ap_cs)) end
+	return table.concat(ap_s)
+end
 
-	local finalVelocity = thirdPOS(HRP)
+function apAimDir()
+	ap_cam = workspace.CurrentCamera
+	ap_vp = ap_cam.ViewportSize
+	ap_r = ap_cam:ViewportPointToRay(ap_vp.X * 0.5, ap_vp.Y * 0.5)
+	ap_ray.FilterDescendantsInstances = { Player.Character }
+	ap_h = workspace:Raycast(ap_r.Origin, ap_r.Direction * 1000, ap_ray)
+	ap_hrp3 = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	if ap_h and ap_hrp3 then
+		ap_d = ap_h.Position - ap_hrp3.Position
+		if ap_d.Magnitude > 0.01 then return ap_d.Unit, true end
+	end
+	return (ap_cam and ap_cam.CFrame.LookVector) or Vector3.new(0, 0, 1), false
+end
 
-
-	local fireArgs = {    
-		[1] = inventoriesFolder[Player.Name].telepearl,
-		[2] = "telepearl",
-		[3] = "telepearl",
-		[4] = vector.create(orgin.X, orgin.Y, orgin.Z),
-		[5] = vector.create(HRP.Position.X, HRP.Position.Y, HRP.Position.Z),
-
-		[6] = finalVelocity,
-
-		[7] = tostring(randomID),
-		[8] = {
-			["drawDurationSec"] = AutoPearl.Values["Shoot Duration"],
-			["shotId"] = tostring(shotID),
-		},
-		[9] = workspace:GetServerTimeNow()
+function apDoPearl(ap_pearlInv)
+	ap_hrp4 = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	if not ap_hrp4 then print("[AutoPearl] fire abort: no HRP"); return false end
+	if not ap_launchRemote then print("[AutoPearl] fire abort: no launch remote resolved"); return false end
+	ap_dir, ap_hitAim = apAimDir()
+	ap_vel = ap_dir * ap_PEARL_SPEED
+	ap_pos = ap_hrp4.Position
+	ap_fid = apGenId()
+	ap_sid = apGenId()
+	ap_draw = AutoPearl.Values["Shoot Duration"] or 0.25
+	ap_args = {
+		ap_pearlInv,
+		"telepearl",
+		"telepearl",
+		vector.create(ap_pos.X, ap_pos.Y, ap_pos.Z),
+		vector.create(ap_pos.X, ap_pos.Y, ap_pos.Z),
+		vector.create(ap_vel.X, ap_vel.Y, ap_vel.Z),
+		ap_fid,
+		{ shotId = ap_sid, drawDurationSec = ap_draw },
+		workspace:GetServerTimeNow(),
 	}
-
-	game:GetService("ReplicatedStorage").rbxts_include.node_modules["@rbxts"].net.out._NetManaged.ProjectileFire:InvokeServer(unpack(fireArgs))
-
-	local hitArgs = {
-		[1] = tostring(randomID)
-	}
-
-	game:GetService("ReplicatedStorage").rbxts_include.node_modules["@rbxts"].net.out._NetManaged.ProjectileHit:FireServer(unpack(hitArgs))
+	print("[AutoPearl] FIRE ->", tostring(ap_launchRemote), "| method:", ap_fireMethod, "| crosshairHitBlock:", ap_hitAim, "| dir:", tostring(ap_dir), "| vel(mag125):", tostring(ap_vel))
+	ap_ok, ap_err = pcall(function()
+		if ap_fireMethod == "invoke" then
+			return ap_launchRemote:InvokeServer(unpack(ap_args))
+		else
+			ap_launchRemote:FireServer(unpack(ap_args))
+		end
+	end)
+	if not ap_ok then print("[AutoPearl] FIRE ERROR:", ap_err); return false end
+	print("[AutoPearl] fire call returned OK")
+	return true
 end
 
 AutoPearl.Callbacks.OnToggle = function(state)
 	loops["auto pearl"] = state
+	if not state then ap_busy = false; return end
 
-	if loops["auto pearl"] then
-		task.spawn(function()
+	ap_launchRemote = nil
+	ap_fireMethod = nil
+	if type(paFire) ~= "nil" and paFire ~= nil then
+		ap_launchRemote = paFire
+		ap_fireMethod = paFire:IsA("RemoteFunction") and "invoke" or "fire"
+	end
+	if not ap_launchRemote and ap_net then
+		for _, ap_nm in ipairs({ "ProjectileLaunch", "LaunchProjectile", "FireProjectile" }) do
+			ap_t = ap_net:FindFirstChild(ap_nm)
+			if ap_t then ap_launchRemote = ap_t; ap_fireMethod = ap_t:IsA("RemoteFunction") and "invoke" or "fire"; break end
+		end
+		if not ap_launchRemote then
+			for _, ap_t in ipairs(ap_net:GetChildren()) do
+				if ap_t:IsA("RemoteFunction") then ap_launchRemote = ap_t; ap_fireMethod = "invoke"; break end
+			end
+		end
+	end
+	ap_setInv = (type(paSetInv) ~= "nil" and paSetInv) or (type(SetInvItem) ~= "nil" and SetInvItem) or nil
+	ap_invTop = (type(inventoriesFolder) == "Instance") and inventoriesFolder or nil
+	print("[AutoPearl] ON | launchRemote:", tostring(ap_launchRemote), "| method:", tostring(ap_fireMethod), "| setInv:", tostring(ap_setInv), "| invTop:", tostring(ap_invTop), "| paFire global present:", type(paFire) ~= "nil")
+	if not ap_launchRemote then
+		print("[AutoPearl] !! NO launch remote found -> make sure the Projectile Aura module ran first (so paFire exists), or set: paFire = <the remote your aura calls :InvokeServer on>")
+	end
 
-			while loops["auto pearl"] do
-				task.wait(0.01)
-				local char = Player.Character
+	ap_busy = false
+	ap_lastFire = 0
+	ap_lastScan = 0
+	ap_hasPearl = false
+	ap_voidPrinted = false
+	ap_loopAlive = true
 
-				-- FIX 1: Use 'continue' so it waits for you to respawn instead of killing the thread
-				if not char then continue end
+	task.spawn(function()
+		while loops["auto pearl"] and ap_loopAlive do
+			task.wait(0.02)
+			pcall(function()
+				if ap_busy then return end
+				ap_char = Player.Character
+				if not ap_char then return end
+				ap_hrp = ap_char:FindFirstChild("HumanoidRootPart")
+				ap_hum = ap_char:FindFirstChildOfClass("Humanoid")
+				if not ap_hrp or not ap_hum or ap_hum.Health <= 0 then return end
 
-				local hrp = char:FindFirstChild("HumanoidRootPart")
-				local hum = char:FindFirstChild("Humanoid")
-
-
-				if hrp and hum and hum.Health > 0 then
-
-					-- FIX 2: Check for active pearls without returning out of the whole function
-					local hasActivePearl = false
-					for i, part in pairs(game.Workspace:GetChildren()) do
-						if part.Name == "telepearl" and part:GetAttribute("ProjectileShooter") == Player.UserId then
-							hasActivePearl = true
-							break -- Stops checking the workspace, we already found one
-						end
-					end
-
-					-- Skip this loop iteration if a pearl is already flying
-					if hasActivePearl then continue end
-
-
-					local voidRange = tonumber(AutoBalloon.Values["Void range"])
-					local threshold = -voidRange
-
-					if hrp.Position.Y <= threshold then
-						if char:FindFirstChild("HandInvItem") then
-							local handInvItem = char:FindFirstChild("HandInvItem")
-
-							if handInvItem and handInvItem.Value then
-								local item = handInvItem.Value
-								local itemName = item.Name
-
-								if itemName ~= "telepearl" then
-									if inventoriesFolder:FindFirstChild(Player.Name):FindFirstChild("telepearl") then
-										local oldItem = game:GetService("ReplicatedStorage"):WaitForChild("Inventories"):WaitForChild(Player.Name):WaitForChild(tostring(char.HandInvItem.Value.Name))
-										local telepearlItem = game:GetService("ReplicatedStorage"):WaitForChild("Inventories"):WaitForChild(Player.Name):WaitForChild("telepearl")
-										local args = {{ hand = telepearlItem }}
-
-										game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetInvItem"):InvokeServer(unpack(args))
-
-										autoPearl()
-
-										task.wait(0.01)
-
-										local Oldargs = {{ hand = oldItem }}
-										game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetInvItem"):InvokeServer(unpack(Oldargs))
-									end
-								else
-									autoPearl()
-								end
-							end
+				ap_now = os.clock()
+				if ap_now - ap_lastScan >= 0.2 then
+					ap_lastScan = ap_now
+					ap_hasPearl = false
+					for _, ap_p in ipairs(workspace:GetChildren()) do
+						if ap_p.Name == "telepearl" and ap_p:GetAttribute("ProjectileShooter") == Player.UserId then
+							ap_hasPearl = true
+							break
 						end
 					end
 				end
-			end
-		end)
-	end
-end
+				if ap_hasPearl then ap_voidPrinted = false; return end
+				if ap_now - ap_lastFire < 0.4 then return end
 
+				ap_velY = (typeof(ap_hrp.AssemblyLinearVelocity) == "Vector3" and ap_hrp.AssemblyLinearVelocity.Y) or ap_hrp.Velocity.Y
+				ap_voidRange = AutoPearl.Values["Void range"] or 100
+				ap_isVoid = false
+				ap_reason = ""
+
+				if ap_hrp.Position.Y <= -ap_voidRange and ap_velY < 0 then
+					ap_isVoid = true
+					ap_reason = "Y<=" .. tostring(-ap_voidRange)
+				end
+
+				if not ap_isVoid and ap_velY < -10 then
+					ap_ray.FilterDescendantsInstances = { ap_char }
+					ap_feet = ap_hrp.Position - Vector3.new(0, ap_hrp.Size.Y * 0.5 + (ap_hum.HipHeight or 2), 0)
+					ap_g = workspace:Raycast(ap_feet, Vector3.new(0, -ap_voidRange, 0), ap_ray)
+					if not ap_g then
+						ap_isVoid = true
+						ap_reason = "no ground in " .. tostring(ap_voidRange) .. " below"
+					end
+				end
+
+				if not ap_isVoid then ap_voidPrinted = false; return end
+				if not ap_voidPrinted then
+					ap_voidPrinted = true
+					print("[AutoPearl] VOID trigger (" .. ap_reason .. ") Y:", math.floor(ap_hrp.Position.Y), " velY:", math.floor(ap_velY))
+				end
+
+				ap_myInv = (ap_invTop and ap_invTop:FindFirstChild(Player.Name)) or (type(paInv) ~= "nil" and paInv) or nil
+				ap_hi = ap_char:FindFirstChild("HandInvItem")
+				ap_hv = ap_hi and ap_hi.Value
+				ap_heldName = ap_hv and (ap_hv.Name or tostring(ap_hv)) or nil
+				if not ap_myInv then print("[AutoPearl] no inventory folder for player:", Player.Name); return end
+				ap_pearlInv = ap_myInv:FindFirstChild("telepearl")
+				if not ap_pearlInv then print("[AutoPearl] no telepearl in inventory"); return end
+
+				ap_busy = true
+
+				if ap_heldName == "telepearl" then
+					print("[AutoPearl] already holding pearl -> fire only")
+					apDoPearl(ap_pearlInv)
+					ap_lastFire = os.clock()
+					ap_busy = false
+					ap_voidPrinted = false
+					return
+				end
+
+				ap_oldInv = ap_myInv:FindFirstChild(ap_heldName)
+				print("[AutoPearl] SWAP -> pearl (was holding:", tostring(ap_heldName), ")")
+				if ap_setInv then
+					pcall(function() ap_setInv:InvokeServer({ hand = ap_pearlInv }) end)
+				else
+					print("[AutoPearl] !! no setInv remote -> cannot swap hand")
+				end
+
+				ap_fired = apDoPearl(ap_pearlInv)
+
+				if ap_oldInv and ap_setInv then
+					pcall(function() ap_setInv:InvokeServer({ hand = ap_oldInv }) end)
+				end
+				print("[AutoPearl] RESTORED hand to:", tostring(ap_heldName), "| fired:", tostring(ap_fired))
+
+				ap_lastFire = os.clock()
+				ap_busy = false
+				ap_voidPrinted = false
+			end)
+		end
+	end)
+end
 
 local voidDropThread = nil
 
@@ -10109,6 +10338,10 @@ AutoWhisper.Callbacks.OnToggle = function(state)
 		task.spawn(function()
 			while loops["auto whisper"] do
 				task.wait(0.1)
+				
+				if currentWhisper and not currentWhisper.Parent then
+					currentWhisper = nil
+				end
 
 				if currentWhisper then
 					targetPlayer = currentWhisper:GetAttribute("Target")
@@ -10119,7 +10352,7 @@ AutoWhisper.Callbacks.OnToggle = function(state)
 							if AutoWhisper.Values["Auto Heal"] then
 								HealthPercentage = AutoWhisper.Values["Heal when below %"]
 
-								HealthToHeal = humanoid.MaxHealth * (HealthPercentage / 100)
+								HealthToHeal = targetCharacter.Humanoid.MaxHealth * (HealthPercentage / 100)
 								print(targetCharacter.Humanoid.Health, HealthToHeal)
 
 								if targetCharacter.Humanoid.Health <= HealthToHeal then
@@ -10196,6 +10429,10 @@ AutoWhisper.Callbacks.OnToggle = function(state)
 		end)
 	end
 end
+
+Player.CharacterRemoving:Connect(function()
+	currentWhisper = nil
+end)
 
 AutoNyx.Callbacks.OnToggle = function(state)
 	loops["auto nyx"] = state 
@@ -16855,3 +17092,509 @@ if _G.__FW_ACTION_CLICK and _G.__FW_ACTION_CLICK["Panic"] then
 else
 	warn("[Panic] action-click hook missing -> add the 3 CreateButton hooks")
 end
+
+if type(sp_patched) == "table" then
+	for sp_e in pairs(sp_patched) do
+		if sp_orig and sp_orig[sp_e] ~= nil then sp_e.consumable.consumeTime = sp_orig[sp_e] end
+	end
+end
+sp_orig = {}
+sp_patched = {}
+sp_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+sp_items = nil
+sp_itemType = nil
+pcall(function() sp_items = require(sp_rs:WaitForChild("TS", 4):WaitForChild("item", 4):WaitForChild("item-meta", 4)).items end)
+pcall(function() sp_itemType = require(sp_rs:WaitForChild("TS", 4):WaitForChild("item", 4):WaitForChild("item-type", 4)).ItemType end)
+
+StarPopper = Kits:CreateButton("StarPopper", nil, true)
+StarPopper:CreateSlider("Consume Time", 0, 1, 0.4, function(v) if loops["starpopper"] then spApply(v) end end, 0.05)
+StarPopper:CreateToggle("All Consumables", false, function() if loops["starpopper"] then spApply(StarPopper.Values["Consume Time"] or 0.4) end end)
+
+function spTargetSet()
+	sp_set = {}
+	if StarPopper.Values["All Consumables"] then
+		for sp_k, sp_e in pairs(sp_items) do
+			if type(sp_e) == "table" and sp_e.consumable and sp_e.consumable.consumeTime ~= nil then
+				sp_set[sp_e] = true
+			end
+		end
+	else
+		for _, sp_key in ipairs({ sp_itemType.CRIT_STAR, sp_itemType.VITALITY_STAR }) do
+			sp_e = sp_items[sp_key]
+			if sp_e and sp_e.consumable then sp_set[sp_e] = true end
+		end
+	end
+	return sp_set
+end
+
+function spApply(v)
+	if not sp_items or not sp_itemType then return end
+	sp_use = (v <= 0) and 0.0001 or v
+	sp_want = spTargetSet()
+	for sp_e in pairs(sp_patched) do
+		if not sp_want[sp_e] then
+			if sp_orig[sp_e] ~= nil then sp_e.consumable.consumeTime = sp_orig[sp_e] end
+			sp_patched[sp_e] = nil
+		end
+	end
+	for sp_e in pairs(sp_want) do
+		if sp_orig[sp_e] == nil then sp_orig[sp_e] = sp_e.consumable.consumeTime end
+		sp_e.consumable.consumeTime = sp_use
+		sp_patched[sp_e] = true
+	end
+end
+
+function spRestore()
+	for sp_e in pairs(sp_patched) do
+		if sp_orig[sp_e] ~= nil then sp_e.consumable.consumeTime = sp_orig[sp_e] end
+		sp_patched[sp_e] = nil
+	end
+end
+
+StarPopper.Callbacks.OnToggle = function(state)
+	loops["starpopper"] = state
+	if state then spApply(StarPopper.Values["Consume Time"] or 0.4) else spRestore() end
+end
+
+if asp_alive then asp_alive = false end
+if asp_conns then for _, asp_c in ipairs(asp_conns) do pcall(function() asp_c:Disconnect() end) end end
+asp_conns = {}
+pcall(function()
+	if _G.__ASP_ORIG_DONE then
+		asp_im2 = (type(_G.__ASP_ITEMS) == "table") and _G.__ASP_ITEMS or nil
+		if asp_im2 then
+			for _, asp_e in ipairs({ asp_im2["crit_star"], asp_im2["vitality_star"] }) do
+				if asp_e and asp_e.consumable then asp_e.consumable.consumeTime = 1 end
+			end
+		end
+	end
+end)
+asp_gen = (asp_gen or 0) + 1
+asp_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+asp_net = nil
+pcall(function() asp_net = asp_rs:WaitForChild("rbxts_include", 4):WaitForChild("node_modules", 4):WaitForChild("@rbxts", 4):WaitForChild("net", 4):WaitForChild("out", 4):WaitForChild("_NetManaged", 4) end)
+asp_consumeRemote = nil
+pcall(function() if asp_net then asp_consumeRemote = asp_net:WaitForChild("ConsumeItem", 4) end end)
+asp_setInv = (type(paSetInv) ~= "nil" and paSetInv) or (type(SetInvItem) ~= "nil" and SetInvItem) or nil
+pcall(function() if not asp_setInv and asp_net then asp_setInv = asp_net:WaitForChild("SetInvItem", 4) end end)
+asp_animUtil = nil
+asp_animType = nil
+pcall(function() asp_animUtil = require(asp_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-util", 4)).GameAnimationUtil end)
+pcall(function() asp_animType = require(asp_rs:WaitForChild("TS", 4):WaitForChild("animation", 4):WaitForChild("animation-type", 4)).AnimationType end)
+
+AutoStarPop = Kits:CreateButton("AutoStarPop", nil, true)
+AutoStarPop:CreateSlider("Consume Time", 0, 1, 0.5, nil, 0.05)
+AutoStarPop:CreateSlider("Switch Delay", 0, 1, 0.15, nil, 0.05)
+
+function aspGetInvFolder()
+	asp_invTop = (typeof(inventoriesFolder) == "Instance") and inventoriesFolder or asp_rs:FindFirstChild("Inventories")
+	if not asp_invTop then return nil end
+	return asp_invTop:FindFirstChild(Player.Name)
+end
+
+function aspFindStar(typeStr)
+	asp_inv = aspGetInvFolder()
+	if not asp_inv then return nil end
+	return asp_inv:FindFirstChild(typeStr)
+end
+
+function aspHeldName()
+	asp_c = Player.Character
+	if not asp_c then return nil end
+	asp_hi = asp_c:FindFirstChild("HandInvItem")
+	asp_hv = asp_hi and asp_hi.Value
+	if not asp_hv then return nil end
+	return (typeof(asp_hv) == "Instance") and asp_hv.Name or tostring(asp_hv)
+end
+
+function aspPlayConsume()
+	if asp_animUtil and asp_animType and asp_animType.STAR_ITEM_CONSUME then
+		pcall(function() asp_animUtil:playAnimation(Player, asp_animType.STAR_ITEM_CONSUME) end)
+	end
+	if type(SoundManager) ~= "nil" and type(GameSound) ~= "nil" and GameSound.STAR_PICKUP then
+		pcall(function() SoundManager:playSound(GameSound.STAR_PICKUP) end)
+	end
+end
+
+AutoStarPop.Callbacks.OnToggle = function(state)
+	loops["autostarpop"] = state
+	if not state then asp_gen = asp_gen + 1; return end
+	asp_myGen = asp_gen
+	print("[AutoStarPop] ON | ConsumeItem:", asp_consumeRemote ~= nil, "| SetInvItem:", asp_setInv ~= nil, "| anim:", asp_animType and asp_animType.STAR_ITEM_CONSUME ~= nil)
+	task.spawn(function()
+		while loops["autostarpop"] and asp_myGen == asp_gen do
+			task.wait(0.05)
+			pcall(function()
+				asp_char = Player.Character
+				asp_hum = asp_char and asp_char:FindFirstChildOfClass("Humanoid")
+				if not asp_char or not asp_hum or asp_hum.Health <= 0 then return end
+
+				asp_held = aspHeldName()
+				asp_typeStr, asp_invItem = nil, nil
+				if asp_held == "crit_star" or asp_held == "vitality_star" then
+					asp_typeStr = asp_held
+					asp_invItem = aspFindStar(asp_typeStr)
+				else
+					asp_critInv = aspFindStar("crit_star")
+					asp_vitInv = aspFindStar("vitality_star")
+					if asp_critInv then asp_typeStr, asp_invItem = "crit_star", asp_critInv
+					elseif asp_vitInv then asp_typeStr, asp_invItem = "vitality_star", asp_vitInv end
+					if not asp_typeStr then return end
+					if not asp_setInv then return end
+					pcall(function() asp_setInv:InvokeServer({ hand = asp_invItem }) end)
+					task.wait(AutoStarPop.Values["Switch Delay"] or 0.15)
+				end
+				if not asp_invItem then return end
+
+				aspPlayConsume()
+				task.wait(AutoStarPop.Values["Consume Time"] or 0.5)
+
+				if aspHeldName() ~= asp_typeStr then
+					task.wait(AutoStarPop.Values["Switch Delay"] or 0.15)
+					return
+				end
+
+				if asp_consumeRemote then
+					pcall(function() asp_consumeRemote:InvokeServer({ item = asp_invItem }) end)
+				end
+
+				task.wait(AutoStarPop.Values["Switch Delay"] or 0.15)
+			end)
+		end
+	end)
+end
+
+
+va_gen = (va_gen or 0) + 1
+if va_conn then pcall(function() va_conn:Disconnect() end) end
+va_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+va_cs = game:GetService("CollectionService")
+va_aimRemote = nil
+va_blockEngine = nil
+va_clientStore = nil
+va_lastSend = 0
+va_npcCache = {}
+va_lastNpcScan = 0
+va_currentTargetModel = nil
+va_posHistory = {}
+va_smoothVel = Vector3.new(0, 0, 0)
+va_groundedResult = true
+va_groundedFrame = 0
+
+va_wallParams = RaycastParams.new()
+va_wallParams.FilterType = Enum.RaycastFilterType.Exclude
+va_groundParams = RaycastParams.new()
+va_groundParams.FilterType = Enum.RaycastFilterType.Exclude
+
+pcall(function()
+	va_net = va_rs:WaitForChild("rbxts_include", 4):WaitForChild("node_modules", 4):WaitForChild("@rbxts", 4):WaitForChild("net", 4):WaitForChild("out", 4):WaitForChild("_NetManaged", 4)
+	va_aimRemote = va_net:WaitForChild("AimTurret", 4)
+end)
+pcall(function()
+	va_blockEngine = require(va_rs:WaitForChild("rbxts_include", 4):WaitForChild("node_modules", 4):WaitForChild("@easy-games", 4):WaitForChild("block-engine", 4):WaitForChild("out", 4)).BlockEngine
+end)
+pcall(function()
+	va_clientStore = require(Player:WaitForChild("PlayerScripts"):WaitForChild("TS", 4):WaitForChild("ui", 4):WaitForChild("store", 4)).ClientStore
+end)
+
+VulcanAimbot = Combat:CreateButton("Vulcan Aimbot", nil, true)
+VulcanAimbot:CreateToggle("Target Players", true, nil)
+VulcanAimbot:CreateToggle("Target NPCs/Dummies", true, nil)
+VulcanAimbot:CreateToggle("Ignore Behind Walls", true, nil)
+VulcanAimbot:CreateToggle("Ignore Team/Spectators", true, nil)
+VulcanAimbot:CreateSlider("Range", 1, 2000, 500, nil, 1)
+VulcanAimbot:CreateToggle("Prediction", true, nil)
+VulcanAimbot:CreateSlider("Bullet Speed", 50, 500, 500, nil, 5)
+VulcanAimbot:CreateToggle("Sticky Target", true, nil)
+VulcanAimbot:CreateSlider("Switch Threshold", 1, 20, 5, nil, 1)
+
+function vaGetTurret()
+	if va_clientStore then
+		va_ok, va_state = pcall(function() return va_clientStore:getState() end)
+		if va_ok and va_state and va_state.Game then return va_state.Game.selectedTurret end
+	end
+	return nil
+end
+
+function vaBlockPos(turret)
+	if va_blockEngine then
+		va_ok, va_bp = pcall(function() return va_blockEngine:getBlockPosition(turret.Position) end)
+		if va_ok and va_bp then return va_bp end
+	end
+	va_p = turret.Position
+	return Vector3.new(math.round(va_p.X / 3), math.round(va_p.Y / 3), math.round(va_p.Z / 3))
+end
+
+function vaIsTeamSafe(plr)
+	if not VulcanAimbot.Values["Ignore Team/Spectators"] then return true end
+	if not plr.Team then return true end
+	if Player.Team and plr.Team == Player.Team then return false end
+	va_tn = plr.Team.Name:lower()
+	if va_tn:find("spectator") or va_tn:find("spectate") then return false end
+	return true
+end
+
+function vaWallClear(from, to, turret, targetModel)
+	if not VulcanAimbot.Values["Ignore Behind Walls"] then return true end
+	va_d = to - from
+	va_dist = va_d.Magnitude
+	if va_dist < 0.1 then return true end
+	va_wallParams.FilterDescendantsInstances = { turret, targetModel }
+	va_hit = workspace:Raycast(from, va_d.Unit * (va_dist + 0.5), va_wallParams)
+	if not va_hit then return true end
+	if va_hit.Instance:IsDescendantOf(targetModel) then return true end
+	return false
+end
+
+function vaCalcAngles(from, to)
+	va_d = to - from
+	va_mag = va_d.Magnitude
+	if va_mag < 0.01 then return nil, nil end
+	va_dx, va_dy, va_dz = va_d.X / va_mag, va_d.Y / va_mag, va_d.Z / va_mag
+	va_yaw = math.atan2(-va_dx, -va_dz)
+	va_pitch = math.asin(math.clamp(va_dy, -1, 1))
+	va_pitch = math.clamp(va_pitch, -0.8, 0.8)
+	return va_yaw, va_pitch
+end
+
+function vaScanNpcs()
+	va_npcCache = {}
+	for _, va_obj in ipairs(workspace:GetDescendants()) do
+		if va_obj:IsA("Humanoid") then
+			va_m = va_obj.Parent
+			if va_m and va_m:IsA("Model") and va_m:FindFirstChild("HumanoidRootPart") then
+				va_isPlr = false
+				for _, va_p in ipairs(Players:GetPlayers()) do
+					if va_p.Character == va_m then va_isPlr = true; break end
+				end
+				if not va_isPlr then table.insert(va_npcCache, va_m) end
+			end
+		end
+	end
+end
+
+-- ===== TARGET TRACKING (prediction) =====
+
+function vaResetTracking()
+	va_posHistory = {}
+	va_smoothVel = Vector3.new(0, 0, 0)
+	va_groundedResult = true
+	va_groundedFrame = 0
+end
+
+function vaAddToHistory(pos, t)
+	table.insert(va_posHistory, { pos = pos, t = t })
+	while #va_posHistory > 15 do table.remove(va_posHistory, 1) end
+end
+
+function vaCalcAvgVel()
+	if #va_posHistory < 2 then return va_smoothVel end
+	va_newest = va_posHistory[#va_posHistory]
+	va_oldest = va_posHistory[1]
+	va_dt = va_newest.t - va_oldest.t
+	if va_dt < 0.01 then return va_smoothVel end
+	va_rawVel = (va_newest.pos - va_oldest.pos) / va_dt
+	va_smoothVel = va_smoothVel:Lerp(va_rawVel, 0.3)
+	return va_smoothVel
+end
+
+function vaIsGrounded(root, model)
+	va_groundParams.FilterDescendantsInstances = { model }
+	va_hit = workspace:Raycast(root.Position - Vector3.new(0, 1, 0), Vector3.new(0, -4, 0), va_groundParams)
+	return va_hit ~= nil
+end
+
+function vaPredictPos(root, origin, model)
+	vaAddToHistory(root.Position, os.clock())
+	va_vel = vaCalcAvgVel()
+	va_groundedFrame = va_groundedFrame + 1
+	if va_groundedFrame >= 3 then
+		va_groundedFrame = 0
+		va_groundedResult = vaIsGrounded(root, model)
+	end
+	va_dist = (root.Position - origin).Magnitude
+	va_bulletSpeed = VulcanAimbot.Values["Bullet Speed"] or 500
+	if va_bulletSpeed < 1 then va_bulletSpeed = 1 end
+	va_leadTime = va_dist / va_bulletSpeed
+	-- horizontal lead catches strafing (tangential velocity component)
+	va_predX = root.Position.X + va_vel.X * va_leadTime
+	va_predZ = root.Position.Z + va_vel.Z * va_leadTime
+	-- vertical: if airborne, compensate for gravity arc (jumping/falling)
+	if va_groundedResult then
+		va_predY = root.Position.Y
+	else
+		va_predY = root.Position.Y + va_vel.Y * va_leadTime - 0.5 * workspace.Gravity * va_leadTime * va_leadTime
+	end
+	return Vector3.new(va_predX, va_predY, va_predZ)
+end
+
+-- ===== TARGET FINDING (with sticky target) =====
+
+function vaFindBestTarget(turret, origin, range)
+	va_cam = workspace.CurrentCamera
+	if not va_cam then return nil, nil, math.huge end
+	va_lookDir = va_cam.CFrame.LookVector
+	va_bestModel = nil
+	va_bestRoot = nil
+	va_bestAngle = math.huge
+
+	if VulcanAimbot.Values["Target Players"] then
+		for _, va_plr in ipairs(Players:GetPlayers()) do
+			if va_plr ~= Player and va_plr.Character then
+				va_hum = va_plr.Character:FindFirstChildOfClass("Humanoid")
+				va_root = va_plr.Character:FindFirstChild("HumanoidRootPart")
+				if va_hum and va_root and va_hum.Health > 0 then
+					if not vaIsTeamSafe(va_plr) then continue end
+					va_dist = (va_root.Position - origin).Magnitude
+					if va_dist <= range then
+						if not vaWallClear(origin, va_root.Position, turret, va_plr.Character) then continue end
+						va_toT = (va_root.Position - origin).Unit
+						va_ang = math.acos(math.clamp(va_lookDir:Dot(va_toT), -1, 1))
+						if va_ang < va_bestAngle then
+							va_bestAngle = va_ang
+							va_bestModel = va_plr.Character
+							va_bestRoot = va_root
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if VulcanAimbot.Values["Target NPCs/Dummies"] then
+		va_now2 = os.clock()
+		if va_now2 - va_lastNpcScan >= 2 then
+			va_lastNpcScan = va_now2
+			pcall(vaScanNpcs)
+		end
+		for _, va_npc in ipairs(va_npcCache) do
+			if va_npc.Parent then
+				va_hum = va_npc:FindFirstChildOfClass("Humanoid")
+				va_root = va_npc:FindFirstChild("HumanoidRootPart")
+				if va_hum and va_root and va_hum.Health > 0 then
+					va_dist = (va_root.Position - origin).Magnitude
+					if va_dist <= range then
+						if not vaWallClear(origin, va_root.Position, turret, va_npc) then continue end
+						va_toT = (va_root.Position - origin).Unit
+						va_ang = math.acos(math.clamp(va_lookDir:Dot(va_toT), -1, 1))
+						if va_ang < va_bestAngle then
+							va_bestAngle = va_ang
+							va_bestModel = va_npc
+							va_bestRoot = va_root
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return va_bestModel, va_bestRoot, va_bestAngle
+end
+
+function vaResolveTarget(turret, origin, range)
+	va_bestModel, va_bestRoot, va_bestAngle = vaFindBestTarget(turret, origin, range)
+
+	if VulcanAimbot.Values["Sticky Target"] and va_currentTargetModel and va_currentTargetModel.Parent then
+		va_curRoot = va_currentTargetModel:FindFirstChild("HumanoidRootPart")
+		va_curHum = va_currentTargetModel:FindFirstChildOfClass("Humanoid")
+		if va_curRoot and va_curHum and va_curHum.Health > 0 then
+			va_curDist = (va_curRoot.Position - origin).Magnitude
+			va_curValid = va_curDist <= range
+			if va_curValid and VulcanAimbot.Values["Ignore Behind Walls"] then
+				va_curValid = vaWallClear(origin, va_curRoot.Position, turret, va_currentTargetModel)
+			end
+			if va_curValid then
+				va_cam2 = workspace.CurrentCamera
+				if va_cam2 then
+					va_lookDir2 = va_cam2.CFrame.LookVector
+					va_curAngle = math.acos(math.clamp(va_lookDir2:Dot((va_curRoot.Position - origin).Unit), -1, 1))
+					va_threshold = math.rad(VulcanAimbot.Values["Switch Threshold"] or 5)
+					if va_bestModel and va_bestModel ~= va_currentTargetModel and va_bestAngle < va_curAngle - va_threshold then
+						va_currentTargetModel = va_bestModel
+						vaResetTracking()
+					end
+				end
+				return va_currentTargetModel
+			end
+		end
+		va_currentTargetModel = va_bestModel
+		vaResetTracking()
+		return va_bestModel
+	end
+
+	if va_currentTargetModel ~= va_bestModel then vaResetTracking() end
+	va_currentTargetModel = va_bestModel
+	return va_bestModel
+end
+
+-- ===== MAIN LOOP =====
+
+VulcanAimbot.Callbacks.OnToggle = function(state)
+	loops["vulcan aimbot"] = state
+	if not state then
+		va_gen = va_gen + 1
+		va_currentTargetModel = nil
+		vaResetTracking()
+		return
+	end
+	va_myGen = va_gen
+	print("[VulcanAimbot] ON | AimTurret:", va_aimRemote ~= nil, "| BlockEngine:", va_blockEngine ~= nil, "| ClientStore:", va_clientStore ~= nil)
+	va_conn = game:GetService("RunService").RenderStepped:Connect(function()
+		if not loops["vulcan aimbot"] or va_myGen ~= va_gen then return end
+
+		va_turret = vaGetTurret()
+		if not va_turret or not va_turret.Parent then
+			va_currentTargetModel = nil
+			vaResetTracking()
+			return
+		end
+		va_rot = va_turret:FindFirstChild("Rotate")
+		if not va_rot then return end
+		va_origin = va_rot.Position
+		va_range = VulcanAimbot.Values["Range"] or 500
+
+		va_targetModel = vaResolveTarget(va_turret, va_origin, va_range)
+		if not va_targetModel or not va_targetModel.Parent then return end
+		va_targetRoot = va_targetModel:FindFirstChild("HumanoidRootPart")
+		va_targetHum = va_targetModel:FindFirstChildOfClass("Humanoid")
+		if not va_targetRoot or not va_targetHum or va_targetHum.Health <= 0 then
+			va_currentTargetModel = nil
+			vaResetTracking()
+			return
+		end
+
+		if VulcanAimbot.Values["Prediction"] then
+			va_aimPos = vaPredictPos(va_targetRoot, va_origin, va_targetModel)
+		else
+			va_aimPos = va_targetRoot.Position
+		end
+
+		va_yaw, va_pitch = vaCalcAngles(va_origin, va_aimPos)
+		if not va_yaw then return end
+
+		pcall(function()
+			va_rot.CFrame = CFrame.new(va_rot.Position) * CFrame.Angles(0, va_yaw, 0) * CFrame.Angles(va_pitch, 0, 0)
+		end)
+		va_head = va_turret:FindFirstChild("Head")
+		if va_head then
+			va_camOrigin = va_head:FindFirstChild("CameraOrigin")
+			if va_camOrigin and workspace.CurrentCamera then
+				pcall(function() workspace.CurrentCamera.CFrame = va_camOrigin.WorldCFrame end)
+			end
+		end
+
+		va_now3 = os.clock()
+		if va_now3 - va_lastSend >= 0.2 and va_aimRemote then
+			va_lastSend = va_now3
+			pcall(function()
+				va_aimRemote:FireServer({
+					angleX = math.deg(va_yaw % (2 * math.pi)),
+					turretBlockPos = vaBlockPos(va_turret),
+					angleY = math.deg(va_pitch),
+				})
+			end)
+		end
+	end)
+end
+
+
