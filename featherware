@@ -8440,6 +8440,9 @@ function createESPContainer(model)
 	box3D.Name = "3D_ESP_BOX"
 	box3D.Anchored = false
 	box3D.CanCollide = false
+	box3D.Massless = true 
+	box3D.CanTouch = false
+	box3D.CanQuery = false 
 	box3D.Material = Enum.Material.SmoothPlastic
 	box3D.Size = sz
 	box3D.CFrame = cf
@@ -17596,4 +17599,5 @@ VulcanAimbot.Callbacks.OnToggle = function(state)
 		end
 	end)
 end
+
 
