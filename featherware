@@ -17597,4 +17597,3 @@ VulcanAimbot.Callbacks.OnToggle = function(state)
 	end)
 end
 
-
