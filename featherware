@@ -850,7 +850,6 @@ loops = {
 	["aim assist"] = false,
 	["velocity"] = false,
 	["reach"] = false,
-	["auto shoot"] = false,
 	["auto sprint"] = false,
 	["white hits"] = false,
 	["chest stealer"] = false,
@@ -908,7 +907,6 @@ loops = {
 	["interaction expander"] = false,
 	["projectile tracers"] = false,
 	["no click delay"] = false,
-	["bow lock"] = false,
 	["infinite crystal"] = false,
 	["fly"] = false,
 	["set settings"] = false,
@@ -943,7 +941,16 @@ loops = {
 	["auto elder"] = false,
 	["quickpopper"] = false,
 	["autostarpop"] = false,
-	["vulcan aimbot"] = false
+	["vulcan aimbot"] = false,
+	["quickcollect"] = false,
+	["resource collector"] = false,
+	["item esp"] = false,
+	["freecam"] = false,
+	["xray"] = false,
+	["nametags"] = false,
+	["generator esp"] = false,
+	["scaffold"] = false,
+	["bowassist"] = false
 }
 
 --REMOTE EVENTS/FUNCTIONS--
@@ -1225,12 +1232,12 @@ closetSettings = {
 		["Collect Delay"] = 0.25,
 		["Play Collect Animation"] = true
 	},
-	
+
 	["starpopper"] = {
 		["Consume Time"] = 0.9,
 		["All Consumables"] = false
 	}
-	
+
 }
 
 swords = {
@@ -1470,12 +1477,6 @@ end
 
 local NearestDummiesNPCs = findNearestNPCs()
 local NearestPlayers = findNearestPlayers()
-for key, value in pairs(NearestDummiesNPCs) do
-	print(key, value)
-end
-for key, value in pairs(NearestPlayers) do
-	print(key, value)
-end
 kaidaHitTrack = nil
 autoClickerThread = nil 
 
@@ -1697,7 +1698,6 @@ local function updatePlayers()
 	cachedPlayers = Players:GetPlayers()
 end
 
-Players.PlayerAdded:Connect(updatePlayers)
 Players.PlayerRemoving:Connect(updatePlayers)
 
 updatePlayers()
@@ -1706,10 +1706,9 @@ updatePlayers()
 local function makeDraggable(frame)
 	frame.Active = true
 	local dragStart, startPos, targetPosition
-	local moveConn, endConn
+	local moveConn, endConn, renderConn
 
 	frame.InputBegan:Connect(function(input)
-
 		if input.UserInputType == Enum.UserInputType.MouseButton1 and currentlyDragging == nil then
 			currentlyDragging = frame
 
@@ -1719,6 +1718,13 @@ local function makeDraggable(frame)
 			dragStart = input.Position
 			startPos = frame.Position
 			targetPosition = startPos
+
+			-- OPTIMIZATION: Connect RenderStepped ONLY while the mouse is held down
+			renderConn = RunService.RenderStepped:Connect(function()
+				if targetPosition then
+					frame.Position = frame.Position:Lerp(targetPosition, DRAG_SMOOTHNESS)
+				end
+			end)
 
 			moveConn = UserInputService.InputChanged:Connect(function(change)
 				if change.UserInputType == Enum.UserInputType.MouseMovement then
@@ -1732,18 +1738,15 @@ local function makeDraggable(frame)
 
 			endConn = UserInputService.InputEnded:Connect(function(change)
 				if change.UserInputType == Enum.UserInputType.MouseButton1 then
-					currentlyDragging = nil -- Release the lock
-					if moveConn then moveConn:Disconnect() end
-					if endConn then endConn:Disconnect() end
+					currentlyDragging = nil 
+					targetPosition = nil -- Clear target so it stops lerping instantly
+
+					-- Clean up ALL connections the moment the drag ends
+					if moveConn then moveConn:Disconnect() moveConn = nil end
+					if renderConn then renderConn:Disconnect() renderConn = nil end
+					if endConn then endConn:Disconnect() endConn = nil end
 				end
 			end)
-		end
-	end)
-
-	-- Handle the smoothing strictly and safely
-	RunService.RenderStepped:Connect(function()
-		if targetPosition then
-			frame.Position = frame.Position:Lerp(targetPosition, DRAG_SMOOTHNESS)
 		end
 	end)
 end
@@ -2052,6 +2055,7 @@ local function makeToggleSwitch(parent, default, onColor)
 	return track, setState
 end
 
+
 local function injectElements(mod, settingsCont, uniquePrefix)
 	mod.UpdateFunctions = mod.UpdateFunctions or {}
 
@@ -2076,7 +2080,6 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 	settingsCont = findRawInstance(settingsCont)
 
 	if not settingsCont then
-		print("[Featherware Debug] settingsCont frame not found. Searching framework globals...")
 		local fwObj = _G.FW or FW
 		if fwObj and fwObj.SettingsOverlay then
 			settingsCont = findRawInstance(fwObj.SettingsOverlay)
@@ -2174,30 +2177,91 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 		listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right 
 		listLayout.Padding = UDim.new(0, 2) 
 
-		-- SETTINGS TOGGLES
-		_G.RainbowEnabled = _G.RainbowEnabled ~= nil and _G.RainbowEnabled or true
-		_G.StaticColor = _G.StaticColor or Color3.fromRGB(168, 85, 247)
+
+		-- Load persisted settings or use defaults
+		local savedRainbow = _G.SavedConfig["ModuleList_Rainbow"]
+		_G.RainbowEnabled = savedRainbow ~= nil and savedRainbow or true
+
+		local savedColor = _G.SavedConfig["ModuleList_Color"]
+		_G.StaticColor = savedColor or Color3.fromRGB(168, 85, 247)
+
+		local labelPool = {}
+
+		local rainbowConnection = nil
+
+		-- === RAINBOW OPTIMIZATION VARIABLES ===
+		local rainbowConnection = nil
+		local hue = 0
+		local lastAppliedColor = nil
+
+		local function applyColor(color)
+			lastAppliedColor = color
+			if listTitle then listTitle.TextColor3 = color end
+			if rightLine then rightLine.BackgroundColor3 = color end
+			for _, label in ipairs(labelPool) do
+				label.TextColor3 = color
+			end
+		end
+		local function rainbowLoop(deltaTime)
+			-- Safety check: If GUI is deleted or hidden, kill the loop to save FPS
+			if not moduleListFrame.Parent or not moduleListFrame.Visible then
+				if rainbowConnection then
+					rainbowConnection:Disconnect()
+					rainbowConnection = nil
+				end
+				return
+			end
+
+			hue = (hue + 0.2 * deltaTime) % 1 
+			local targetColor = Color3.fromHSV(hue, 0.55, 1) 
+			applyColor(targetColor)
+		end
+
+		local function updateRainbowState()
+			local shouldBeRunning = moduleListFrame.Parent and moduleListFrame.Visible and _G.RainbowEnabled
+
+			if shouldBeRunning then
+				-- Connect ONLY if it isn't already connected
+				if not rainbowConnection then
+					rainbowConnection = RunService.RenderStepped:Connect(rainbowLoop)
+				end
+			else
+				-- Disconnect if it is running
+				if rainbowConnection then
+					rainbowConnection:Disconnect()
+					rainbowConnection = nil
+				end
+				-- If rainbow is off, ensure static color is applied instantly
+				if not _G.RainbowEnabled then
+					applyColor(_G.StaticColor)
+				end
+			end
+		end
+		-- =======================================
 
 		mod:CreateToggle("MODULE LIST", moduleListFrame.Visible, function(state)
 			_G.ModuleListEnabled = state
 			moduleListFrame.Visible = state
+			updateRainbowState() -- Re-evaluate loop connection
 		end)
-
 		mod:CreateSlider("LIST SCALE", 0.5, 2.0, listScale.Scale, function(val)
 			_G.ModuleListScale = val
 			listScale.Scale = val
-		end, 0.05)
-
+		end)
 		mod:CreateToggle("RAINBOW TEXT", _G.RainbowEnabled, function(state)
 			_G.RainbowEnabled = state
+			_G.SavedConfig["ModuleList_Rainbow"] = state
+			pcall(saveConfigToPC)
+			updateRainbowState() -- Re-evaluate loop connection
 		end)
-
 		mod:CreateColorPicker("TEXT COLOR", _G.StaticColor, function(color)
 			_G.StaticColor = color
+			_G.SavedConfig["ModuleList_Color"] = color
+			pcall(saveConfigToPC)
+			if not _G.RainbowEnabled then
+				applyColor(color) -- Instantly update static color without loop
+			end
 		end)
-
-		-- OPTIMIZATION: OBJECT POOLING
-		local labelPool = {}
 
 		-- HELPER: GET EXACT TEXT PIXEL WIDTH FOR SORTING
 		local function getTextWidth(text)
@@ -2231,13 +2295,12 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 					txt.BackgroundTransparency = 1
 					txt.Font = Enum.Font.GothamBold
 					txt.TextSize = 14
-					txt.TextXAlignment = Enum.TextXAlignment.Right 
+					txt.TextXAlignment = Enum.TextXAlignment.Right
 					txt.TextStrokeTransparency = 0.25
 					txt.TextStrokeColor3 = Color3.fromRGB(10, 10, 10)
 					txt.Parent = listCont
 					table.insert(labelPool, txt)
 				end
-
 				txt.Text = string.upper(rawKey)
 				txt.LayoutOrder = i
 				txt.Visible = true
@@ -2246,68 +2309,19 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 			-- Dynamically scale the right connecting line based on active items
 			local totalHeight = 30 + (#activeKeys * 20) -- 30 for title, 20 for each item (18 size + 2 padding)
 			rightLine.Size = UDim2.new(0, 2, 0, totalHeight)
+
+			-- Ensure newly created labels get the correct color immediately
+			if lastAppliedColor then
+				applyColor(lastAppliedColor)
+			elseif _G.StaticColor then
+				applyColor(_G.StaticColor)
+			end
 		end
 
+		_G.__FW_REFRESH_MODULE_LIST = refreshModuleListVisuals
+
 		refreshModuleListVisuals()
-
-		-- OPTIMIZATION: MEMORY-SAFE POLLING
-		task.spawn(function()
-			local lastActive = {}
-			local lastCount = 0
-
-			while task.wait(0.1) do
-				local currentActive = {}
-				local changed = false
-				local count = 0
-
-				for k, v in pairs(loopsTableReference or {}) do
-					if v == true then
-						count += 1
-						currentActive[tostring(k)] = true
-					end
-				end
-
-				if count ~= lastCount then
-					changed = true
-				else
-					for k in pairs(currentActive) do
-						if not lastActive[k] then
-							changed = true
-							break
-						end
-					end
-				end
-
-				if changed then
-					lastCount = count
-					lastActive = currentActive
-					refreshModuleListVisuals()
-				end
-			end
-		end)
-
-		-- OPTIMIZATION: RENDER-STEPPED RAINBOW
-		local hue = 0
-		RunService.RenderStepped:Connect(function(deltaTime)
-			if not moduleListFrame.Parent then return end -- Cleanup if GUI is deleted
-
-			local targetColor = _G.StaticColor
-			if _G.RainbowEnabled then
-				-- Multiplying by deltaTime ensures the rainbow speed is identical regardless of FPS
-				hue = (hue + 0.2 * deltaTime) % 1 
-				targetColor = Color3.fromHSV(hue, 0.55, 1) 
-			end
-
-			listTitle.TextColor3 = targetColor
-			rightLine.BackgroundColor3 = targetColor
-
-			for _, label in ipairs(labelPool) do
-				if label.Visible then
-					label.TextColor3 = targetColor
-				end
-			end
-		end)
-	end
+	end -- <--- THIS CLOSES CreateMainWindow
 
 	function mod:CreateButton(btnName, callback, toggleable)
 		local button = {
@@ -3181,7 +3195,6 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 		bSlider.FocusLost:Connect(updateColor)
 	end
 end
-
 --Main CODE
 
 local oldGui = PlayerGui:FindFirstChild("FeatherWare")
@@ -3588,10 +3601,7 @@ function FW:CreateCategory(name)
 	catBtn.MouseEnter:Connect(function() tween(catBtn, {BackgroundTransparency = 0}) end)
 	catBtn.MouseLeave:Connect(function() tween(catBtn, {BackgroundTransparency = 1}) end)
 
-	local savedVisibility = false
-	if _G.SavedConfig[catVisID] ~= nil then
-		savedVisibility = _G.SavedConfig[catVisID]
-	end
+	local savedVisibility = _G.SavedConfig[catVisID] or false
 
 	local frame = Instance.new("Frame", mainScreenUI)
 	frame.Name = name .. "Frame"
@@ -3661,18 +3671,14 @@ function FW:CreateCategory(name)
 		local toggleID = name .. "_" .. btnName .. "_MainToggle"
 		local hotkeyID = name .. "_" .. btnName .. "_Hotkey"
 
-		local startingToggleState = false
-		if _G.SavedConfig[toggleID] ~= nil then
-			startingToggleState = _G.SavedConfig[toggleID]
-		else
-			_G.SavedConfig[toggleID] = startingToggleState
-		end
+		local startingToggleState = _G.SavedConfig[toggleID] or false
+		_G.SavedConfig[toggleID] = startingToggleState
 
 		local mod = {
 			Toggled = startingToggleState,
 			Values = {},
 			Callbacks = {},
-			UpdateFunctions = {} -- Add this here
+			UpdateFunctions = {} 
 		}
 
 		local container = Instance.new("Frame", fScroll)
@@ -3682,7 +3688,6 @@ function FW:CreateCategory(name)
 		local cLayout = Instance.new("UIListLayout", container)
 		cLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-		-- The Main Clickable Button Area
 		local btn = Instance.new("TextButton", container)
 		btn.Name = btnName
 		btn.Text = "" 
@@ -3693,12 +3698,17 @@ function FW:CreateCategory(name)
 
 		loops[string.lower(btnName)] = startingToggleState
 
-		-- 1. Dynamic Left Container for Text & CLOSET Button
+		-- INSTANTLY UPDATE MODULE LIST ON INJECTION
+		if _G.__FW_REFRESH_MODULE_LIST then
+			_G.__FW_REFRESH_MODULE_LIST()
+		end
+
 		local leftContainer = Instance.new("Frame", btn)
-		leftContainer.Size = UDim2.new(1, -75, 1, 0) -- Reserves 75px on the right for hotkey/arrow
+
+		local leftContainer = Instance.new("Frame", btn)
+		leftContainer.Size = UDim2.new(1, -75, 1, 0)
 		leftContainer.BackgroundTransparency = 1
 
-		-- Add padding so we don't need spaces in the text string
 		local leftPadding = Instance.new("UIPadding", leftContainer)
 		leftPadding.PaddingLeft = UDim.new(0, 12)
 
@@ -3706,9 +3716,8 @@ function FW:CreateCategory(name)
 		listLayout.FillDirection = Enum.FillDirection.Horizontal
 		listLayout.VerticalAlignment = Enum.VerticalAlignment.Center
 		listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-		listLayout.Padding = UDim.new(0, 8) -- Gap between text and CLOSET button
+		listLayout.Padding = UDim.new(0, 8)
 
-		-- 2. Scrolling Frame (Only for the text)
 		local nameScroll = Instance.new("ScrollingFrame", leftContainer)
 		nameScroll.BackgroundTransparency = 1
 		nameScroll.ScrollBarThickness = 0
@@ -3721,12 +3730,10 @@ function FW:CreateCategory(name)
 		nameLabel.Size = UDim2.new(0, 0, 1, 0)
 		nameLabel.AutomaticSize = Enum.AutomaticSize.X
 		nameLabel.BackgroundTransparency = 1
-		nameLabel.TextYAlignment = Enum.TextYAlignment.Center -- Fixes vertical cutoff
+		nameLabel.TextYAlignment = Enum.TextYAlignment.Center 
 		nameLabel.TextColor3 = startingToggleState and Color3.fromRGB(78, 173, 73) or Color3.new(1, 1, 1)
 		nameLabel.FontFace = Font.fromName(textFont)
 		nameLabel.TextSize = 22
-
-		-- 3. Upgraded CLOSET Button
 
 		local closetDecision = ClosetButton == true
 		local closetBtn
@@ -3752,7 +3759,6 @@ function FW:CreateCategory(name)
 
 		local function updateLayout()
 			local textWidth = nameLabel.TextBounds.X
-
 			local maxTextWidth = leftContainer.AbsoluteSize.X
 
 			if closetBtn then
@@ -3764,14 +3770,13 @@ function FW:CreateCategory(name)
 			else
 				nameScroll.Size = UDim2.new(0, maxTextWidth, 1, 0)
 			end
-
 			nameScroll.CanvasSize = UDim2.new(0, textWidth, 0, 0)
 		end
 
 		nameLabel:GetPropertyChangedSignal("TextBounds"):Connect(updateLayout)
 		leftContainer:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateLayout)
 		task.defer(updateLayout)
-		-- Scroll logic: Only fires if the Canvas is larger than the visible window
+
 		local isHovering = false
 		btn.MouseEnter:Connect(function()
 			isHovering = true
@@ -3797,13 +3802,18 @@ function FW:CreateCategory(name)
 			tween(nameScroll, {CanvasPosition = Vector2.new(0, 0)}, 0.2)
 		end)
 
-		local function setToggleState(state)
-			if mainScreenUI:GetAttribute("Running") then
-				mod.Toggled = state
-				nameLabel.TextColor3 = state and Color3.fromRGB(78, 173, 73) or Color3.new(1, 1, 1)
-				loops[string.lower(btnName)] = state
+			local function setToggleState(state)
+				if mainScreenUI and mainScreenUI:GetAttribute("Running") then
+					mod.Toggled = state
+					nameLabel.TextColor3 = state and Color3.fromRGB(78, 173, 73) or Color3.new(1, 1, 1)
+					loops[string.lower(btnName)] = state
 
-				pcall(NotificationSystem.Notify, btnName, state and "Toggled On" or "Toggled Off", 2)
+					-- INSTANTLY UPDATE MODULE LIST (Event-Driven)
+					if _G.__FW_REFRESH_MODULE_LIST then
+						_G.__FW_REFRESH_MODULE_LIST()
+					end
+
+					pcall(NotificationSystem.Notify, btnName, state and "Toggled On" or "Toggled Off", 2)
 
 				_G.SavedConfig[toggleID] = state
 				pcall(saveConfigToPC)
@@ -3823,12 +3833,11 @@ function FW:CreateCategory(name)
 					char:WaitForChild("HumanoidRootPart", 5)
 				end
 				task.wait(0.5) 
-				if callback then callback(true) end
-				if mod.Callbacks.OnToggle then mod.Callbacks.OnToggle(true) end
+				if callback then pcall(callback, true) end
+				if mod.Callbacks.OnToggle then pcall(mod.Callbacks.OnToggle, true) end
 			end
 		end)
 
-		-- 6. Arrow & Hotkey Area (Pinned to the right)
 		local arrow = Instance.new("TextButton", btn)
 		arrow.Text = "<b>></b>"
 		arrow.RichText = true
@@ -3839,18 +3848,13 @@ function FW:CreateCategory(name)
 		arrow.FontFace = Font.fromName(textFont)
 		arrow.TextSize = 20
 
-		local currentBind = nil
 		if allowHotkey then
-			if _G.SavedConfig[hotkeyID] ~= nil then
-				local savedKeyName = _G.SavedConfig[hotkeyID]
-				currentBind = savedKeyName and Enum.KeyCode[savedKeyName] or nil
-			end
-
+			local savedKeyName = _G.SavedConfig[hotkeyID]
 			local bindLabel = Instance.new("TextButton", btn)
 			bindLabel.Size = UDim2.new(0, 35, 1, 0)
 			bindLabel.Position = UDim2.new(1, -70, 0, 0)
 			bindLabel.BackgroundTransparency = 1
-			bindLabel.Text = currentBind and ("[" .. currentBind.Name .. "]") or "[ - ]"
+			bindLabel.Text = savedKeyName and ("[" .. savedKeyName .. "]") or "[ - ]"
 			bindLabel.TextColor3 = Color3.fromRGB(120, 120, 120)
 			bindLabel.FontFace = Font.fromName(textFont)
 			bindLabel.TextSize = 16
@@ -3858,7 +3862,6 @@ function FW:CreateCategory(name)
 			local isBinding = false
 			bindLabel.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton2 then
-					currentBind = nil
 					_G.SavedConfig[hotkeyID] = nil
 					bindLabel.Text = "[ - ]"
 					saveConfigToPC()
@@ -3877,23 +3880,28 @@ function FW:CreateCategory(name)
 					isBinding = false
 					local key = input.KeyCode
 					if key == Enum.KeyCode.Backspace or key == Enum.KeyCode.Escape then
-						currentBind = nil
 						_G.SavedConfig[hotkeyID] = nil
+						bindLabel.Text = "[ - ]"
 					else
-						currentBind = key
 						_G.SavedConfig[hotkeyID] = key.Name
+						bindLabel.Text = "[" .. key.Name .. "]"
 					end
-					bindLabel.Text = currentBind and ("[" .. currentBind.Name .. "]") or "[ - ]"
 					saveConfigToPC()
 					task.defer(function() _G.IsBindingKey = false end)
 
-				elseif not GPE and not _G.IsBindingKey and currentBind and input.KeyCode == currentBind and mainScreenUI and mainScreenUI:GetAttribute("Running") == true then
-					setToggleState(not mod.Toggled)
+				elseif not GPE and not _G.IsBindingKey then
+					-- Checks the values table directly rather than reading an alternative local variable 
+					local configuredKeyName = _G.SavedConfig[hotkeyID]
+					if configuredKeyName and input.KeyCode == Enum.KeyCode[configuredKeyName] then
+						if mainScreenUI and mainScreenUI:GetAttribute("Running") == true then
+							setToggleState(not mod.Toggled)
+						end
+					end
 				end
+
 				_G.__FW_PANIC_REG = _G.__FW_PANIC_REG or {}
 				_G.__FW_PANIC_REG[btnName] = _G.__FW_PANIC_REG[btnName] or {}
 				_G.__FW_PANIC_REG[btnName].resetKey = function()
-					currentBind = nil
 					_G.SavedConfig[hotkeyID] = nil
 					bindLabel.Text = "[ - ]"
 					pcall(saveConfigToPC)
@@ -3927,9 +3935,7 @@ function FW:CreateCategory(name)
 		if closetBtn then
 			closetBtn.MouseButton1Click:Connect(function()
 				local BTTNsettings = closetSettings[string.lower(btnName)]
-				if not BTTNsettings then
-					return
-				end
+				if not BTTNsettings then return end
 
 				for key, value in pairs(BTTNsettings) do
 					if mod.UpdateFunctions[key] then
@@ -3938,7 +3944,6 @@ function FW:CreateCategory(name)
 						mod.Values[key] = value
 					end
 				end
-
 				print("Applied CLOSET settings for:", btnName)
 			end)
 		end
@@ -3952,14 +3957,20 @@ function FW:CreateCategory(name)
 		_G.__FW_PANIC_REG = _G.__FW_PANIC_REG or {}
 		if not (_G.__FW_NO_TOGGLE and _G.__FW_NO_TOGGLE[btnName]) then
 			_G.__FW_PANIC_REG[btnName] = _G.__FW_PANIC_REG[btnName] or {}
-			_G.__FW_PANIC_REG[btnName].off = function()
-				if not (mainScreenUI and mainScreenUI:GetAttribute("Running")) then return end
-				if mod.Toggled == false then return end
-				mod.Toggled = false
-				nameLabel.TextColor3 = Color3.new(1, 1, 1)
-				loops[string.lower(btnName)] = false
-				_G.SavedConfig[toggleID] = false
-				pcall(saveConfigToPC)
+				_G.__FW_PANIC_REG[btnName].off = function()
+					if not (mainScreenUI and mainScreenUI:GetAttribute("Running")) then return end
+					if mod.Toggled == false then return end
+					mod.Toggled = false
+					nameLabel.TextColor3 = Color3.new(1, 1, 1)
+					loops[string.lower(btnName)] = false
+
+					-- INSTANTLY UPDATE MODULE LIST
+					if _G.__FW_REFRESH_MODULE_LIST then
+						_G.__FW_REFRESH_MODULE_LIST()
+					end
+
+					_G.SavedConfig[toggleID] = false
+					pcall(saveConfigToPC)
 				task.spawn(function()
 					if callback then pcall(callback, false) end
 					if mod.Callbacks.OnToggle then pcall(mod.Callbacks.OnToggle, false) end
@@ -4270,23 +4281,7 @@ Desync.Callbacks.OnToggle = function(state)
 	if loops["desync"] then startDesync() else stopDesync() end
 end
 
-BowLock = Combat:CreateButton("Bow Lock", nil, true, true)
-BowLock:CreateSlider("Smoothness", 0, 1, 0.25)
-BowLock:CreateSlider("FOV", 1, 1000, 300)
 
-
-AutoShoot = Combat:CreateButton("Auto Shoot", nil, true)
-AutoShoot:CreateSlider("Range", 1, 1000, 50)
-AutoShoot:CreateToggle("Target Players", true, nil)
-AutoShoot:CreateToggle("Target NPCs/Dummies", false, nil)
-AutoShoot:CreateToggle("Aim at Head", false, nil)
-AutoShoot:CreateToggle("Aim at Torso", true, nil)
-AutoShoot:CreateSlider("Chance of headshot", 1, 100, 100, nil)
-AutoShoot:CreateSlider("Chance of shot", 1, 100, 100, nil)
---AutoShoot:CreateToggle("Randomize headshots & shots", false, nil)
---AutoShoot:CreateSlider("Randomization", 1, 100, 50, nil)
-AutoShoot:CreateDropdown("Projectiles", {"arrow", "snowball", "mage_spell_base", "blackhole_bomb"}, "arrow", nil, true)
-AutoShoot:CreateSlider("Shoot duration", 0.01, 2, 0.4)
 
 HitFix = Combat:CreateButton("Hit Fix", nil, true)
 
@@ -4542,37 +4537,12 @@ SwordSkinChanger:CreateDropdown("Sword Skin", {"pixel", "short_pixel", "valentin
 	if loops["sword skin changer"] then sscApplyAll() end
 end)
 
-camera.ChildAdded:Connect(function(ssc_child)
-	if string.find(string.lower(ssc_child.Name), "viewmodel") then
-		ssc_child.ChildAdded:Connect(function(ssc_item)
-			task.wait(0.05)
-			sscApplySkin(ssc_item)
-		end)
-		task.wait(0.05)
-		for _, ssc_item in ipairs(ssc_child:GetChildren()) do sscApplySkin(ssc_item) end
-	end
-end)
-
-ssc_vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
-if ssc_vm then
-	ssc_vm.ChildAdded:Connect(function(ssc_item)
-		task.wait(0.05)
-		sscApplySkin(ssc_item)
-	end)
-end
-
 if Player.Character then
 	Player.Character.ChildAdded:Connect(function(ssc_item)
 		task.wait(0.05)
 		sscApplySkin(ssc_item)
 	end)
 end
-Player.CharacterAdded:Connect(function(ssc_char)
-	ssc_char.ChildAdded:Connect(function(ssc_item)
-		task.wait(0.05)
-		sscApplySkin(ssc_item)
-	end)
-end)
 
 SwordSkinChanger.Callbacks.OnToggle = function(state)
 	loops["sword skin changer"] = state
@@ -4733,9 +4703,6 @@ AutoRaven:CreateDropdown("Priority", {"Player", "NPC/Dummy", "Nearest"}, "Player
 AutoRaven:CreateToggle("Target Players", true, nil)
 AutoRaven:CreateToggle("Target NPCs/Dummies", false, nil)
 AutoRaven:CreateToggle("Require Raven Equipped", false, nil)
-
-ResourceCollecter = Utility:CreateButton("Resource Collecter", nil, true)
-ResourceCollecter:CreateSlider("Range", 1, 30, 30)
 
 AutoConsume = Utility:CreateButton("Auto Consume", nil, true)
 
@@ -5058,7 +5025,6 @@ AutoKrystal.Callbacks.OnToggle = function(state)
 						}
 					}
 					game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("MomentumUpdate"):FireServer(unpack(args))
-					print("asdasd")
 					cachedHumanoid.WalkSpeed = 34
 
 
@@ -5091,9 +5057,6 @@ InfJump.Callbacks.OnToggle = function(state)
 	end
 end
 
-AutoShoot.Callbacks.OnToggle = function(state)
-	autoShoot = state 
-end
 
 WhiteHits.Callbacks.OnToggle = function(state)
 	whiteHits = state
@@ -5498,12 +5461,52 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	kaRingFolder.Parent = game.Lighting   -- hide when off / no character
 end)
 
+function getSwordAttackSpeed(weaponName)
+	-- 1. Try to use the pre-loaded ItemMetaTable if require worked
+	if canRequire and ItemMetaTable and ItemMetaTable[weaponName] then
+		itemData = ItemMetaTable[weaponName]
+		if itemData and itemData.sword and itemData.sword.attackSpeed then
+			return itemData.sword.attackSpeed
+		end
+	end
+
+	-- 2. Fallback hardcoded table for when canRequire is false or module fails
+	fallbackSpeeds = {
+		["wood_sword"] = 0.4,
+		["stone_sword"] = 0.35,
+		["iron_sword"] = 0.3,
+		["diamond_sword"] = 0.3,
+		["emerald_sword"] = 0.25,
+		["rageblade"] = 0.2,
+		["rage_blade"] = 0.2,
+		["wood_dao"] = 0.3,
+		["stone_dao"] = 0.25,
+		["iron_dao"] = 0.25,
+		["diamond_dao"] = 0.2,
+		["emerald_dao"] = 0.2,
+		["void_sword"] = 0.3,
+		["frosty_hammer"] = 0.5,
+		["light_sword"] = 0.3,
+		["laser_sword"] = 0.3,
+		["ice_sword"] = 0.3,
+		["noctium_blade"] = 0.3,
+		["noctium_blade_2"] = 0.25,
+		["noctium_blade_3"] = 0.25,
+		["noctium_blade_4"] = 0.2
+	}
+
+	if fallbackSpeeds[weaponName] then
+		return fallbackSpeeds[weaponName]
+	end
+
+	-- 3. Ultimate safe default (0.35 is safe for almost all swords to avoid throttle)
+	return 0.35
+end
+
 Killaura.Callbacks.OnToggle = function(state)
 
-	print("Killaura callback:", state)
 
 	loops["killaura"] = state
-	print(loops["killaura"])
 
 	if loops["killaura"] == false then
 		currentKaTarget = nil
@@ -5543,7 +5546,6 @@ Killaura.Callbacks.OnToggle = function(state)
 				hitDelay = Killaura.Values["Hit Delay"]
 			end
 
-			print(hitDelay)
 
 			task.wait(math.max(hitDelay,0.03))
 
@@ -5635,8 +5637,8 @@ Killaura.Callbacks.OnToggle = function(state)
 				end
 
 				if Killaura.Values["Target NPCs/Dummies"] then
-					for _, npc in pairs(workspace:GetChildren()) do
-						if npc and npc:IsA("Model") and npc:FindFirstChild("Humanoid") and npc.PrimaryPart then
+					for _, npc in ipairs(EntityCache.npcs or {}) do
+						if npc and npc.PrimaryPart then
 							if not Players:GetPlayerFromCharacter(npc) then
 								local distance = (rootPart.Position - npc.PrimaryPart.Position).Magnitude
 								if distance <= npcdummydistance then
@@ -5682,15 +5684,21 @@ Killaura.Callbacks.OnToggle = function(state)
 					continue
 				end
 
+				local infTpDir = (targetHRP.Position - HRP.Position).Unit
 				local kaArgs = {
 					[1] = {
 						["chargedAttack"] = { ["chargeRatio"] = 0 },
 						["entityInstance"] = besttarget,
 						["validate"] = {
-							["selfPosition"] = { ["value"] = HRP.Position }, -- Spoof self position to be at the target
-							["targetPosition"] = { ["value"] = targetHRP.Position }
+							["selfPosition"] = { ["value"] = HRP.Position }, 
+							["targetPosition"] = { ["value"] = targetHRP.Position },
+							["raycast"] = {
+								["cameraPosition"] = { ["value"] = workspace.CurrentCamera.CFrame.Position },
+								["cursorDirection"] = { ["value"] = infTpDir }
+							}
 						},
-						["weapon"] = Player.Character:FindFirstChild("HandInvItem").Value.Name
+						["weapon"] = inventoryWeapon, -- FIX: Must be the Instance, not the String Name!
+						["timeSinceSwingStart"] = 0
 					}
 				}
 
@@ -5971,9 +5979,15 @@ Killaura.Callbacks.OnToggle = function(state)
 					["entityInstance"] = besttarget,
 					["validate"] = {
 						["selfPosition"] = { ["value"] = HRP.Position + dir * 5.5 },
-						["targetPosition"] = { ["value"] = spoofedTargetPosition }
+						["targetPosition"] = { ["value"] = spoofedTargetPosition },
+						-- FIX: Add raycast validation which the server now strictly checks
+						["raycast"] = {
+							["cameraPosition"] = { ["value"] = workspace.CurrentCamera.CFrame.Position },
+							["cursorDirection"] = { ["value"] = dir }
+						}
 					},
-					["weapon"] = inventoryWeapon
+					["weapon"] = inventoryWeapon,
+					["timeSinceSwingStart"] = 0 -- Match legitimate client payload
 				}
 			}
 
@@ -6469,10 +6483,122 @@ local function IsOnVoidOrBridge(hrp)
 	return false
 end
 
-local isSystemEnabled = false
-Velocity.Callbacks.OnToggle = function(state) isSystemEnabled = state loops["velocity"] = state end
-local lastVelocity = Vector3.zero
+isSystemEnabled = false
+velocityConnection = nil
+cachedVelocityHRP = nil
+cachedVelocityHum = nil
+lastVelocity = Vector3.zero
 
+function updateVelocityCache()
+	char = Player.Character
+	cachedVelocityHRP = char and char:FindFirstChild("HumanoidRootPart") or nil
+	cachedVelocityHum = char and char:FindFirstChildOfClass("Humanoid") or nil
+end
+
+Player.CharacterAdded:Connect(function(char)
+	char:WaitForChild("HumanoidRootPart", 5)
+	updateVelocityCache()
+end)
+
+Player.CharacterRemoving:Connect(function() 
+	cachedVelocityHRP = nil 
+	cachedVelocityHum = nil
+end)
+
+updateVelocityCache()
+
+function velocityHeartbeat()
+	if not cachedVelocityHRP or not cachedVelocityHum then return end
+	if cachedVelocityHum.Health <= 0 then return end
+
+	currentVel = cachedVelocityHRP.AssemblyLinearVelocity
+	deltaVel = currentVel - lastVelocity
+
+	-- FIX: Ignore vertical velocity changes if jumping to prevent false positives
+	if UserInputService:IsKeyDown(Enum.KeyCode.Space) or (currentVel.Y > 15 and lastVelocity.Y >= 0) then
+		deltaVel = Vector3.new(deltaVel.X, 0, deltaVel.Z)
+	end
+
+	forceMagnitude = deltaVel.Magnitude
+	isKnockbackHit = forceMagnitude > 18 -- Slightly lowered threshold to catch weaker hits
+
+	if isKnockbackHit then
+		lookVector = cachedVelocityHRP.CFrame.LookVector
+		forceDirection = deltaVel.Magnitude > 0.01 and deltaVel.Unit or Vector3.zero
+		alignment = lookVector:Dot(forceDirection)
+
+		-- If the knockback is mostly forward (e.g. from sprinting), ignore it
+		if alignment > 0.7 then 
+			isKnockbackHit = false 
+		end
+	end
+
+	chance = Velocity.Values["Chance"] or 100
+	chancePass = math.random() * 100 < chance
+
+	if isKnockbackHit and chancePass then
+		isOnBridge = IsOnVoidOrBridge(cachedVelocityHRP)
+
+		if isOnBridge and Velocity.Values["Take Knockback On Bridges"] == false then
+			cachedVelocityHRP.AssemblyLinearVelocity = Vector3.new(0, currentVel.Y, 0)
+			lastVelocity = cachedVelocityHRP.AssemblyLinearVelocity
+			return
+		end
+
+		hMaster = (isOnBridge and (Velocity.Values["Bridge Horizontal Knockback"] or 100) or (Velocity.Values["Horizontal"] or 100)) / 100
+		vMaster = (isOnBridge and (Velocity.Values["Bridge Vertical Knockback"] or 100) or (Velocity.Values["Velocity"] or 100)) / 100
+
+		localHit = cachedVelocityHRP.CFrame:VectorToObjectSpace(deltaVel)
+
+		modX = (localHit.X * ((localHit.X > 0 and Velocity.Values["Right Knockback"] or Velocity.Values["Left Knockback"]) / 100)) * hMaster
+		modZ = (localHit.Z * ((localHit.Z > 0 and Velocity.Values["Back Knockback"] or Velocity.Values["Front Knockback"]) / 100)) * hMaster
+		modY = (localHit.Y * ((localHit.Y > 0 and Velocity.Values["Up Knockback"] or Velocity.Values["Down Knockback"]) / 100)) * vMaster
+
+		kbDir = Velocity.Values["Knockback Direction"] or "Normal"
+		if kbDir == "Backwards" then modZ = math.abs(modZ); modX = 0
+		elseif kbDir == "Reversed" then modX = -modX; modZ = -modZ; modY = -modY
+		elseif kbDir == "Up" then modX = 0; modZ = 0; modY = math.max(50, math.abs(modY)) end
+
+		if hMaster == 0 and vMaster == 0 then
+			cachedVelocityHRP.AssemblyLinearVelocity = Vector3.new(0, currentVel.Y, 0)
+			lastVelocity = cachedVelocityHRP.AssemblyLinearVelocity
+			return 
+		end
+
+		newWorld = cachedVelocityHRP.CFrame:VectorToWorldSpace(Vector3.new(modX, (vMaster > 0 and modY or 0), modZ))
+
+		cachedVelocityHRP.AssemblyLinearVelocity = Vector3.new(
+			(hMaster == 0 and 0 or (currentVel.X - deltaVel.X + newWorld.X)),
+			(vMaster == 0 and currentVel.Y or (currentVel.Y - deltaVel.Y + newWorld.Y)),
+			(hMaster == 0 and 0 or (currentVel.Z - deltaVel.Z + newWorld.Z))
+		)
+
+		lastVelocity = cachedVelocityHRP.AssemblyLinearVelocity
+		return
+	end
+
+	lastVelocity = currentVel
+end
+
+Velocity.Callbacks.OnToggle = function(state)
+	isSystemEnabled = state
+	loops["velocity"] = state
+	if state then
+		if not velocityConnection then
+			lastVelocity = Vector3.zero
+			-- FIX: Changed from Stepped to Heartbeat. Stepped runs BEFORE physics, 
+			-- so the Humanoid instantly overrides your velocity changes. 
+			-- Heartbeat runs AFTER physics, allowing the override to stick.
+			velocityConnection = RunService.Heartbeat:Connect(velocityHeartbeat)
+		end
+	else
+		if velocityConnection then 
+			velocityConnection:Disconnect() 
+			velocityConnection = nil 
+		end
+	end
+end
+end
 local function generateId()
 	characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	id = ""
@@ -6756,76 +6882,7 @@ local function fireProjectile(projectileName, HRP, targetPart, itemRequired, tar
 	return true 
 end
 
-RunService.Stepped:Connect(function()
-	if not isSystemEnabled or not Player.Character then return end
-	if not loops["velocity"] then return end
-	HRP = Player.Character:FindFirstChild("HumanoidRootPart")
-	Humanoid = Player.Character:FindFirstChild("Humanoid")
-	if not HRP or not Humanoid then return end
 
-	local currentVel = HRP.AssemblyLinearVelocity
-	local deltaVel = currentVel - lastVelocity
-
-	if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-		deltaVel = Vector3.new(deltaVel.X, 0, deltaVel.Z)
-	end
-
-	local forceMagnitude = deltaVel.Magnitude
-	local isKnockbackHit = forceMagnitude > 25
-
-	if isKnockbackHit then
-		lookVector = HRP.CFrame.LookVector
-		forceDirection = deltaVel.Unit
-		alignment = lookVector:Dot(forceDirection)
-
-		if alignment > 0.7 then 
-			isKnockbackHit = false 
-		end
-	end
-
-	local chance = Velocity.Values["Chance"] or 100
-	local chancePass = math.random() * 100 < chance
-
-	if isKnockbackHit and chancePass then
-		local isOnBridge = IsOnVoidOrBridge(HRP)
-
-		if isOnBridge and Velocity.Values["Take Knockback On Bridges"] == false then
-			HRP.AssemblyLinearVelocity = Vector3.new(0, currentVel.Y, 0)
-			lastVelocity = HRP.AssemblyLinearVelocity
-			return
-		end
-
-		local hMaster = (isOnBridge and (Velocity.Values["Bridge Horizontal Knockback"] or 100) or (Velocity.Values["Horizontal"] or 100)) / 100
-		local vMaster = (isOnBridge and (Velocity.Values["Bridge Vertical Knockback"] or 100) or (Velocity.Values["Velocity"] or 100)) / 100
-
-		local localHit = HRP.CFrame:VectorToObjectSpace(deltaVel)
-
-		local modX = (localHit.X * ((localHit.X > 0 and Velocity.Values["Right Knockback"] or Velocity.Values["Left Knockback"]) / 100)) * hMaster
-		local modZ = (localHit.Z * ((localHit.Z > 0 and Velocity.Values["Back Knockback"] or Velocity.Values["Front Knockback"]) / 100)) * hMaster
-		local modY = (localHit.Y * ((localHit.Y > 0 and Velocity.Values["Up Knockback"] or Velocity.Values["Down Knockback"]) / 100)) * vMaster
-
-		local kbDir = Velocity.Values["Knockback Direction"] or "Normal"
-		if kbDir == "Backwards" then modZ = math.abs(modZ); modX = 0
-		elseif kbDir == "Reversed" then modX = -modX; modZ = -modZ; modY = -modY
-		elseif kbDir == "Up" then modX = 0; modZ = 0; modY = math.max(50, math.abs(modY)) end
-
-		if hMaster == 0 and vMaster == 0 then
-			HRP.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-			lastVelocity = Vector3.new(0, 0, 0)
-			return 
-		end
-
-		local newWorld = HRP.CFrame:VectorToWorldSpace(Vector3.new(modX, (vMaster > 0 and modY or 0), modZ))
-
-		HRP.AssemblyLinearVelocity = Vector3.new(
-			(hMaster == 0 and 0 or (currentVel.X - deltaVel.X + newWorld.X)),
-			(vMaster == 0 and currentVel.Y or (currentVel.Y - deltaVel.Y + newWorld.Y)),
-			(hMaster == 0 and 0 or (currentVel.Z - deltaVel.Z + newWorld.Z))
-		)
-	end
-
-	lastVelocity = HRP.AssemblyLinearVelocity
-end)
 
 local function findClosestPlr(radius, rootPart)
 	closestCharacter = nil
@@ -6887,151 +6944,6 @@ local function findClosestNPC(radius, rootPart)
 	end
 end
 
-task.spawn(function()
-	while true do
-		task.wait(0.01) 
-
-		if not autoShoot then continue end
-		if not loops["auto shoot"] then continue end
-		if not AutoShoot.Values["Aim at Head"] and not AutoShoot.Values["Aim at Torso"] then continue end
-		if #AutoShoot.Values["Projectiles"] == 0 then continue end
-		if not Player.Character then continue end
-
-		character = Player.Character 
-		HRP = character:FindFirstChild("HumanoidRootPart")
-		animator = getCurrentAnimator() 
-
-		if not animator then
-			if Player.Character then
-				Animator = Instance.new("Animator")
-				Animator.Parent = cachedHumanoid
-			end
-		end
-
-		if inventoriesFolder and animator then
-			playerFolder = inventoriesFolder:FindFirstChild(Player.Name)
-			Handinvitem = character:FindFirstChild("HandInvItem")
-
-			if not playerFolder or not Handinvitem  or not Handinvitem.Value then continue end
-
-
-
-
-			local item = playerFolder:FindFirstChild(Handinvitem.Value.Name)
-			if not item then
-				continue
-			end
-
-			local handItemName = item.Name
-
-
-			if Handinvitem.Value then
-				handItemName = tostring(Handinvitem.Value.Name)
-			elseif table.find(AutoShoot.Values["Projectiles"], handItemName) and playerFolder:FindFirstChild("blackhole_bomb") then
-				handItemName = handItemName 
-			else
-				continue
-			end
-			if not item then continue end
-
-			local plrTarget, plrDistance, npcTarget, npcDistance, bestTarget = nil, nil, nil, nil, nil
-
-			if AutoShoot.Values["Target Players"] then plrTarget, plrDistance = findClosestPlr(AutoShoot.Values["Range"], HRP) end
-			if AutoShoot.Values["Target NPCs/Dummies"] then npcTarget, npcDistance = findClosestNPC(AutoShoot.Values["Range"], HRP) end
-
-			if plrTarget and npcTarget then bestTarget = (plrDistance >= npcDistance) and plrTarget or npcTarget
-			elseif plrTarget then bestTarget = plrTarget
-			elseif npcTarget then bestTarget = npcTarget
-			else continue end
-
-			targetHumanoid = bestTarget:FindFirstChild("Humanoid")
-			if not targetHumanoid or targetHumanoid.Health <= 0 then stopHoldAnimation(); continue end
-
-			local targetPlayer = Players:GetPlayerFromCharacter(bestTarget)
-			if targetPlayer and Player.Team and targetPlayer.Team == Player.Team then stopHoldAnimation(); continue end
-
-			handItemLower = string.lower(handItemName)
-			projectileName = nil
-
-			if string.find(handItemLower, "bow") or string.find(handItemLower, "crossbow") or string.find(handItemLower, "headhunter") then
-				if playerFolder:FindFirstChild("arrow") then projectileName = "arrow" end
-			elseif handItemName == "mage_spellbook" then projectileName = "mage_spell_base"
-			elseif handItemName == "whim_spellbook" then projectileName = "whim_mage_book" 
-			elseif handItemName == "frost_staff_1" then projectileName = "frosty_snowball_1"
-			elseif handItemName == "frost_staff_2" then projectileName = "frosty_snowball_2"
-			elseif handItemName == "frost_staff_3" then projectileName = "frosty_snowball_3"
-			elseif table.find(AutoShoot.Values["Projectiles"], handItemName) then
-				projectileName = handItemName
-			end
-
-			if projectileName == nil then continue end
-
-			local currentTime = os.clock()
-			local stats = WeaponStats[handItemName] or WeaponStats[projectileName] or { Charge = 0, Cooldown = 0.3 }
-			local actualCharge, actualCooldown = stats.Charge, stats.Cooldown
-
-			local guiDelay = AutoShoot.Values["Shoot duration"] or 0
-			if guiDelay > (actualCharge + actualCooldown) then actualCooldown = guiDelay - actualCharge end
-			local totalCycleTime = actualCharge + actualCooldown
-
-			if currentTime - (lastShotTimes[handItemName] or 0) < totalCycleTime then continue end
-
-			local chanceOfHeadShot = AutoShoot.Values["Chance of headshot"] or 100
-			local chanceOfShot = AutoShoot.Values["Chance of shot"] or 100
-			local targetPart = nil
-
-			if AutoShoot.Values["Aim at Head"] and AutoShoot.Values["Aim at Torso"] then
-				if chanceOfHeadShot >= math.random(1, 100) then targetPart = bestTarget:FindFirstChild("Head")
-				elseif chanceOfShot >= math.random(1, 100) then targetPart = bestTarget:FindFirstChild("UpperTorso") end
-			elseif AutoShoot.Values["Aim at Torso"] then
-				if chanceOfShot >= math.random(1, 100) then targetPart = bestTarget:FindFirstChild("UpperTorso") end
-			elseif AutoShoot.Values["Aim at Head"] then
-				if chanceOfHeadShot >= math.random(1, 100) then targetPart = bestTarget:FindFirstChild("Head") end
-			end
-
-			if targetPart then
-				local currentDistance = (targetPart.Position - HRP.Position).Magnitude
-				if currentDistance > 6 and not isPathClear(HRP.Position, targetPart.Position, {character, bestTarget}) then
-					stopHoldAnimation()
-					continue 
-				end
-
-				lastShotTimes[handItemName] = os.clock()
-				firingLocks[handItemName] = true 
-
-				task.spawn(function()
-					if actualCharge > 0 then
-						if string.find(handItemLower, "crossbow") then playHoldAnimation(CB_HOLD_ANIMATION_ID)
-						elseif string.find(handItemLower, "bow") or string.find(handItemLower, "headhunter") then playHoldAnimation(BOW_HOLD_ANIMATION_ID)
-						elseif string.find(handItemLower, "frost_staff") or string.find(handItemLower, "spellbook") then playHoldAnimation() end
-						task.wait(actualCharge) 
-					end
-
-					local canFire =
-						(handItemName == "blackhole_bomb")
-						or (
-							Handinvitem
-							and Handinvitem.Value
-							and tostring(Handinvitem.Value.Name) == handItemName
-						)
-
-					if canFire and getCurrentAnimator() then
-						local shotFired = fireProjectile(projectileName, HRP, targetPart, handItemName, bestTarget)
-						if not shotFired then
-							lastShotTimes[handItemName] = 0
-						end
-					else
-						stopHoldAnimation()
-					end
-
-					firingLocks[handItemName] = nil 
-				end)
-			else
-				stopHoldAnimation()
-			end
-		end
-	end
-end)
 
 
 local whiteHitConnection = nil
@@ -7138,7 +7050,6 @@ WhiteHits.Callbacks.OnToggle = function(state)
 
 end
 
-
 local function findNearbyContainers(radius, espOnly)
 	if not loops["chest stealer"] and not espOnly then 
 		return {}, {} 
@@ -7150,7 +7061,11 @@ local function findNearbyContainers(radius, espOnly)
 	local root = cachedHRP
 	if not root then return chests, crates end
 
-	local parts = workspace:GetPartBoundsInRadius(root.Position, radius)
+	overlapParams = OverlapParams.new()
+	overlapParams.FilterDescendantsInstances = {Player.Character}
+	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+
+	local parts = workspace:GetPartBoundsInRadius(root.Position, radius, overlapParams, 5000)
 
 	for _, part in ipairs(parts) do
 		if part.Name == "chest" then
@@ -7172,97 +7087,170 @@ local function findNearbyContainers(radius, espOnly)
 end
 
 
+
+-- ============ CHEST STEALER (EVENT-DRIVEN / ZERO LAG) ============
+
 local chestStealBox = Instance.new("Part")
 chestStealBox.Name = "3D_CHEST_BOX"
 chestStealBox.Anchored = true
 chestStealBox.CanCollide = false
+chestStealBox.CanQuery = false
+chestStealBox.CanTouch = false
 chestStealBox.Transparency = 0.65
 chestStealBox.Material = Enum.Material.SmoothPlastic
-chestStealBox.Size = Vector3.new(3,3,3)
+chestStealBox.Size = Vector3.new(0.1, 0.1, 0.1)
 chestStealBox.Parent = game.Lighting
 
+local chestStealerThread = nil
+local activeChestHooks = {} -- [container] = { conn = RBXScriptConnection, inventory = Folder }
+local highlightTween = nil
+local lastHighlightTarget = nil
 
-ChestStealer.Callbacks.OnToggle = function(state)
-	loops["chest stealer"] = state
+-- ---------- HIGHLIGHT HELPERS ----------
+local function hideChestHighlight()
+	lastHighlightTarget = nil
+	if highlightTween then highlightTween:Cancel() highlightTween = nil end
+	chestStealBox.Parent = game.Lighting
+	chestStealBox.Size = Vector3.new(0.1, 0.1, 0.1)
+end
 
-	if not state then
-		chestStealBox.Parent = game.Lighting
+local function highlightChestContainer(container)
+	if not container or not container.Parent then return end
+	chestStealBox.Color = ChestStealer.Values["Highlight Color"] or Color3.fromRGB(255, 255, 255)
+
+	if container == lastHighlightTarget and chestStealBox.Parent == workspace then return end
+	lastHighlightTarget = container
+
+	chestStealBox.Size = Vector3.new(0.1, 0.1, 0.1)
+	chestStealBox.CFrame = container.CFrame
+	chestStealBox.Parent = workspace
+
+	if highlightTween then highlightTween:Cancel() end
+	highlightTween = TweenService:Create(
+		chestStealBox,
+		TweenInfo.new(0.30, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{ Size = container.Size + Vector3.new(0.8, 0.8, 0.8), CFrame = container.CFrame }
+	)
+	highlightTween:Play()
+end
+
+-- ---------- HOOK / UNHOOK LOGIC ----------
+local function unhookChest(container)
+	local hook = activeChestHooks[container]
+	if hook then
+		if hook.conn then hook.conn:Disconnect() end
+		activeChestHooks[container] = nil
 	end
 end
 
+local function hookChest(container)
+	if activeChestHooks[container] then return end -- Already tracking
 
-task.spawn(function()
+	local folderVal = container:FindFirstChild("ChestFolderValue")
+	local inventory = folderVal and folderVal.Value
+	if not inventory then return end
 
-	while true do
+	-- 1. INITIAL SWEEP: Steal everything currently inside immediately
+	for _, item in ipairs(inventory:GetChildren()) do
+		if item.Name ~= "ChestOwner" then
+			task.spawn(function() pcall(function() takeItem:InvokeServer(inventory, item) end) end)
+		end
+	end
 
-		if loops["chest stealer"] then
+	-- 2. EVENT LISTENER: The millisecond a NEW item is added, steal it instantly
+	local conn = inventory.ChildAdded:Connect(function(item)
+		if item.Name ~= "ChestOwner" then
+            -- Re-highlight just in case it was empty and someone just dropped something in
+            highlightChestContainer(container) 
+			task.spawn(function() pcall(function() takeItem:InvokeServer(inventory, item) end) end)
+		end
+	end)
 
-			local humanoid = cachedHumanoid
+	activeChestHooks[container] = { conn = conn, inventory = inventory }
+end
 
-			if humanoid and humanoid.Health > 0 then
+-- ---------- START / STOP ----------
+local function stopChestStealer()
+	if chestStealerThread then
+		task.cancel(chestStealerThread)
+		chestStealerThread = nil
+	end
+	for container, _ in pairs(activeChestHooks) do unhookChest(container) end
+	hideChestHighlight()
+end
 
-				range = tonumber(ChestStealer.Values["Range"]) or 20
+local function startChestStealer()
+	if chestStealerThread then return end
 
-				chests, crates = findNearbyContainers(range)
+	chestStealerThread = task.spawn(function()
+		while loops["chest stealer"] do
+			local root = cachedHRP
+			local hum = cachedHumanoid
 
-				local highlightTarget
+			if root and hum and hum.Health > 0 then
+				local scanRange = (tonumber(ChestStealer.Values["Range"]) or 20) + 15
+				local dChests, dCrates = findNearbyContainers(scanRange, true)
 
+				local nearbyContainers = {}
+				local nearestContainer = nil
+				local nearestDist = math.huge
 
-				local function processInventory(container)
+				local function processDetected(c)
+					if not c or not c.Parent then return end
+					local dist = (c.Position - root.Position).Magnitude
+					
+					if dist <= scanRange then
+						nearbyContainers[c] = true
+						hookChest(c) -- Ensures it's hooked and swept
 
-					folder = container:FindFirstChild("ChestFolderValue")
-					inventory = folder and folder.Value
+						-- Check if it actually has items right now to highlight it
+						local hook = activeChestHooks[c]
+						local hasItems = false
+						if hook and hook.inventory then
+							for _, child in ipairs(hook.inventory:GetChildren()) do
+								if child.Name ~= "ChestOwner" then hasItems = true break end
+							end
+						end
 
-					if not inventory then return end
-
-					highlightTarget = container
-
-					for _, item in ipairs(inventory:GetChildren()) do
-
-						if item.Name ~= "ChestOwner" then
-
-							takeItem:InvokeServer(
-								inventory,
-								item
-							)
-
+						if hasItems and dist < nearestDist then
+							nearestDist = dist
+							nearestContainer = c
 						end
 					end
 				end
 
+				if ChestStealer.Values["Crates"] then for _, c in ipairs(dCrates) do processDetected(c) end end
+				if ChestStealer.Values["Chests"] then for _, c in ipairs(dChests) do processDetected(c) end end
 
-				if ChestStealer.Values["Crates"] then
-					for _, crate in ipairs(crates) do
-						processInventory(crate)
+				-- Cleanup hooks for chests we walked away from or were destroyed
+				for container, _ in pairs(activeChestHooks) do
+					if not nearbyContainers[container] or not container.Parent then
+						unhookChest(container)
 					end
 				end
 
-
-				if ChestStealer.Values["Chests"] then
-					for _, chest in ipairs(chests) do
-						processInventory(chest)
-					end
-				end
-
-
-				if highlightTarget then
-					chestStealBox.Parent = highlightTarget
-					chestStealBox.Position = highlightTarget.Position
-					chestStealBox.Color = ChestStealer.Values["Highlight Color"]
-
+				-- Update Highlight
+				if nearestContainer then
+					highlightChestContainer(nearestContainer)
 				else
-					chestStealBox.Parent = game.Lighting
+					hideChestHighlight()
 				end
 			end
 
-			task.wait() 
-
-		else
-			task.wait()
+			task.wait(1) -- ONLY runs once per second to find chests!
 		end
-	end
+		chestStealerThread = nil
+	end)
+end
 
-end)
+ChestStealer.Callbacks.OnToggle = function(state)
+	loops["chest stealer"] = state
+	if state then
+		startChestStealer()
+	else
+		stopChestStealer()
+	end
+end
 
 
 local autoBalloonThread = nil
@@ -8637,13 +8625,6 @@ ESP.Callbacks.OnToggle = function(state)
 		end
 
 		for _, p in pairs(Players:GetPlayers()) do hookPlayerEvents(p) end
-		espConnections["PlayerAdded"] = Players.PlayerAdded:Connect(hookPlayerEvents)
-
-		espConnections["PlayerRemoving"] = Players.PlayerRemoving:Connect(function(p)
-			if p.Character then removeESPContainer(p.Character) end
-			if espConnections[p.Name .. "_charAdded"] then espConnections[p.Name .. "_charAdded"]:Disconnect() end
-			if espConnections[p.Name .. "_charRemoving"] then espConnections[p.Name .. "_charRemoving"]:Disconnect() end
-		end)
 
 		espConnections["WorkspaceAdded"] = Workspace.ChildAdded:Connect(function(child)
 			task.wait(0.2)
@@ -8764,7 +8745,6 @@ local function checkAndConsume(child)
 	end
 end
 
-workspace.ChildAdded:Connect(checkAndConsume)
 
 for _, existingChild in ipairs(workspace:GetChildren()) do
 	task.spawn(checkAndConsume, existingChild)
@@ -8830,7 +8810,6 @@ local function processStar(child)
 	end
 end
 
-workspace.ChildAdded:Connect(processStar)
 
 task.spawn(function()
 	while task.wait(0.25) do
@@ -8953,51 +8932,6 @@ local function processMetal(model)
 	end
 end
 
-workspace.ChildAdded:Connect(function(child)
-	if child:IsA("Model") then
-		processMetal(child)
-	end
-
-	if loops["trap esp"] then
-		if child.Name == "snap_trap" and child:IsA("Part") then
-			child.Transparency = 0
-		end
-	end
-
-	if child:IsA("BasePart") then
-		if child.Name == "bed" then
-			if child.Parent.Name ~= "MapCFrames" then
-
-				if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then
-					table.insert(beds, child)
-				end
-			end
-		end
-	end
-
-	if child.Name == "tesla_trap" then
-		if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then
-			table.insert(teslas, child)
-		end
-	end
-
-	if child.Name == "beehive" then
-		if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then
-			table.insert(hives, child)
-		end
-	end
-
-	if child.Name == "lucky_block" then
-		if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then
-			table.insert(lucky_blocks, child)
-		end
-	end
-
-	if child.Name == "iron_ore_mesh_block" then
-		table.insert(iron_ores, child)
-
-	end
-end)
 
 task.spawn(function()
 	while task.wait(0.5) do
@@ -9030,12 +8964,6 @@ end)
 AutoHannah.Callbacks.OnToggle = function(state)
 	loops["auto hannah"] = state
 end
-
-Players.PlayerRemoving:Connect(function(player)
-	if player.Character then
-		hannahTargetsProcessing[player.Character] = nil
-	end
-end)
 
 task.spawn(function()
 	while task.wait(0.1) do 
@@ -9245,11 +9173,6 @@ local function processPetrifiedPlayer(model)
 	end
 end
 
-workspace.ChildAdded:Connect(function(child)
-	if child:IsA("Model") then
-		processPetrifiedPlayer(child)
-	end
-end)
 
 task.spawn(function()
 	while task.wait(0.02) do
@@ -9530,14 +9453,6 @@ end
 
 
 updateInventory()
-
-
-Player.CharacterAdded:Connect(function()
-
-	task.wait(0.2)
-	updateInventory()
-end)
-
 
 
 local function getSwordTier(inv)
@@ -10311,19 +10226,6 @@ end
 -- ===== callback ONCE, after the button exists =====
 
 
-workspace.ChildAdded:Connect(function(child)
-	if loops["auto whisper"] then
-		if child.Name == "ServerOwl" then
-			if child:GetAttribute("Owner") then
-				local owner = child:GetAttribute("Owner")
-				if owner == Player.UserId then
-					currentWhisper = child
-				end
-			end
-		end
-	end
-end)
-
 workspace.ChildRemoved:Connect(function(child)
 	if child == currentWhisper then
 		currentWhisper = nil
@@ -10341,7 +10243,7 @@ AutoWhisper.Callbacks.OnToggle = function(state)
 		task.spawn(function()
 			while loops["auto whisper"] do
 				task.wait(0.1)
-				
+
 				if currentWhisper and not currentWhisper.Parent then
 					currentWhisper = nil
 				end
@@ -10447,32 +10349,6 @@ entityDamaged.OnClientEvent:Connect(function()
 end)
 
 
-zap_reliable.OnClientEvent:Connect(function(b, instances)
-	eventId = buffer.readu8(b, 0)
-	if eventId == 0 then
-		local target = instances[1]
-
-		currentlyInFight = true
-		currentFightTarget = target
-
-
-		if not inCombat[Player.Name] then
-			print(Player.Name, "entered combat!")
-		end
-
-		if inCombat[Player.Name] then
-			task.cancel(inCombat[Player.Name])
-		end
-
-		inCombat[Player.Name] = task.delay(COMBAT_TIMEOUT, function()
-			inCombat[Player.Name] = nil
-			currentlyInFight = false
-			currentFightTarget = nil
-			print(Player.Name, "left combat!")
-		end)
-	end
-end)
-
 if workspace:FindFirstChild("BedESP") then workspace.BedESP:Destroy() end
 
 bedESPFolder = Instance.new("Folder", workspace)
@@ -10514,32 +10390,6 @@ BedESP.Callbacks.OnToggle = function(state)
 		end
 	end
 end
-
-game.Workspace.ChildAdded:Connect(function(child)
-	if loops["bedesp"] then
-		if child:IsA("BasePart") and child.Name == "bed" then
-			if child:FindFirstChild("Bed") then
-
-				if not workspace:FindFirstChild("BedESP") then
-					bedESPFolder = Instance.new("Folder", workspace)
-					bedESPFolder.Name = "BedESP"
-				end
-
-				highlight = Instance.new("Highlight", game.Workspace.BedESP)
-				highlight.Adornee = child:FindFirstChild("Bed")
-				highlight.FillColor = BedESP.Values["FillColor"]
-				highlight.FillTransparency = BedESP.Values["Fill Transparency"]
-				highlight.Name = "bedESPs"
-
-				if BedESP.Values["Use Outline"] then
-					highlight.OutlineColor = BedESP.Values["OutlineColor"]
-				else
-					highlight.OutlineTransparency = 1
-				end
-			end
-		end
-	end
-end)
 
 if workspace:FindFirstChild("noVoid") then
 	workspace.noVoid:Destroy()
@@ -10603,37 +10453,6 @@ end)
 
 
 
-Player.CharacterAdded:Connect(function(character)
-
-	character.ChildAdded:Connect(function(child)
-		if loops["sword skin changer"] then
-			task.wait(0.1) 
-			applySkin(character, child)
-		end
-	end)
-	for _, child in ipairs(character:GetChildren()) do
-		if loops["sword skin changer"] then
-			applySkin(character, child)
-		end
-	end
-
-	if loops["headless"] then
-		if character then
-			if character:FindFirstChild("Head") then
-				character.Head.Transparency = Headless.Values["Transparency"]
-				for i, v in pairs(character:GetDescendants()) do
-					if v:IsA("Decal") then
-						v.Transparency = Headless.Values["Transparency"]
-					end
-				end
-			end
-		end
-	end
-
-	if loops["animation disabler"] then
-		disableCurrentAnimations(character)
-	end
-end)
 
 if Player.Character then
 	Player.Character.ChildAdded:Connect(function(child)
@@ -10644,7 +10463,6 @@ if Player.Character then
 	end)
 end
 
-print("byeee")
 
 DamageIndictatorChanger.Callbacks.OnToggle = function(state)
 	loops["damage indictator changer"] = state
@@ -10663,41 +10481,6 @@ randomIndicatorTexts = {
 	"TOO FREE"
 }
 
-workspace.ChildAdded:Connect(function(child)
-	if loops["damage indictator changer"] then
-		if child.Name == "DamageIndicatorPart" then
-			billboard = child:FindFirstChild("BillboardGui")
-			if billboard then
-				frame = billboard:FindFirstChild("Frame")
-				if frame then
-					label = frame:FindFirstChild("TextLabel")
-					if label then
-						if DamageIndictatorChanger.Values["Random Color"] then
-							label.TextColor3 = Color3.new(math.random(),math.random(),math.random())
-						else
-							label.TextColor3 = DamageIndictatorChanger.Values["Color"]
-						end
-
-						if DamageIndictatorChanger.Values["Change Text"] then
-							if DamageIndictatorChanger.Values["Random Text"] then
-								text = randomIndicatorTexts[math.random(1, #randomIndicatorTexts)]
-								label.Text = text
-							else
-								label.Text = "FW DIFF"
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	if loops["trap esp"] then
-		if child.Name == "snap_trap" then
-			child.Transparency = 0
-		end
-	end
-end)
 
 PingExtender.Callbacks.OnToggle = function(state)
 	loops["ping extender"] = state
@@ -10705,11 +10488,9 @@ PingExtender.Callbacks.OnToggle = function(state)
 	if state and canRequire then
 		shared_constants.PingConstants.PING_COOLDOWN = PingExtender.Values["Cooldown"]
 		shared_constants.PingConstants.PING_LIFETIME = PingExtender.Values["Lifetime"]
-		print("doneeee")
 	elseif not state and canRequire then
 		shared_constants.PingConstants.PING_COOLDOWN = 2
 		shared_constants.PingConstants.PING_LIFETIME = 6
-		print("turn off")
 	end
 end
 
@@ -10762,7 +10543,7 @@ LongJump.Callbacks.OnToggle = function(state)
 										if currentItemName and currentItemName ~= "" then
 											oldItemInst = playerInv:FindFirstChild(currentItemName)
 										end
-										equipArgs = {{ hand = fireballInst.Name }}
+										equipArgs = {{ hand = "fireball" }}
 										netManaged:WaitForChild("SetInvItem"):InvokeServer(unpack(equipArgs))
 									end
 
@@ -10771,7 +10552,7 @@ LongJump.Callbacks.OnToggle = function(state)
 									local velocity = Vector3.new(0, -68, 0)
 
 									local fireArgs = {
-										fireballInst,
+										fireballInst.Name,
 										"fireball",
 										"fireball",
 										vec(origin.X, origin.Y, origin.Z),
@@ -10899,10 +10680,6 @@ if cachedChar then
 	SetupTrapDisabler(cachedChar)
 end
 
-Player.CharacterAdded:Connect(function(char)
-	task.wait(0.1)
-	SetupTrapDisabler(char)
-end)
 
 TrapESP.Callbacks.OnToggle = function(state)
 	loops["trap esp"] = state
@@ -11102,8 +10879,6 @@ task.spawn(function()
 end)
 
 zephyrStackIncrease.OnClientEvent:Connect(function(data)
-	print("Orb count:", data.orbCount)
-	print("Multiplier:", data.multiplier)
 
 	zephyrStacks = data.orbCount
 end)
@@ -11357,15 +11132,6 @@ ProjectileTargeting.DescendantAdded:Connect(function(child)
 
 end)
 
-workspace.ChildAdded:Connect(function(child)
-	if child:IsA("Model") then
-		processJailorSoul(child)
-	end
-
-	if loops["projectile tracers"] then
-		applyTracer(child, false)
-	end
-end)
 
 NoClickDelay.Callbacks.OnToggle = function(state)
 	loops["no click delay"] = state
@@ -11390,130 +11156,6 @@ sword_controller.isClickingTooFast = function(self)
 end
 
 
-local function isValidTarget(model)
-	-- 1. Basic safety checks
-	if not model or not model:IsA("Model") or model == Player.Character then 
-		return false 
-	end
-
-	-- 2. Component checks (Must have a Humanoid and HumanoidRootPart)
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local hrp = model:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not hrp or humanoid.Health <= 0 then 
-		return false 
-	end
-
-	-- 3. Check if it's a real Player
-	local targetPlayer = Players:GetPlayerFromCharacter(model)
-	if targetPlayer then
-		-- Exclude teammates
-		if targetPlayer.Team == Player.Team then 
-			return false 
-		end
-
-		-- Exclude spectators (Checks if their team name contains "Spectator")
-		if targetPlayer.Team and string.find(targetPlayer.Team.Name:lower(), "spectator") then
-			return false
-		end
-
-		return true -- Valid enemy player!
-	end
-
-	-- 4. Check if it's a valid Dummy (Name must end with "Dummy")
-	-- Using :lower() makes it work for both "Dummy" and "dummy"
-	if string.match(model.Name:lower(), "dummy$") then
-		return true -- Valid dummy!
-	end
-
-	-- If it's not a valid player and not a dummy, it's an NPC -> Ignore it
-	return false
-end
-
--- 1. Scan for the target nearest to the MOUSE
-local function getTargetNearMouse()
-	local mousePos = UserInputService:GetMouseLocation()
-	local nearestHRP = nil
-	local shortestDist = BowLock.Values["FOV"]
-
-	-- Scans the workspace for valid targets
-	for _, obj in ipairs(workspace:GetDescendants()) do 
-		if isValidTarget(obj) then
-			local hrp = obj:FindFirstChild("HumanoidRootPart")
-			local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
-
-			if onScreen then
-				local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-
-				if dist < shortestDist then
-					shortestDist = dist
-					nearestHRP = hrp
-				end
-			end
-		end
-	end
-
-	return nearestHRP
-end
-
--- 2. Handle the Camera Glide (With Drop Compensation)
-local function startTracking()
-	-- Prevent tracking from starting if the toggle is set to false
-	if not loops["bow lock"] then return end
-	if trackingConnection then return end
-
-	activeTarget = getTargetNearMouse()
-
-	if activeTarget then
-		trackingConnection = RunService.RenderStepped:Connect(function()
-			-- Break the lock if the toggle is turned off, or if the target becomes invalid
-			if not loops["bow lock"] or not activeTarget or not activeTarget.Parent or not isValidTarget(activeTarget.Parent) then
-				stopTracking()
-				return
-			end
-
-			-- Calculate the distance between the camera and the target
-			distance = (activeTarget.Position - camera.CFrame.Position).Magnitude
-
-			-- Drop compensation math
-			timeToTarget = distance / 240
-			dropCompensation = 0.5 * 36 * (timeToTarget ^ 2)
-
-			-- Aim slightly above the HRP (chest/head level) PLUS the drop compensation
-			targetPosition = activeTarget.Position + Vector3.new(0, 1 + dropCompensation, 0)
-
-			-- Calculate where the camera WANTS to look
-			goalCFrame = CFrame.lookAt(camera.CFrame.Position, targetPosition)
-
-			-- Glide the camera towards the goal smoothly
-			camera.CFrame = camera.CFrame:Lerp(goalCFrame, BowLock.Values["Smoothness"])
-		end)
-	end
-end
-
-local function stopTracking()
-	if trackingConnection then
-		trackingConnection:Disconnect()
-		trackingConnection = nil
-	end
-	activeTarget = nil
-end
-
-previewFolder.ChildAdded:Connect(function(child)
-	startTracking()
-end)
-
-previewFolder.ChildRemoved:Connect(function(child)
-	if #previewFolder:GetChildren() == 0 then
-		stopTracking()
-	end
-end)
-
-BowLock.Callbacks.OnToggled = function(state)
-	loops["bow lock"] = state
-	if not state then
-		stopTracking()
-	end
-end
 
 AutoClicker.Callbacks.OnToggle = function (state)
 	loops["auto clicker"] = state
@@ -11854,13 +11496,6 @@ Headless.Callbacks.OnToggle = function(state)
 		end
 	end	
 end
-
-Player.CharacterAdded:Connect(function(characterr)
-	head = characterr:WaitForChild("Head")
-	if head and loops["headless"] then
-		head.Transparency = Headless.Values["Transparency"]
-	end
-end)
 
 Night.Callbacks.OnToggle = function(state)
 	loops["night"] = state
@@ -12231,10 +11866,8 @@ end
 AnimationSwitch.Callbacks.OnToggle = function(state)
 	loops["animation disabler"] = state
 
-	print("asdasd")
 
 	if loops["animation disabler"] then
-		print("disabled")
 		disableCurrentAnimations(cachedChar)
 	else
 		animAnimator = cachedChar:FindFirstChild("Animate")
@@ -12256,26 +11889,20 @@ end
 
 AutoClicker.Callbacks.OnToggle = function(state)
 	loops["auto clicker"] = state
-	print("auto man")
 
 	if loops["auto clicker"] then
 		if autoClickerThread then task.cancel(autoClickerThread) end
-		print("asdasd")
 
 		autoClickerThread = task.spawn(function()
 			while loops["auto clicker"] do
-				print("block")
 				local char = Player.Character
 				local hum  = char:FindFirstChild("Humanoid")
 
 				if hum and hum.Health > 0 then
 					local tool = char:FindFirstChild("HandInvItem").Value  -- held item (not HandInvItem)
 					if tool then
-						print("asdasd")
 						local isSword = table.find(swords, tool.Name)
-						print("asdaczxcxcvcxvbxcvxcv")
 						if not isSword and AutoClicker.Values["Block Placement"] then
-							print("placeec")
 							placeBlockAtCursor()              -- holding a block -> place
 						elseif isSword and AutoClicker.Values["Sword Swings"] then
 							-- sword swing later
@@ -14360,7 +13987,6 @@ hlth_gui.IgnoreGuiInset = true
 hlth_gui.DisplayOrder = 200
 hlth_gui.Enabled = false
 hlth_gui.Parent =  PlayerGui
-print("")
 
 hlth_cont = Instance.new("Frame", hlth_gui)
 hlth_cont.Name = "HealthContainer"
@@ -17601,3 +17227,1262 @@ VulcanAimbot.Callbacks.OnToggle = function(state)
 end
 
 
+
+
+pickup_cs = game:GetService("CollectionService")
+pickup_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+pickup_remote = nil
+pcall(function()
+	pickup_remotes = require(pickup_rs:WaitForChild("TS", 4):WaitForChild("remotes", 4)).default
+	pickup_remote = pickup_remotes.Client:Get("PickupItemDrop")
+end)
+pickup_gen = 0
+qc_spawnTimes = {}
+
+ResourceCollector = Utility:CreateButton("Resource Collector", nil, true)
+ResourceCollector:CreateSlider("Pickup Range", 1, 50, 6, function(val)
+	if loops["resource collector"] then
+		pcall(function() Player:SetAttribute("ResourcePickupRange", val) end)
+	end
+end, 1)
+
+ResourceCollector.Callbacks.OnToggle = function(state)
+	loops["resource collector"] = state
+	if state then
+		pcall(function() Player:SetAttribute("ResourcePickupRange", ResourceCollector.Values["Pickup Range"] or 6) end)
+		pickup_gen = pickup_gen + 1
+		rc_myGen = pickup_gen
+		task.spawn(function()
+			while loops["resource collector"] and rc_myGen == pickup_gen do
+				task.wait(0.1)
+				pcall(function()
+					rc_char = Player.Character
+					rc_hrp = rc_char and rc_char:FindFirstChild("HumanoidRootPart")
+					if not rc_hrp then return end
+					rc_range = ResourceCollector.Values["Pickup Range"] or 6
+					rc_items = pickup_cs:GetTagged("ItemDrop")
+					rc_count = 0
+					for _, rc_item in ipairs(rc_items) do
+						if rc_count >= 5 then break end
+						if rc_item and rc_item.Parent then
+							rc_dist = (rc_hrp.Position - rc_item.Position).Magnitude
+							if rc_dist <= rc_range then
+								rc_ready = rc_item:GetAttribute("PickupReadyTime")
+								if rc_ready ~= nil and rc_ready < workspace:GetServerTimeNow() then
+									rc_last = rc_item:GetAttribute("ClientPickupAttemptTime")
+									if rc_last == nil or tick() - rc_last > 0.3 then
+										rc_item:SetAttribute("ClientPickupAttemptTime", tick())
+										if pickup_remote then
+											pcall(function() pickup_remote:CallServer({ itemDrop = rc_item }) end)
+										end
+										rc_count = rc_count + 1
+									end
+								end
+							end
+						end
+					end
+				end)
+			end
+		end)
+	else
+		pcall(function() Player:SetAttribute("ResourcePickupRange", nil) end)
+		pickup_gen = pickup_gen + 1
+	end
+end
+
+QuickCollect = Utility:CreateButton("QuickCollect", nil, true)
+QuickCollect:CreateSlider("Pickup Delay", 0, 0.3, 0, nil, 0.05)
+
+QuickCollect.Callbacks.OnToggle = function(state)
+	loops["quickcollect"] = state
+	if state then
+		pickup_gen = pickup_gen + 1
+		qc_myGen = pickup_gen
+		qc_conn = pickup_cs:GetInstanceAddedSignal("ItemDrop"):Connect(function(qc_item)
+			qc_spawnTimes[qc_item] = tick()
+		end)
+		task.spawn(function()
+			while loops["quickcollect"] and qc_myGen == pickup_gen do
+				task.wait(0.1)
+				pcall(function()
+					qc_char = Player.Character
+					qc_hrp = qc_char and qc_char:FindFirstChild("HumanoidRootPart")
+					if not qc_hrp then return end
+					qc_delay = QuickCollect.Values["Pickup Delay"] or 0
+					qc_range = 6
+					if loops["resource collector"] and ResourceCollector then
+						qc_range = ResourceCollector.Values["Pickup Range"] or 6
+					end
+					qc_items = pickup_cs:GetTagged("ItemDrop")
+					qc_count = 0
+					for _, qc_item in ipairs(qc_items) do
+						if qc_count >= 5 then break end
+						if qc_item and qc_item.Parent then
+							qc_spawn = qc_spawnTimes[qc_item]
+							if qc_spawn and tick() - qc_spawn >= qc_delay then
+								qc_dist = (qc_hrp.Position - qc_item.Position).Magnitude
+								if qc_dist <= qc_range then
+									qc_last = qc_item:GetAttribute("ClientPickupAttemptTime")
+									if qc_last == nil or tick() - qc_last > 0.1 then
+										qc_item:SetAttribute("ClientPickupAttemptTime", tick())
+										if pickup_remote then
+											pcall(function() pickup_remote:CallServer({ itemDrop = qc_item }) end)
+										end
+										qc_count = qc_count + 1
+									end
+								end
+							end
+						end
+					end
+					for qc_item in pairs(qc_spawnTimes) do
+						if not qc_item.Parent then qc_spawnTimes[qc_item] = nil end
+					end
+				end)
+			end
+		end)
+	else
+		pickup_gen = pickup_gen + 1
+		if qc_conn then qc_conn:Disconnect(); qc_conn = nil end
+		qc_spawnTimes = {}
+		for _, qc_item in ipairs(pickup_cs:GetTagged("ItemDrop")) do
+			pcall(function() qc_item:SetAttribute("ClientPickupAttemptTime", nil) end)
+		end
+	end
+end
+
+-- ============================================================
+--  SHARED
+-- ============================================================
+sm_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+sm_cs = game:GetService("CollectionService")
+sm_rs2 = game:GetService("RunService")
+sm_items = nil
+pcall(function() sm_items = require(sm_rs:WaitForChild("TS", 4):WaitForChild("item", 4):WaitForChild("item-meta", 4)).items end)
+sm_blockNet = nil
+pcall(function()
+	sm_blockNet = sm_rs:WaitForChild("rbxts_include", 4):WaitForChild("node_modules", 4):WaitForChild("@easy-games", 4):WaitForChild("block-engine", 4):WaitForChild("node_modules", 4):WaitForChild("@rbxts", 4):WaitForChild("net", 4):WaitForChild("out", 4):WaitForChild("_NetManaged", 4)
+end)
+sm_placeRemote = sm_blockNet and sm_blockNet:FindFirstChild("PlaceBlock") or nil
+sm_GRID = 3
+
+-- ============================================================
+--  COMBAT: FastBow
+-- ============================================================
+fb_orig = {}
+fb_bowKeys = { "wood_bow", "wood_crossbow", "tactical_crossbow", "tactical_headhunter", "feather_bow", "falconer_bow", "falconer_crossbow", "falconer_headhunter", "headhunter", "golden_bow", "flower_bow", "flower_crossbow", "flower_headhunter", "life_bow", "life_crossbow", "life_headhunter", "orions_belt_bow", "rainbow_bow" }
+
+FastBow = Combat:CreateButton("FastBow", nil, true)
+FastBow:CreateSlider("Fire Delay Mult", 0, 1, 0.1, function(v) if loops["fastbow"] then fbApply() end end, 0.05)
+FastBow:CreateSlider("Charge Time Mult", 0, 1, 0.1, function(v) if loops["fastbow"] then fbApply() end end, 0.05)
+FastBow:CreateSlider("Min Strength", 0, 1, 1, function(v) if loops["fastbow"] then fbApply() end end, 0.05)
+
+function fbApply()
+	if not sm_items then return end
+	for _, fb_k in ipairs(fb_bowKeys) do
+		fb_m = sm_items[fb_k]
+		if fb_m and fb_m.projectileSource then
+			if not fb_orig[fb_k] then
+				fb_orig[fb_k] = { fd = fb_m.projectileSource.fireDelaySec, mc = fb_m.projectileSource.maxStrengthChargeSec, ms = fb_m.projectileSource.minStrengthScalar }
+			end
+			fb_m.projectileSource.fireDelaySec = (fb_orig[fb_k].fd or 0.6) * (FastBow.Values["Fire Delay Mult"] or 0.1)
+			if fb_m.projectileSource.maxStrengthChargeSec then fb_m.projectileSource.maxStrengthChargeSec = (fb_orig[fb_k].mc or 0.65) * (FastBow.Values["Charge Time Mult"] or 0.1) end
+			if fb_m.projectileSource.minStrengthScalar then fb_m.projectileSource.minStrengthScalar = FastBow.Values["Min Strength"] or 1 end
+		end
+	end
+end
+
+function fbRestore()
+	if not sm_items then return end
+	for fb_k, fb_o in pairs(fb_orig) do
+		fb_m = sm_items[fb_k]
+		if fb_m and fb_m.projectileSource then
+			fb_m.projectileSource.fireDelaySec = fb_o.fd
+			if fb_o.mc then fb_m.projectileSource.maxStrengthChargeSec = fb_o.mc end
+			if fb_o.ms then fb_m.projectileSource.minStrengthScalar = fb_o.ms end
+		end
+	end
+	fb_orig = {}
+end
+
+FastBow.Callbacks.OnToggle = function(state)
+	loops["fastbow"] = state
+	if state then fbApply() else fbRestore() end
+end
+
+-- ============================================================
+--  COMBAT: BowAssist
+-- ============================================================
+BowAssist = Combat:CreateButton("BowAssist", nil, true)
+BowAssist:CreateSlider("FOV", 1, 180, 60, nil, 1)
+BowAssist:CreateSlider("Smoothness", 0.01, 1, 0.15, nil, 0.01)
+BowAssist:CreateSlider("Range", 1, 500, 200, nil, 1)
+BowAssist:CreateToggle("Target Players", true, nil)
+BowAssist:CreateToggle("Target NPCs", false, nil)
+BowAssist:CreateToggle("Ignore Team", true, nil)
+BowAssist:CreateToggle("Ignore Walls", true, nil)
+BowAssist:CreateToggle("Only When Drawing", true, nil)
+BowAssist:CreateToggle("Vertical Assist", true, nil)
+BowAssist:CreateToggle("Horizontal Assist", true, nil)
+
+ba_raycast = RaycastParams.new()
+ba_raycast.FilterType = Enum.RaycastFilterType.Exclude
+
+function baIsBowEquipped()
+	ba_char = Player.Character
+	if not ba_char then return false end
+	ba_hi = ba_char:FindFirstChild("HandInvItem")
+	if not ba_hi or not ba_hi.Value then return false end
+	ba_name = tostring(ba_hi.Value.Name):lower()
+	return ba_name:find("bow") ~= nil or ba_name:find("crossbow") ~= nil or ba_name:find("headhunter") ~= nil
+end
+
+function baHasLOS(from, to)
+	ba_char = Player.Character
+	if not ba_char then return true end
+	ba_raycast.FilterDescendantsInstances = { ba_char }
+	ba_hit = workspace:Raycast(from, to - from, ba_raycast)
+	return ba_hit == nil
+end
+
+function baFindTarget()
+	ba_cam = workspace.CurrentCamera
+	if not ba_cam then return nil end
+	ba_camPos = ba_cam.CFrame.Position
+	ba_lookDir = ba_cam.CFrame.LookVector
+	ba_fovRad = math.rad(BowAssist.Values["FOV"] or 60)
+	ba_range = BowAssist.Values["Range"] or 200
+	ba_best = nil
+	ba_bestAngle = ba_fovRad
+
+	if BowAssist.Values["Target Players"] then
+		for _, ba_plr in ipairs(Players:GetPlayers()) do
+			if ba_plr ~= Player and ba_plr.Character then
+				ba_hum = ba_plr.Character:FindFirstChildOfClass("Humanoid")
+				ba_root = ba_plr.Character:FindFirstChild("HumanoidRootPart")
+				if ba_hum and ba_root and ba_hum.Health > 0 then
+					if BowAssist.Values["Ignore Team"] and Player.Team and ba_plr.Team == Player.Team then continue end
+					ba_dist = (ba_root.Position - ba_camPos).Magnitude
+					if ba_dist <= ba_range then
+						ba_dir = (ba_root.Position - ba_camPos).Unit
+						ba_angle = math.acos(math.clamp(ba_lookDir:Dot(ba_dir), -1, 1))
+						if ba_angle < ba_bestAngle then
+							if not BowAssist.Values["Ignore Walls"] or baHasLOS(ba_camPos, ba_root.Position) then
+								ba_bestAngle = ba_angle
+								ba_best = ba_root.Position
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if BowAssist.Values["Target NPCs"] and typeof(EntityCache) == "table" and EntityCache.npcs then
+		for _, ba_npc in ipairs(EntityCache.npcs) do
+			ba_root = ba_npc:FindFirstChild("HumanoidRootPart") or ba_npc.PrimaryPart
+			ba_hum = ba_npc:FindFirstChildOfClass("Humanoid")
+			if ba_root and ba_hum and ba_hum.Health > 0 then
+				ba_dist = (ba_root.Position - ba_camPos).Magnitude
+				if ba_dist <= ba_range then
+					ba_dir = (ba_root.Position - ba_camPos).Unit
+					ba_angle = math.acos(math.clamp(ba_lookDir:Dot(ba_dir), -1, 1))
+					if ba_angle < ba_bestAngle then
+						if not BowAssist.Values["Ignore Walls"] or baHasLOS(ba_camPos, ba_root.Position) then
+							ba_bestAngle = ba_angle
+							ba_best = ba_root.Position
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return ba_best
+end
+
+BowAssist.Callbacks.OnToggle = function(state)
+	loops["bowassist"] = state
+	if state then
+		ba_conn = sm_rs2.RenderStepped:Connect(function()
+			if not loops["bowassist"] then return end
+			if BowAssist.Values["Only When Drawing"] and not baIsBowEquipped() then return end
+			ba_target = baFindTarget()
+			if not ba_target then return end
+			ba_cam = workspace.CurrentCamera
+			if not ba_cam then return end
+			ba_targetCF = CFrame.new(ba_cam.CFrame.Position, ba_target)
+			ba_smooth = BowAssist.Values["Smoothness"] or 0.15
+			ba_curLook = ba_cam.CFrame.LookVector
+			ba_newLook = ba_targetCF.LookVector
+			ba_finalX = ba_curLook.X
+			ba_finalY = ba_curLook.Y
+			ba_finalZ = ba_curLook.Z
+			if BowAssist.Values["Horizontal Assist"] then
+				ba_finalX = ba_curX + (ba_newLook.X - ba_curLook.X) * ba_smooth
+				ba_finalZ = ba_curLook.Z + (ba_newLook.Z - ba_curLook.Z) * ba_smooth
+			end
+			if BowAssist.Values["Vertical Assist"] then
+				ba_finalY = ba_curLook.Y + (ba_newLook.Y - ba_curLook.Y) * ba_smooth
+			end
+			ba_cam.CFrame = CFrame.new(ba_cam.CFrame.Position, ba_cam.CFrame.Position + Vector3.new(ba_finalX, ba_finalY, ba_finalZ))
+		end)
+	else
+		if ba_conn then ba_conn:Disconnect(); ba_conn = nil end
+	end
+end
+
+-- ============================================================
+--  COMBAT: Projectile ESP
+-- ============================================================
+ProjectileESP = Combat:CreateButton("Projectile ESP", nil, true)
+ProjectileESP:CreateToggle("Show Projectiles", true, nil)
+ProjectileESP:CreateToggle("Show Trajectory", true, nil)
+ProjectileESP:CreateToggle("Enemy Only", true, nil)
+ProjectileESP:CreateSlider("Trajectory Length", 0.1, 3, 1, nil, 0.1)
+ProjectileESP:CreateColorPicker("Projectile Color", Color3.fromRGB(255, 80, 80), nil)
+ProjectileESP:CreateColorPicker("Trajectory Color", Color3.fromRGB(255, 200, 50), nil)
+ProjectileESP:CreateSlider("Trail Thickness", 0.05, 0.5, 0.15, nil, 0.05)
+
+pe_projectiles = {}
+pe_parts = {}
+pe_netConn = nil
+pe_renderConn = nil
+pe_rs = (typeof(paRS) == "Instance") and paRS or game:GetService("ReplicatedStorage")
+pe_netFolder = nil
+pcall(function()
+	pe_netFolder = pe_rs:WaitForChild("rbxts_include", 4):WaitForChild("node_modules", 4):WaitForChild("@rbxts", 4):WaitForChild("net", 4):WaitForChild("out", 4):WaitForChild("_NetManaged", 4)
+end)
+
+function peParseLaunch(data)
+	if typeof(data) ~= "table" then return end
+	pe_pos = nil
+	pe_vel = nil
+	pe_shooter = nil
+	for pe_k, pe_v in pairs(data) do
+		if typeof(pe_v) == "Vector3" then
+			if pe_k:lower():find("pos") or pe_k:lower():find("from") or pe_k:lower():find("origin") then pe_pos = pe_v
+			elseif pe_k:lower():find("vel") or pe_k:lower():find("dir") or pe_k:lower():find("force") then pe_vel = pe_v end
+		elseif typeof(pe_v) == "table" then
+			for pe_k2, pe_v2 in pairs(pe_v) do
+				if typeof(pe_v2) == "Vector3" then
+					if pe_k2:lower():find("pos") or pe_k2:lower():find("from") then pe_pos = pe_v2
+					elseif pe_k2:lower():find("vel") or pe_k2:lower():find("dir") then pe_vel = pe_v2 end
+				end
+			end
+		end
+		if pe_k:lower():find("shooter") or pe_k:lower():find("owner") or pe_k:lower():find("player") then
+			if typeof(pe_v) == "Instance" and pe_v:IsA("Player") then pe_shooter = pe_v
+			elseif typeof(pe_v) == "number" then pe_shooter = Players:GetPlayerByUserId(pe_v) end
+		end
+	end
+	if pe_pos and pe_vel and pe_vel.Magnitude > 1 then
+		table.insert(pe_projectiles, { pos = pe_pos, vel = pe_vel, shooter = pe_shooter, time = os.clock(), life = ProjectileESP.Values["Trajectory Length"] or 1 })
+	end
+end
+
+function peCleanup()
+	for _, pe_p in pairs(pe_parts) do pcall(function() pe_p:Destroy() end) end
+	pe_parts = {}
+	pe_projectiles = {}
+end
+
+ProjectileESP.Callbacks.OnToggle = function(state)
+	loops["projectile esp"] = state
+	if state then
+		pe_projectiles = {}
+		pe_parts = {}
+		if pe_netFolder then
+			pe_launchRemote = pe_netFolder:FindFirstChild("ProjectileLaunchClient")
+			if pe_launchRemote then
+				pe_netConn = pe_launchRemote.OnClientEvent:Connect(function(...)
+					if not loops["projectile esp"] then return end
+					for _, pe_arg in ipairs({ ... }) do peParseLaunch(pe_arg) end
+				end)
+			end
+		end
+		pe_renderConn = sm_rs2.RenderStepped:Connect(function()
+			if not loops["projectile esp"] then return end
+			for _, pe_p in pairs(pe_parts) do pcall(function() pe_p:Destroy() end) end
+			pe_parts = {}
+			pe_now = os.clock()
+			pe_maxLife = ProjectileESP.Values["Trajectory Length"] or 1
+			pe_alive = {}
+			for _, pe_proj in ipairs(pe_projectiles) do
+				if pe_now - pe_proj.time < pe_maxLife then
+					if ProjectileESP.Values["Enemy Only"] and pe_proj.shooter == Player then continue end
+					pe_elapsed = pe_now - pe_proj.time
+					pe_curPos = pe_proj.pos + pe_proj.vel * pe_elapsed + Vector3.new(0, -0.5 * workspace.Gravity * pe_elapsed * pe_elapsed, 0)
+					if ProjectileESP.Values["Show Projectiles"] then
+						pe_dot = Instance.new("Part")
+						pe_dot.Size = Vector3.new(0.4, 0.4, 0.4)
+						pe_dot.Shape = Enum.PartType.Ball
+						pe_dot.Color = ProjectileESP.Values["Projectile Color"] or Color3.fromRGB(255, 80, 80)
+						pe_dot.Material = Enum.Material.Neon
+						pe_dot.Anchored = true
+						pe_dot.CanCollide = false
+						pe_dot.CanQuery = false
+						pe_dot.CanTouch = false
+						pe_dot.CastShadow = false
+						pe_dot.CFrame = CFrame.new(pe_curPos)
+						pe_dot.Parent = workspace
+						table.insert(pe_parts, pe_dot)
+					end
+					if ProjectileESP.Values["Show Trajectory"] then
+						pe_steps = 12
+						pe_prevPos = pe_curPos
+						for pe_i = 1, pe_steps do
+							pe_t = pe_elapsed + (pe_i / pe_steps) * 0.5
+							pe_nextPos = pe_proj.pos + pe_proj.vel * pe_t + Vector3.new(0, -0.5 * workspace.Gravity * pe_t * pe_t, 0)
+							pe_dist = (pe_nextPos - pe_prevPos).Magnitude
+							if pe_dist > 0.01 then
+								pe_trail = Instance.new("Part")
+								pe_trail.Size = Vector3.new(ProjectileESP.Values["Trail Thickness"] or 0.15, pe_dist, ProjectileESP.Values["Trail Thickness"] or 0.15)
+								pe_trail.Color = ProjectileESP.Values["Trajectory Color"] or Color3.fromRGB(255, 200, 50)
+								pe_trail.Material = Enum.Material.Neon
+								pe_trail.Transparency = 0.3 + (pe_i / pe_steps) * 0.6
+								pe_trail.Anchored = true
+								pe_trail.CanCollide = false
+								pe_trail.CanQuery = false
+								pe_trail.CanTouch = false
+								pe_trail.CastShadow = false
+								pe_trail.CFrame = CFrame.new((pe_prevPos + pe_nextPos) / 2, pe_nextPos) * CFrame.Angles(math.rad(90), 0, 0)
+								pe_trail.Parent = workspace
+								table.insert(pe_parts, pe_trail)
+							end
+							pe_prevPos = pe_nextPos
+						end
+					end
+					table.insert(pe_alive, pe_proj)
+				end
+			end
+			pe_projectiles = pe_alive
+		end)
+	else
+		if pe_netConn then pe_netConn:Disconnect(); pe_netConn = nil end
+		if pe_renderConn then pe_renderConn:Disconnect(); pe_renderConn = nil end
+		peCleanup()
+	end
+end
+
+-- ============================================================
+--  MOVEMENT: NoSlowdown
+-- ============================================================
+ns_orig = {}
+
+NoSlowdown = Movement:CreateButton("NoSlowdown", nil, true)
+NoSlowdown:CreateToggle("Remove Bow Slowdown", true, nil)
+NoSlowdown:CreateToggle("Remove Consumable Slowdown", true, nil)
+NoSlowdown:CreateToggle("Remove Charge Slowdown", true, nil)
+
+function nsApply()
+	if not sm_items then return end
+	for ns_k, ns_m in pairs(sm_items) do
+		if ns_m.projectileSource and ns_m.projectileSource.walkSpeedMultiplier then
+			if NoSlowdown.Values["Remove Bow Slowdown"] then
+				if not ns_orig[ns_k .. "_proj"] then ns_orig[ns_k .. "_proj"] = ns_m.projectileSource.walkSpeedMultiplier end
+				ns_m.projectileSource.walkSpeedMultiplier = 1
+			end
+		end
+		if ns_m.consumable and ns_m.consumable.walkSpeedMultiplier then
+			if NoSlowdown.Values["Remove Consumable Slowdown"] then
+				if not ns_orig[ns_k .. "_cons"] then ns_orig[ns_k .. "_cons"] = ns_m.consumable.walkSpeedMultiplier end
+				ns_m.consumable.walkSpeedMultiplier = 1
+			end
+		end
+		if ns_m.sword and ns_m.sword.chargedAttack and ns_m.sword.chargedAttack.walkSpeedModifier then
+			if NoSlowdown.Values["Remove Charge Slowdown"] then
+				if not ns_orig[ns_k .. "_charge"] then ns_orig[ns_k .. "_charge"] = ns_m.sword.chargedAttack.walkSpeedModifier.multiplier end
+				ns_m.sword.chargedAttack.walkSpeedModifier.multiplier = 1
+			end
+		end
+	end
+end
+
+function nsRestore()
+	if not sm_items then return end
+	for ns_k, ns_v in pairs(ns_orig) do
+		ns_base, ns_suffix = ns_k:match("^(.+)_(proj)$")
+		if ns_base and sm_items[ns_base] and sm_items[ns_base].projectileSource then sm_items[ns_base].projectileSource.walkSpeedMultiplier = ns_v end
+		ns_base, ns_suffix = ns_k:match("^(.+)_(cons)$")
+		if ns_base and sm_items[ns_base] and sm_items[ns_base].consumable then sm_items[ns_base].consumable.walkSpeedMultiplier = ns_v end
+		ns_base, ns_suffix = ns_k:match("^(.+)_(charge)$")
+		if ns_base and sm_items[ns_base] and sm_items[ns_base].sword and sm_items[ns_base].sword.chargedAttack then ns_base.sword.chargedAttack.walkSpeedModifier.multiplier = ns_v end
+	end
+	ns_orig = {}
+end
+
+NoSlowdown.Callbacks.OnToggle = function(state)
+	loops["noslowdown"] = state
+	if state then nsApply() else nsRestore() end
+end
+
+-- ============================================================
+--  MOVEMENT: Scaffold
+-- ============================================================
+Scaffold = Movement:CreateButton("Scaffold", nil, true)
+Scaffold:CreateDropdown("Mode", { "Straight", "Diagonal", "Both", "Tower" }, "Straight", nil)
+Scaffold:CreateDropdown("Block Type", { "wool_white", "wool_blue", "wool_red", "wool_green", "wool_orange", "wool_yellow", "wool_pink", "wool_cyan", "wool_purple", "wool_brown", "stone_bricks", "oak_plank" }, "wool_white", nil)
+Scaffold:CreateSlider("Extend", 1, 5, 1, nil, 1)
+Scaffold:CreateToggle("Tower", false, nil)
+Scaffold:CreateToggle("Safe Walk", true, nil)
+Scaffold:CreateToggle("Sprint", true, nil)
+
+sc_lastPlace = 0
+sc_lastGrid = nil
+sc_hbConn = nil
+sc_raycast = RaycastParams.new()
+sc_raycast.FilterType = Enum.RaycastFilterType.Exclude
+
+function scWorldToGrid(pos)
+	return Vector3.new(math.round(pos.X / sm_GRID), math.round(pos.Y / sm_GRID), math.round(pos.Z / sm_GRID))
+end
+
+function scGridToWorld(grid)
+	return Vector3.new(grid.X * sm_GRID + sm_GRID / 2, grid.Y * sm_GRID + sm_GRID / 2, grid.Z * sm_GRID + sm_GRID / 2)
+end
+
+function scHasSupport(gridPos, char)
+	sc_raycast.FilterDescendantsInstances = { char }
+	sc_origin = scGridToWorld(gridPos + Vector3.new(0, 1, 0))
+	sc_hit = workspace:Raycast(sc_origin, Vector3.new(0, -sm_GRID - 0.5, 0), sc_raycast)
+	return sc_hit ~= nil
+end
+
+function scPlaceBlock(gridPos, char)
+	if not sm_placeRemote then return end
+	sc_below = gridPos - Vector3.new(0, 1, 0)
+	sc_hitWorld = scGridToWorld(sc_below) + Vector3.new(0, sm_GRID / 2, 0)
+	pcall(function()
+		sm_placeRemote:InvokeServer({
+			position = Vector3.new(gridPos.X, gridPos.Y, gridPos.Z),
+			blockType = Scaffold.Values["Block Type"] or "wool_white",
+			blockData = 0,
+			mouseBlockInfo = {
+				target = {
+					blockRef = { blockPosition = Vector3.new(sc_below.X, sc_below.Y, sc_below.Z) },
+					hitPosition = Vector3.new(sc_hitWorld.X, sc_hitWorld.Y, sc_hitWorld.Z),
+					hitNormal = Vector3.new(0, 1, 0),
+				},
+				placementPosition = Vector3.new(gridPos.X, gridPos.Y, gridPos.Z),
+			},
+		})
+	end)
+end
+
+function scGetMoveDirs(hum, cam)
+	sc_moveDir = hum.MoveDirection
+	if sc_moveDir.Magnitude < 0.1 then return {} end
+	sc_moveDir = Vector3.new(sc_moveDir.X, 0, sc_moveDir.Z).Unit
+	sc_mode = Scaffold.Values["Mode"] or "Straight"
+	sc_dirs = {}
+	sc_straight = Vector3.new(math.round(sc_moveDir.X), 0, math.round(sc_moveDir.Z))
+	if sc_straight.Magnitude > 0 then sc_straight = sc_straight.Unit end
+
+	if sc_mode == "Straight" or sc_mode == "Both" then
+		if sc_straight.Magnitude > 0 then table.insert(sc_dirs, Vector3.new(math.round(sc_straight.X), 0, math.round(sc_straight.Z))) end
+	end
+	if sc_mode == "Diagonal" or sc_mode == "Both" then
+		sc_camLook = cam.CFrame.LookVector
+		sc_camFlat = Vector3.new(sc_camLook.X, 0, sc_camLook.Z)
+		if sc_camFlat.Magnitude > 0.1 then
+			sc_camFlat = sc_camFlat.Unit
+			sc_diag1 = Vector3.new(math.round(sc_camFlat.X + sc_straight.X), 0, math.round(sc_camFlat.Z + sc_straight.Z))
+			if sc_diag1.Magnitude > 0 then table.insert(sc_dirs, sc_diag1) end
+		end
+	end
+	return sc_dirs
+end
+
+Scaffold.Callbacks.OnToggle = function(state)
+	loops["scaffold"] = state
+	if state then
+		sc_lastPlace = 0
+		sc_lastGrid = nil
+		sc_hbConn = sm_rs2.Heartbeat:Connect(function()
+			if not loops["scaffold"] then return end
+			sc_char = Player.Character
+			if not sc_char then return end
+			sc_hrp = sc_char:FindFirstChild("HumanoidRootPart")
+			sc_hum = sc_char:FindFirstChildOfClass("Humanoid")
+			sc_cam = workspace.CurrentCamera
+			if not sc_hrp or not sc_hum or not sc_cam or sc_hum.Health <= 0 then return end
+
+			sc_feet = sc_hrp.Position - Vector3.new(0, 1.5, 0)
+			sc_feetGrid = scWorldToGrid(sc_feet)
+			sc_mode = Scaffold.Values["Mode"] or "Straight"
+
+			if sc_mode == "Tower" or Scaffold.Values["Tower"] then
+				sc_camLook = sc_cam.CFrame.LookVector
+				if sc_camLook.Y > 0.5 then
+					sc_towerGrid = sc_feetGrid + Vector3.new(0, 1, 0)
+					if sc_lastGrid ~= sc_towerGrid then
+						scPlaceBlock(sc_towerGrid, sc_char)
+						sc_lastGrid = sc_towerGrid
+					end
+					return
+				end
+			end
+
+			sc_dirs = scGetMoveDirs(sc_hum, sc_cam)
+			if #sc_dirs == 0 then return end
+
+			sc_extend = Scaffold.Values["Extend"] or 1
+			for _, sc_dir in ipairs(sc_dirs) do
+				for sc_i = 1, sc_extend do
+					sc_nextGrid = sc_feetGrid + sc_dir * sc_i
+					if sc_lastGrid == sc_nextGrid then continue end
+					if scHasSupport(sc_nextGrid, sc_char) then
+						scPlaceBlock(sc_nextGrid, sc_char)
+						sc_lastGrid = sc_nextGrid
+					end
+				end
+			end
+
+			if Scaffold.Values["Safe Walk"] then
+				sc_aheadGrid = sc_feetGrid + Vector3.new(math.round(sc_hum.MoveDirection.X), 0, math.round(sc_hum.MoveDirection.Z))
+				if not scHasSupport(sc_aheadGrid - Vector3.new(0, 1, 0), sc_char) then
+					sc_hum.WalkSpeed = math.min(sc_hum.WalkSpeed, 8)
+				end
+			end
+		end)
+	else
+		if sc_hbConn then sc_hbConn:Disconnect(); sc_hbConn = nil end
+		sc_lastGrid = nil
+	end
+end
+
+-- ============================================================
+--  VISUALS: Generator ESP
+-- ============================================================
+GeneratorESP = Visuals:CreateButton("Generator ESP", nil, true)
+GeneratorESP:CreateToggle("Show Generators", true, nil)
+GeneratorESP:CreateToggle("Show Level", true, nil)
+GeneratorESP:CreateToggle("Show Cooldown", true, nil)
+GeneratorESP:CreateToggle("Show Distance", true, nil)
+GeneratorESP:CreateToggle("Show Team Generators", true, nil)
+GeneratorESP:CreateToggle("Show Global Generators", true, nil)
+GeneratorESP:CreateColorPicker("Generator Color", Color3.fromRGB(255, 200, 50), nil)
+GeneratorESP:CreateColorPicker("Team Gen Color", Color3.fromRGB(50, 200, 255), nil)
+GeneratorESP:CreateSlider("Text Size", 8, 24, 13, nil, 1)
+GeneratorESP:CreateSlider("Max Distance", 10, 500, 300, nil, 10)
+
+ge_objects = {}
+ge_conns = {}
+ge_dropTimes = {}
+
+function geCreateESP(inst)
+	if ge_objects[inst] then return end
+	ge_bb = Instance.new("BillboardGui")
+	ge_bb.Size = UDim2.fromOffset(180, 50)
+	ge_bb.StudsOffset = Vector3.new(0, 3, 0)
+	ge_bb.AlwaysOnTop = true
+	ge_bb.Parent = inst
+	ge_lbl = Instance.new("TextLabel")
+	ge_lbl.Size = UDim2.fromScale(1, 1)
+	ge_lbl.BackgroundTransparency = 1
+	ge_lbl.TextColor3 = GeneratorESP.Values["Generator Color"] or Color3.fromRGB(255, 200, 50)
+	ge_lbl.TextSize = GeneratorESP.Values["Text Size"] or 13
+	ge_lbl.Font = Enum.Font.GothamBold
+	ge_lbl.TextStrokeTransparency = 0
+	ge_lbl.TextStrokeColor3 = Color3.fromRGB(15, 15, 15)
+	ge_lbl.Text = "Generator"
+	ge_lbl.Parent = ge_bb
+	ge_objects[inst] = { bb = ge_bb, lbl = ge_lbl, isTeam = inst:GetAttribute("teamId") ~= nil }
+end
+
+function geRemoveESP(inst)
+	if ge_objects[inst] then
+		pcall(function() ge_objects[inst].bb:Destroy() end)
+		ge_objects[inst] = nil
+	end
+end
+
+function geUpdateLabels()
+	ge_char = Player.Character
+	ge_hrp = ge_char and ge_char:FindFirstChild("HumanoidRootPart")
+	if not ge_hrp then return end
+	ge_maxDist = GeneratorESP.Values["Max Distance"] or 300
+	for ge_inst, ge_data in pairs(ge_objects) do
+		if not ge_inst.Parent then geRemoveESP(ge_inst) continue end
+		ge_pos = ge_inst.Position or (ge_inst:GetAttribute("position"))
+		if not ge_pos then continue end
+		ge_dist = (ge_pos - ge_hrp.Position).Magnitude
+		if ge_dist > ge_maxDist then ge_data.bb.Enabled = false continue end
+		ge_data.bb.Enabled = true
+		ge_lines = {}
+		ge_name = ge_inst.Name or "Generator"
+		if ge_inst:GetAttribute("teamId") then ge_name = "Team Generator" end
+		table.insert(ge_lines, ge_name)
+		if GeneratorESP.Values["Show Level"] then
+			ge_lvl = ge_inst:GetAttribute("GeneratorLevel") or 0
+			table.insert(ge_lines, "Level: " .. tostring(ge_lvl))
+		end
+		if GeneratorESP.Values["Show Cooldown"] then
+			ge_cd = ge_inst:GetAttribute("Cooldown") or 0
+			ge_lastDrop = ge_dropTimes[ge_inst] or 0
+			ge_elapsed = os.clock() - ge_lastDrop
+			ge_remaining = math.max(0, ge_cd - ge_elapsed)
+			table.insert(ge_lines, "Next: " .. string.format("%.1fs", ge_remaining))
+		end
+		if GeneratorESP.Values["Show Distance"] then
+			table.insert(ge_lines, string.format("%d studs", math.round(ge_dist)))
+		end
+		ge_data.lbl.Text = table.concat(ge_lines, "\n")
+		ge_data.lbl.TextColor3 = ge_data.isTeam and (GeneratorESP.Values["Team Gen Color"] or Color3.fromRGB(50, 200, 255)) or (GeneratorESP.Values["Generator Color"] or Color3.fromRGB(255, 200, 50))
+		ge_data.lbl.TextSize = GeneratorESP.Values["Text Size"] or 13
+	end
+end
+
+GeneratorESP.Callbacks.OnToggle = function(state)
+	loops["generator esp"] = state
+	if state then
+		ge_objects = {}
+		ge_conns = {}
+		for _, ge_inst in ipairs(sm_cs:GetTagged("Generator")) do geCreateESP(ge_inst) end
+		for _, ge_inst in ipairs(sm_cs:GetTagged("TeamOreGeneratorVisualizer")) do geCreateESP(ge_inst) end
+		table.insert(ge_conns, sm_cs:GetInstanceAddedSignal("Generator"):Connect(function(inst) if loops["generator esp"] then geCreateESP(inst) end end))
+		table.insert(ge_conns, sm_cs:GetInstanceRemovedSignal("Generator"):Connect(function(inst) geRemoveESP(inst) end))
+		table.insert(ge_conns, sm_cs:GetInstanceAddedSignal("TeamOreGeneratorVisualizer"):Connect(function(inst) if loops["generator esp"] then geCreateESP(inst) end end))
+		table.insert(ge_conns, sm_cs:GetInstanceRemovedSignal("TeamOreGeneratorVisualizer"):Connect(function(inst) geRemoveESP(inst) end))
+		ge_labelConn = sm_rs2.Heartbeat:Connect(function()
+			if not loops["generator esp"] then return end
+			geUpdateLabels()
+		end)
+		table.insert(ge_conns, ge_labelConn)
+	else
+		for _, ge_c in ipairs(ge_conns) do pcall(function() ge_c:Disconnect() end) end
+		ge_conns = {}
+		for ge_inst in pairs(ge_objects) do geRemoveESP(ge_inst) end
+		ge_objects = {}
+	end
+end
+
+-- ============================================================
+--  VISUALS: Nametags
+-- ============================================================
+Nametags = Visuals:CreateButton("Nametags", nil, true)
+Nametags:CreateToggle("Show Name", true, nil)
+Nametags:CreateToggle("Show Health", true, nil)
+Nametags:CreateToggle("Show Distance", true, nil)
+Nametags:CreateToggle("Show Through Walls", true, nil)
+Nametags:CreateToggle("Ignore Team", false, nil)
+Nametags:CreateColorPicker("Enemy Color", Color3.fromRGB(255, 60, 60), nil)
+Nametags:CreateColorPicker("Team Color", Color3.fromRGB(60, 255, 60), nil)
+Nametags:CreateSlider("Text Size", 8, 24, 13, nil, 1)
+Nametags:CreateSlider("Max Distance", 10, 1000, 500, nil, 10)
+
+nt_objects = {}
+nt_conns = {}
+
+function ntCreateTag(plr)
+	if nt_objects[plr] then return end
+	nt_bb = Instance.new("BillboardGui")
+	nt_bb.Size = UDim2.fromOffset(200, 50)
+	nt_bb.StudsOffset = Vector3.new(0, 3, 0)
+	nt_bb.AlwaysOnTop = Nametags.Values["Show Through Walls"] or true
+	nt_bb.Parent = workspace
+	nt_lbl = Instance.new("TextLabel")
+	nt_lbl.Size = UDim2.fromScale(1, 1)
+	nt_lbl.BackgroundTransparency = 1
+	nt_lbl.TextSize = Nametags.Values["Text Size"] or 13
+	nt_lbl.Font = Enum.Font.GothamBold
+	nt_lbl.TextStrokeTransparency = 0
+	nt_lbl.TextStrokeColor3 = Color3.fromRGB(15, 15, 15)
+	nt_lbl.Text = ""
+	nt_lbl.Parent = nt_bb
+	nt_objects[plr] = { bb = nt_bb, lbl = nt_lbl }
+end
+
+function ntRemoveTag(plr)
+	if nt_objects[plr] then
+		pcall(function() nt_objects[plr].bb:Destroy() end)
+		nt_objects[plr] = nil
+	end
+end
+
+function ntUpdateTags()
+	nt_char = Player.Character
+	nt_hrp = nt_char and nt_char:FindFirstChild("HumanoidRootPart")
+	if not nt_hrp then return end
+	nt_maxDist = Nametags.Values["Max Distance"] or 500
+	for nt_plr, nt_data in pairs(nt_objects) do
+		if not nt_plr.Parent or not nt_plr.Character then nt_data.bb.Enabled = false continue end
+		if Nametags.Values["Ignore Team"] and Player.Team and nt_plr.Team == Player.Team then nt_data.bb.Enabled = false continue end
+		nt_root = nt_plr.Character:FindFirstChild("HumanoidRootPart")
+		nt_hum = nt_plr.Character:FindFirstChildOfClass("Humanoid")
+		if not nt_root or not nt_hum or nt_hum.Health <= 0 then nt_data.bb.Enabled = false continue end
+		nt_dist = (nt_root.Position - nt_hrp.Position).Magnitude
+		if nt_dist > nt_maxDist then nt_data.bb.Enabled = false continue end
+		nt_data.bb.Enabled = true
+		nt_data.bb.Adornee = nt_root
+		nt_data.bb.AlwaysOnTop = Nametags.Values["Show Through Walls"] or true
+		nt_lines = {}
+		if Nametags.Values["Show Name"] then table.insert(nt_lines, nt_plr.Name) end
+		if Nametags.Values["Show Health"] then table.insert(nt_lines, string.format("HP: %d/%d", math.round(nt_hum.Health), math.round(nt_hum.MaxHealth))) end
+		if Nametags.Values["Show Distance"] then table.insert(nt_lines, string.format("%d studs", math.round(nt_dist))) end
+		nt_data.lbl.Text = table.concat(nt_lines, "\n")
+		nt_isTeam = Player.Team and nt_plr.Team == Player.Team
+		nt_data.lbl.TextColor3 = nt_isTeam and (Nametags.Values["Team Color"] or Color3.fromRGB(60, 255, 60)) or (Nametags.Values["Enemy Color"] or Color3.fromRGB(255, 60, 60))
+		nt_data.lbl.TextSize = Nametags.Values["Text Size"] or 13
+	end
+end
+
+Nametags.Callbacks.OnToggle = function(state)
+	loops["nametags"] = state
+	if state then
+		nt_objects = {}
+		nt_conns = {}
+		for _, nt_plr in ipairs(Players:GetPlayers()) do
+			if nt_plr ~= Player then ntCreateTag(nt_plr) end
+		end
+		table.insert(nt_conns, Players.PlayerAdded:Connect(function(plr) if loops["nametags"] and plr ~= Player then ntCreateTag(plr) end end))
+		table.insert(nt_conns, Players.PlayerRemoving:Connect(function(plr) ntRemoveTag(plr) end))
+		nt_updateConn = sm_rs2.Heartbeat:Connect(function()
+			if not loops["nametags"] then return end
+			ntUpdateTags()
+		end)
+		table.insert(nt_conns, nt_updateConn)
+	else
+		for _, nt_c in ipairs(nt_conns) do pcall(function() nt_c:Disconnect() end) end
+		nt_conns = {}
+		for nt_plr in pairs(nt_objects) do ntRemoveTag(nt_plr) end
+		nt_objects = {}
+	end
+end
+
+-- ============================================================
+--  VISUALS: FreeCam
+-- ============================================================
+FreeCam = Visuals:CreateButton("FreeCam", nil, true)
+FreeCam:CreateSlider("Speed", 1, 200, 50, nil, 1)
+FreeCam:CreateToggle("Show Player", false, nil)
+
+fc_conn = nil
+fc_origSubject = nil
+
+FreeCam.Callbacks.OnToggle = function(state)
+	loops["freecam"] = state
+	fc_cam = workspace.CurrentCamera
+	if state then
+		fc_origSubject = fc_cam.CameraSubject
+		fc_cam.CameraSubject = nil
+		fc_cam.CameraType = Enum.CameraType.Custom
+		fc_char = Player.Character
+		if fc_char and not FreeCam.Values["Show Player"] then
+			for _, fc_p in ipairs(fc_char:GetDescendants()) do
+				if fc_p:IsA("BasePart") then fc_p.LocalTransparencyModifier = 1 end
+			end
+		end
+		fc_conn = sm_rs2.RenderStepped:Connect(function()
+			if not loops["freecam"] then return end
+			fc_cam = workspace.CurrentCamera
+			fc_speed = FreeCam.Values["Speed"] or 50
+			fc_move = Vector3.new(0, 0, 0)
+			fc_input = game:GetService("UserInputService")
+			if fc_input:IsKeyDown(Enum.KeyCode.W) then fc_move = fc_move + fc_cam.CFrame.LookVector end
+			if fc_input:IsKeyDown(Enum.KeyCode.S) then fc_move = fc_move - fc_cam.CFrame.LookVector end
+			if fc_input:IsKeyDown(Enum.KeyCode.A) then fc_move = fc_move - fc_cam.CFrame.RightVector end
+			if fc_input:IsKeyDown(Enum.KeyCode.D) then fc_move = fc_move + fc_cam.CFrame.RightVector end
+			if fc_input:IsKeyDown(Enum.KeyCode.Space) then fc_move = fc_move + Vector3.new(0, 1, 0) end
+			if fc_input:IsKeyDown(Enum.KeyCode.LeftShift) then fc_move = fc_move - Vector3.new(0, 1, 0) end
+			if fc_move.Magnitude > 0 then
+				fc_cam.CFrame = fc_cam.CFrame + fc_move.Unit * fc_speed * sm_rs2.Heartbeat:Wait()
+			end
+		end)
+	else
+		if fc_conn then fc_conn:Disconnect(); fc_conn = nil end
+		fc_cam.CameraSubject = fc_origSubject
+		fc_cam.CameraType = Enum.CameraType.Custom
+		fc_char = Player.Character
+		if fc_char then
+			for _, fc_p in ipairs(fc_char:GetDescendants()) do
+				if fc_p:IsA("BasePart") then fc_p.LocalTransparencyModifier = 0 end
+			end
+		end
+	end
+end
+
+-- ============================================================
+--  VISUALS: X-Ray
+-- ============================================================
+XRay = Visuals:CreateButton("X-Ray", nil, true)
+XRay:CreateSlider("Opacity", 0, 1, 0.7, nil, 0.05)
+XRay:CreateToggle("Show Ores", true, nil)
+XRay:CreateToggle("Show Beds", true, nil)
+XRay:CreateToggle("Show Chests", true, nil)
+XRay:CreateToggle("Show Generators", true, nil)
+XRay:CreateColorPicker("Ore Color", Color3.fromRGB(100, 200, 255), nil)
+XRay:CreateColorPicker("Bed Color", Color3.fromRGB(255, 100, 100), nil)
+XRay:CreateColorPicker("Chest Color", Color3.fromRGB(200, 150, 50), nil)
+
+xr_orig = {}
+xr_conn = nil
+xr_oreNames = { "iron_ore", "diamond_ore", "emerald_ore", "gold_ore", "crystal_ore" }
+xr_bedNames = { "bed", "og_bed", "inflatable_bed" }
+xr_chestNames = { "chest", "personal_chest", "og_personal_chest" }
+xr_genNames = { "generator", "team_generator", "global_generator" }
+
+function xrIsSpecial(name)
+	xr_lower = name:lower()
+	for _, xr_n in ipairs(xr_oreNames) do if xr_lower:find(xr_n) then return "ore" end end
+	for _, xr_n in ipairs(xr_bedNames) do if xr_lower:find(xr_n) then return "bed" end end
+	for _, xr_n in ipairs(xr_chestNames) do if xr_lower:find(xr_n) then return "chest" end end
+	for _, xr_n in ipairs(xr_genNames) do if xr_lower:find(xr_n) then return "generator" end end
+	return nil
+end
+
+function xrApply()
+	xr_opacity = XRay.Values["Opacity"] or 0.7
+	xr_count = 0
+	for _, xr_obj in ipairs(workspace:GetDescendants()) do
+		if xr_count > 3000 then break end
+		if xr_obj:IsA("BasePart") and xr_obj.Transparency < 1 then
+			xr_special = xr_obj.Parent and xrIsSpecial(xr_obj.Parent.Name) or nil
+			if not xr_special then xr_special = xrIsSpecial(xr_obj.Name) end
+			if xr_special then
+				if (xr_special == "ore" and XRay.Values["Show Ores"]) or (xr_special == "bed" and XRay.Values["Show Beds"]) or (xr_special == "chest" and XRay.Values["Show Chests"]) or (xr_special == "generator" and XRay.Values["Show Generators"]) then
+					if not xr_orig[xr_obj] then xr_orig[xr_obj] = { trans = xr_obj.Transparency, color = xr_obj.Color, mat = xr_obj.Material } end
+					xr_obj.Transparency = 0
+					xr_obj.Material = Enum.Material.Neon
+					if xr_special == "ore" then xr_obj.Color = XRay.Values["Ore Color"] or Color3.fromRGB(100, 200, 255)
+					elseif xr_special == "bed" then xr_obj.Color = XRay.Values["Bed Color"] or Color3.fromRGB(255, 100, 100)
+					elseif xr_special == "chest" then xr_obj.Color = XRay.Values["Chest Color"] or Color3.fromRGB(200, 150, 50) end
+				end
+			else
+				if not xr_orig[xr_obj] then xr_orig[xr_obj] = { trans = xr_obj.Transparency, color = xr_obj.Color, mat = xr_obj.Material } end
+				xr_obj.Transparency = xr_opacity
+			end
+			xr_count = xr_count + 1
+		end
+	end
+end
+
+function xrRestore()
+	for xr_obj, xr_data in pairs(xr_orig) do
+		pcall(function()
+			xr_obj.Transparency = xr_data.trans
+			xr_obj.Color = xr_data.color
+			xr_obj.Material = xr_data.mat
+		end)
+	end
+	xr_orig = {}
+end
+
+XRay.Callbacks.OnToggle = function(state)
+	loops["xray"] = state
+	if state then
+		xrApply()
+	else
+		xrRestore()
+	end
+end
+
+-- ============================================================
+--  VISUALS: Item ESP
+-- ============================================================
+ItemESP = Visuals:CreateButton("Item ESP", nil, true)
+ItemESP:CreateToggle("Show Items", true, nil)
+ItemESP:CreateToggle("Show Amount", true, nil)
+ItemESP:CreateToggle("Show Distance", true, nil)
+ItemESP:CreateToggle("Show Glow", false, nil)
+ItemESP:CreateColorPicker("Item Color", Color3.fromRGB(255, 255, 100), nil)
+ItemESP:CreateSlider("Text Size", 8, 24, 12, nil, 1)
+ItemESP:CreateSlider("Max Distance", 10, 500, 200, nil, 10)
+
+ie_objects = {}
+ie_conns = {}
+
+function ieCreateESP(inst)
+	if ie_objects[inst] then return end
+	ie_bb = Instance.new("BillboardGui")
+	ie_bb.Size = UDim2.fromOffset(160, 40)
+	ie_bb.StudsOffset = Vector3.new(0, 2, 0)
+	ie_bb.AlwaysOnTop = true
+	ie_bb.Parent = inst
+	ie_lbl = Instance.new("TextLabel")
+	ie_lbl.Size = UDim2.fromScale(1, 1)
+	ie_lbl.BackgroundTransparency = 1
+	ie_lbl.TextColor3 = ItemESP.Values["Item Color"] or Color3.fromRGB(255, 255, 100)
+	ie_lbl.TextSize = ItemESP.Values["Text Size"] or 12
+	ie_lbl.Font = Enum.Font.GothamBold
+	ie_lbl.TextStrokeTransparency = 0
+	ie_lbl.TextStrokeColor3 = Color3.fromRGB(15, 15, 15)
+	ie_lbl.Text = inst.Name
+	ie_lbl.Parent = ie_bb
+	ie_glow = nil
+	if ItemESP.Values["Show Glow"] then
+		ie_glow = Instance.new("PointLight")
+		ie_glow.Color = ItemESP.Values["Item Color"] or Color3.fromRGB(255, 255, 100)
+		ie_glow.Range = 8
+		ie_glow.Brightness = 2
+		ie_glow.Parent = inst
+	end
+	ie_objects[inst] = { bb = ie_bb, lbl = ie_lbl, glow = ie_glow }
+end
+
+function ieRemoveESP(inst)
+	if ie_objects[inst] then
+		pcall(function() ie_objects[inst].bb:Destroy() end)
+		if ie_objects[inst].glow then pcall(function() ie_objects[inst].glow:Destroy() end) end
+		ie_objects[inst] = nil
+	end
+end
+
+function ieUpdateLabels()
+	ie_char = Player.Character
+	ie_hrp = ie_char and ie_char:FindFirstChild("HumanoidRootPart")
+	if not ie_hrp then return end
+	ie_maxDist = ItemESP.Values["Max Distance"] or 200
+	for ie_inst, ie_data in pairs(ie_objects) do
+		if not ie_inst.Parent then ieRemoveESP(ie_inst) continue end
+		ie_pos = ie_inst.Position
+		ie_dist = (ie_pos - ie_hrp.Position).Magnitude
+		if ie_dist > ie_maxDist then ie_data.bb.Enabled = false continue end
+		ie_data.bb.Enabled = true
+		ie_lines = {}
+		ie_name = ie_inst.Name:gsub("_", " ")
+		ie_amt = ie_inst:GetAttribute("Amount") or 1
+		if ItemESP.Values["Show Amount"] and ie_amt > 1 then
+			table.insert(ie_lines, ie_name .. " x" .. tostring(ie_amt))
+		else
+			table.insert(ie_lines, ie_name)
+		end
+		if ItemESP.Values["Show Distance"] then
+			table.insert(ie_lines, string.format("%d studs", math.round(ie_dist)))
+		end
+		ie_data.lbl.Text = table.concat(ie_lines, "\n")
+		ie_data.lbl.TextColor3 = ItemESP.Values["Item Color"] or Color3.fromRGB(255, 255, 100)
+		ie_data.lbl.TextSize = ItemESP.Values["Text Size"] or 12
+	end
+end
+
+ItemESP.Callbacks.OnToggle = function(state)
+	loops["item esp"] = state
+	if state then
+		ie_objects = {}
+		ie_conns = {}
+		for _, ie_inst in ipairs(sm_cs:GetTagged("ItemDrop")) do ieCreateESP(ie_inst) end
+		table.insert(ie_conns, sm_cs:GetInstanceAddedSignal("ItemDrop"):Connect(function(inst) if loops["item esp"] then ieCreateESP(inst) end end))
+		table.insert(ie_conns, sm_cs:GetInstanceRemovedSignal("ItemDrop"):Connect(function(inst) ieRemoveESP(inst) end))
+		ie_updateConn = sm_rs2.Heartbeat:Connect(function()
+			if not loops["item esp"] then return end
+			ieUpdateLabels()
+		end)
+		table.insert(ie_conns, ie_updateConn)
+	else
+		for _, ie_c in ipairs(ie_conns) do pcall(function() ie_c:Disconnect() end) end
+		ie_conns = {}
+		for ie_inst in pairs(ie_objects) do ieRemoveESP(ie_inst) end
+		ie_objects = {}
+	end
+end
+
+workspace.ChildAdded:Connect(function(child)
+	-- 1. Auto Grim Reaper
+	if loops["auto grim repear"] then
+		checkAndConsume(child)
+	end
+
+	-- 2. Auto Star
+	if loops["auto star"] then
+		processStar(child)
+	end
+
+	-- 3. Auto Metal, Miner, Warden (Model Checks)
+	if child:IsA("Model") then
+		processMetal(child)
+		processPetrifiedPlayer(child)
+		processJailorSoul(child)
+	end
+
+	-- 4. Caching & ESP (BasePart Checks)
+	if child:IsA("BasePart") then
+		-- Trap ESP
+		if loops["trap esp"] and child.Name == "snap_trap" then
+			child.Transparency = 0
+		end
+
+		-- Nuker / ESP Caching
+		if child.Name == "bed" and child.Parent and child.Parent.Name ~= "MapCFrames" then
+			if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then
+				table.insert(beds, child)
+			end
+			-- Bed ESP Highlight creation
+			if loops["bedesp"] and child:FindFirstChild("Bed") then
+				if not workspace:FindFirstChild("BedESP") then
+					bedESPFolder = Instance.new("Folder", workspace)
+					bedESPFolder.Name = "BedESP"
+				end
+				local highlight = Instance.new("Highlight", bedESPFolder)
+				highlight.Adornee = child:FindFirstChild("Bed")
+				highlight.FillColor = BedESP.Values["FillColor"]
+				highlight.FillTransparency = BedESP.Values["Fill Transparency"]
+				highlight.Name = "bedESPs"
+				if BedESP.Values["Use Outline"] then
+					highlight.OutlineColor = BedESP.Values["OutlineColor"]
+				else
+					highlight.OutlineTransparency = 1
+				end
+			end
+		elseif child.Name == "tesla_trap" then
+			if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then table.insert(teslas, child) end
+		elseif child.Name == "beehive" then
+			if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then table.insert(hives, child) end
+		elseif child.Name == "lucky_block" then
+			if child:GetAttribute("TeamId") ~= Player:GetAttribute("Team") then table.insert(lucky_blocks, child) end
+		elseif child.Name == "iron_ore_mesh_block" then
+			table.insert(iron_ores, child)
+		end
+	end
+
+	-- 5. Damage Indicator Changer
+	if loops["damage indictator changer"] and child.Name == "DamageIndicatorPart" then
+		local billboard = child:FindFirstChild("BillboardGui")
+		if billboard then
+			local frame = billboard:FindFirstChild("Frame")
+			if frame then
+				local label = frame:FindFirstChild("TextLabel")
+				if label then
+					if DamageIndictatorChanger.Values["Random Color"] then
+						label.TextColor3 = Color3.new(math.random(),math.random(),math.random())
+					else
+						label.TextColor3 = DamageIndictatorChanger.Values["Color"]
+					end
+					if DamageIndictatorChanger.Values["Change Text"] then
+						if DamageIndictatorChanger.Values["Random Text"] then
+							label.Text = randomIndicatorTexts[math.random(1, #randomIndicatorTexts)]
+						else
+							label.Text = "FW DIFF"
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- 6. Projectile Tracers
+	if loops["projectile tracers"] then
+		applyTracer(child, false)
+	end
+
+	-- 7. Auto Whisper (Owl Tracking)
+	if loops["auto whisper"] and child.Name == "ServerOwl" then
+		if child:GetAttribute("Owner") == Player.UserId then
+			currentWhisper = child
+		end
+	end
+end)
+
+Player.CharacterAdded:Connect(function(character)
+	-- 1. Core Caches & Setups
+	onCharacterAdded(character)
+	updateVelocityCache()
+	CachePhaseParts(character)
+
+	-- 2. Auto Buy Inventory Update (Specific Timing)
+	task.wait(0.2)
+	updateInventory()
+
+	-- 3. Trap Disabler (Specific Timing)
+	task.wait(0.1)
+	SetupTrapDisabler(character)
+
+	-- 4. Health GUI Bind
+	healthBindChar(character)
+
+	-- 5. Visuals (Headless, Animation Disabler)
+	if loops["headless"] then
+		local head = character:FindFirstChild("Head")
+		if head then
+			head.Transparency = Headless.Values["Transparency"]
+			for i, v in pairs(head:GetDescendants()) do
+				if v:IsA("Decal") then v.Transparency = Headless.Values["Transparency"] end
+			end
+		end
+	end
+
+	if loops["animation disabler"] then
+		disableCurrentAnimations(character)
+	end
+
+	-- 6. Sword Skin Changer (Initial Apply)
+	if loops["sword skin changer"] then
+		for _, child in ipairs(character:GetChildren()) do
+			applySkin(character, child)
+		end
+	end
+
+	-- 7. Sword Skin Changer (ChildAdded Hook with Specific Timing)
+	character.ChildAdded:Connect(function(child)
+		if loops["sword skin changer"] then
+			task.wait(0.1) 
+			applySkin(character, child)
+		end
+	end)
+end)
+
+Player.CharacterRemoving:Connect(function()
+	updateVelocityCache()
+	currentWhisper = nil
+end)
+
+Players.PlayerAdded:Connect(function(plr)
+	-- 1. Entity Cache
+	updatePlayers()
+
+	-- 2. Nametags
+	if loops["nametags"] and plr ~= Player then
+		ntCreateTag(plr)
+	end
+
+	-- 3. ESP Player Hooks
+	if loops["esp"] then
+		espConnections[plr.Name .. "_charAdded"] = plr.CharacterAdded:Connect(function(char)
+			char:WaitForChild("HumanoidRootPart", 5)
+			createESPContainer(char)
+		end)
+		espConnections[plr.Name .. "_charRemoving"] = plr.CharacterRemoving:Connect(function(char)
+			removeESPContainer(char)
+		end)
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+	-- 1. Entity Cache
+	updatePlayers()
+
+	-- 2. Nametags
+	ntRemoveTag(plr)
+
+	-- 3. Auto Hannah / Kaliyah Cleanup
+	if plr.Character then
+		hannahTargetsProcessing[plr.Character] = nil
+		kaliyahTargetsProcessing[plr.Character] = nil
+	end
+
+	-- 4. ESP Cleanup
+	if plr.Character then removeESPContainer(plr.Character) end
+	if espConnections[plr.Name .. "_charAdded"] then espConnections[plr.Name .. "_charAdded"]:Disconnect() end
+	if espConnections[plr.Name .. "_charRemoving"] then espConnections[plr.Name .. "_charRemoving"]:Disconnect() end
+end)
+
+camera.ChildAdded:Connect(function(ssc_child)
+	if string.find(string.lower(ssc_child.Name), "viewmodel") then
+		ssc_child.ChildAdded:Connect(function(ssc_item)
+			task.wait(0.05)
+			sscApplySkin(ssc_item)
+		end)
+		task.wait(0.05)
+		for _, ssc_item in ipairs(ssc_child:GetChildren()) do 
+			sscApplySkin(ssc_item) 
+		end
+	end
+end)
+
+local ssc_vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+if ssc_vm then
+	ssc_vm.ChildAdded:Connect(function(ssc_item)
+		task.wait(0.05)
+		sscApplySkin(ssc_item)
+	end)
+end
