@@ -6586,9 +6586,6 @@ Velocity.Callbacks.OnToggle = function(state)
 	if state then
 		if not velocityConnection then
 			lastVelocity = Vector3.zero
-			-- FIX: Changed from Stepped to Heartbeat. Stepped runs BEFORE physics, 
-			-- so the Humanoid instantly overrides your velocity changes. 
-			-- Heartbeat runs AFTER physics, allowing the override to stick.
 			velocityConnection = RunService.Heartbeat:Connect(velocityHeartbeat)
 		end
 	else
@@ -6598,7 +6595,7 @@ Velocity.Callbacks.OnToggle = function(state)
 		end
 	end
 end
-end
+
 local function generateId()
 	characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	id = ""
