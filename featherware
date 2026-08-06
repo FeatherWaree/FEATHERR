@@ -7581,7 +7581,7 @@ local function startChestStealer()
 				end
 			end
 
-			task.wait(1) 
+			task.wait(0.5) 
 		end
 		chestStealerThread = nil
 	end)
