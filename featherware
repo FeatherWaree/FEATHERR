@@ -950,7 +950,9 @@ loops = {
 	["nametags"] = false,
 	["generator esp"] = false,
 	["scaffold"] = false,
-	["bowassist"] = false
+	["bowassist"] = false,
+	["kill effects"] = false,
+	["win effects"] = false
 }
 
 --REMOTE EVENTS/FUNCTIONS--
@@ -1063,23 +1065,94 @@ UserInputService = game:GetService("UserInputService")
 TweenService = game:GetService("TweenService")
 CoreGui = game:GetService("CoreGui")
 camera = workspace.CurrentCamera
+zephyrStacks = 0
+
 orginalClan = nil
 orginalLevel = nil
 orginalChatNameColor = nil
-zephyrStacks = 0
-if Player:GetAttribute("ClanTag") then
-	orginalClan = Player:GetAttribute("ClanTag")
-end
-if Player:GetAttribute("PlayerLevel") then
-	orginalLevel = Player:GetAttribute("PlayerLevel")
-end
-if Player:GetAttribute("ChatNameColor") then
-	orginalChatNameColor = Player:GetAttribute("ChatNameColor")
+orginalWins = nil
+orginalStreak = nil
+orginalRank = nil
+orginalTitle = nil
+
+if Player:GetAttribute("ClanTag") then orginalClan = Player:GetAttribute("ClanTag") end
+if Player:GetAttribute("PlayerLevel") then orginalLevel = Player:GetAttribute("PlayerLevel") end
+if Player:GetAttribute("ChatNameColor") then orginalChatNameColor = Player:GetAttribute("ChatNameColor") end
+if Player:GetAttribute("Rank") then orginalRank = Player:GetAttribute("Rank") end
+
+if Player:FindFirstChild("leaderstats") and Player.leaderstats:FindFirstChild("Wins") then
+	orginalWins = Player.leaderstats.Wins.Value
 end
 
-local ClanTag = Player:GetAttribute("ClanTag")
-local ChatNameColor = Player:GetAttribute("ChatNameColor")
-local PlayerLevel = Player:GetAttribute("PlayerLevel")
+fs_char = Player.Character or Player.CharacterAdded:Wait()
+if fs_char and fs_char:FindFirstChild("Head") then
+	fs_nt = fs_char:FindFirstChild("Nametag", true)
+	if fs_nt and fs_nt:FindFirstChild("WinStreakCounter") then
+		fs_wsVal = fs_nt.WinStreakCounter:FindFirstChild("WinStreakValue")
+		if fs_wsVal then orginalStreak = fs_wsVal.Text end
+	end
+end
+
+if fs_char and fs_char:FindFirstChild("Head") then
+	fs_nt = fs_char:FindFirstChild("Nametag", true)
+	if fs_nt and fs_nt:FindFirstChild("LobbyTitle") then
+		orginalTitle = fs_nt.LobbyTitle.Text
+	end
+end
+
+fw_RankMeta = nil
+pcall(function()
+	fw_RankMeta = require(game:GetService("ReplicatedStorage"):WaitForChild("TS"):WaitForChild("rank"):WaitForChild("rank-meta")).RankMeta
+end)
+
+fw_RankImageLabel = nil
+
+function updateFakeRank(rankName)
+	fs_char2 = Player.Character
+	if not fs_char2 or not fs_char2:FindFirstChild("Head") then return end
+
+	fs_nametag = fs_char2.Head:FindFirstChild("Nametag", true)
+	if not fs_nametag then return end
+
+	fs_container = fs_nametag:FindFirstChild("DisplayNameContainer", true) or fs_nametag
+
+	if not fw_RankImageLabel or fw_RankImageLabel.Parent ~= fs_container then
+		if fw_RankImageLabel then fw_RankImageLabel:Destroy() end
+		fw_RankImageLabel = Instance.new("ImageLabel")
+		fw_RankImageLabel.Name = "FakeRankDisplay"
+		fw_RankImageLabel.BackgroundTransparency = 1
+		fw_RankImageLabel.LayoutOrder = 0
+		fw_RankImageLabel.Size = UDim2.fromScale(1, 1)
+		fw_RankImageLabel.SizeConstraint = Enum.SizeConstraint.RelativeYY
+		fw_RankImageLabel.ScaleType = Enum.ScaleType.Fit
+		fw_RankImageLabel.Parent = fs_nametag
+		fw_RankImageLabel.Position = UDim2.new(1, 0, 0.3, 0)
+		fw_RankImageLabel.LayoutOrder = 5
+		fw_RankImageLabel.AnchorPoint = Vector2.new(1, 0.5)
+	end
+
+	if rankName == "None" or not fw_RankMeta then
+		fw_RankImageLabel.Visible = false
+		return
+	end
+
+	fs_divId = nil
+	if rankName == "Bronze" then fs_divId = 0
+	elseif rankName == "Silver" then fs_divId = 4
+	elseif rankName == "Gold" then fs_divId = 8
+	elseif rankName == "Platinum" then fs_divId = 12
+	elseif rankName == "Diamond" then fs_divId = 16
+	elseif rankName == "Emerald" then fs_divId = 20
+	elseif rankName == "Nightmare" then fs_divId = 24 end
+
+	if fs_divId and fw_RankMeta[fs_divId] and fw_RankMeta[fs_divId].image then
+		fw_RankImageLabel.Image = fw_RankMeta[fs_divId].image
+		fw_RankImageLabel.Visible = true
+	else
+		fw_RankImageLabel.Visible = false
+	end
+end
+
 
 local localRootPart = Character:WaitForChild("HumanoidRootPart")
 local humanoid = Character:WaitForChild("Humanoid")
@@ -3545,30 +3618,221 @@ end
 local function UninjectFW()
 	saveConfigToPC()
 
+	-- STEP 1: Turn off EVERY registered module (calls their OnToggle(false) which disconnects their loops/connections)
+	if _G.__FW_ALL_MODULES then
+		for _, m in ipairs(_G.__FW_ALL_MODULES) do
+			if m.Toggled then
+				pcall(function()
+					if m.Callbacks and m.Callbacks.OnToggle then
+						m.Callbacks.OnToggle(false)
+					end
+				end)
+				m.Toggled = false
+			end
+		end
+	end
+
+	-- STEP 2: Force all loops to false
 	if mainScreenUI then
 		mainScreenUI:SetAttribute("Running", false)
 	end
-
-	local bedESP = workspace:FindFirstChild("BedESP")
-	if bedESP then
-		bedESP:Destroy()
+	for index, _ in pairs(loops) do
+		loops[index] = false
 	end
 
-	if notificationsGui then
-		notificationsGui:Destroy()
-	end
+	-- STEP 3: Explicitly disconnect any remaining known connections
+	pcall(function()
+		-- Shaders
+		if WeatherRenderLoop then WeatherRenderLoop:Disconnect() WeatherRenderLoop = nil end
+		-- ESP
+		if espConnections then
+			for _, c in pairs(espConnections) do pcall(function() c:Disconnect() end) end
+			espConnections = {}
+		end
+		if activeESPCache then
+			for _, data in pairs(activeESPCache) do
+				if data.Frame2D then pcall(function() data.Frame2D:Destroy() end) end
+				if data.Box3D then pcall(function() data.Box3D:Destroy() end) end
+				for _, line in pairs(data.SkeletonLines or {}) do pcall(function() line:Destroy() end) end
+			end
+			activeESPCache = {}
+		end
+		-- Chams
+		if chams_active then
+			for _, hl in pairs(chams_active) do pcall(function() hl:Destroy() end) end
+			chams_active = {}
+		end
+		if chamsFolder then pcall(function() chamsFolder:Destroy() end) chamsFolder = nil end
+		-- Tracers
+		if tr_renderConn then tr_renderConn:Disconnect() tr_renderConn = nil end
+		if tr_gui then pcall(function() tr_gui:Destroy() end) tr_gui = nil end
+		-- Velocity
+		if velocityConnection then velocityConnection:Disconnect() velocityConnection = nil end
+		-- Fly
+		pcall(stopFlying)
+		-- Nuker
+		if NukerConnection then NukerConnection:Disconnect() NukerConnection = nil end
+		pcall(function() if nukerBox then nukerBox.Parent = game.Lighting end end)
+		-- Aim Assist
+		if aimConnection then aimConnection:Disconnect() aimConnection = nil end
+		-- Speed
+		if speedConnection then speedConnection:Disconnect() speedConnection = nil end
+		-- Desync
+		pcall(stopDesync)
+		-- NoFall
+		if nofall and nofall.conn then nofall.conn:Disconnect() nofall.conn = nil end
+		-- SpinBot
+		if spin and spin.conn then spin.conn:Disconnect() spin.conn = nil end
+		-- Scaffold
+		if sc_hbConn then sc_hbConn:Disconnect() sc_hbConn = nil end
+		-- TriggerBot
+		if triggerThread then task.cancel(triggerThread) triggerThread = nil end
+		-- AutoClicker
+		if autoClickerThread then task.cancel(autoClickerThread) autoClickerThread = nil end
+		-- AutoArrowDodge
+		if aad and aad.conn then aad.conn:Disconnect() aad.conn = nil end
+		if aad and aad.evConn then pcall(function() aad.evConn:Disconnect() end) aad.evConn = nil end
+		if aad and aad.netConn then pcall(function() aad.netConn:Disconnect() end) aad.netConn = nil end
+		pcall(function() if aad and aad.bv then aad.bv:Destroy() aad.bv = nil end end)
+		-- Target Strafe
+		if ts and ts.conn then pcall(function() game:GetService("RunService"):UnbindFromRenderStep("TargetStrafeMove") end) ts.conn = nil end
+		-- BowAssist
+		if ba_conn then ba_conn:Disconnect() ba_conn = nil end
+		-- FastBow
+		pcall(fbRestore)
+		-- Projectile ESP
+		if pe_netConn then pe_netConn:Disconnect() pe_netConn = nil end
+		if pe_renderConn then pe_renderConn:Disconnect() pe_renderConn = nil end
+		pcall(peCleanup)
+		-- Projectile Aura
+		if PA_VIS_CONN then PA_VIS_CONN:Disconnect() PA_VIS_CONN = nil end
+		if PA_VIS then for _, v in ipairs(PA_VIS) do pcall(function() v.obj:Destroy() end) end PA_VIS = {} end
+		-- Projectile Assist
+		pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ProjectileAssist_AimLine") end)
+		-- AutoChargeBow
+		if acbConn then acbConn:Disconnect() acbConn = nil end
+		-- NoSlowdown
+		pcall(nsRestore)
+		-- FreeCam
+		if fc_conn then fc_conn:Disconnect() fc_conn = nil end
+		-- XRay
+		pcall(xrRestore)
+		-- ESP modules (Metal, Star, Bee, Gompy, Sheep, Elder, Generator, Nametags, Item)
+		pcall(function() if metal_distConn then metal_distConn:Disconnect() metal_distConn = nil end end)
+		pcall(function() if metal_conns then for _, c in ipairs(metal_conns) do c:Disconnect() end metal_conns = {} end end)
+		pcall(function() if metal_folder then metal_folder:Destroy() metal_folder = nil end end)
+		pcall(function() if star_distConn then star_distConn:Disconnect() star_distConn = nil end end)
+		pcall(function() if star_conns then for _, c in ipairs(star_conns) do c:Disconnect() end star_conns = {} end end)
+		pcall(function() if star_folder then star_folder:Destroy() star_folder = nil end end)
+		pcall(function() if bee_distConn then bee_distConn:Disconnect() bee_distConn = nil end end)
+		pcall(function() if bee_conns then for _, c in ipairs(bee_conns) do c:Disconnect() end bee_conns = {} end end)
+		pcall(function() if bee_folder then bee_folder:Destroy() bee_folder = nil end end)
+		pcall(function() if gompy_loopConn then gompy_loopConn:Disconnect() gompy_loopConn = nil end end)
+		pcall(function() if gompy_conns then for _, c in ipairs(gompy_conns) do c:Disconnect() end gompy_conns = {} end end)
+		pcall(function() if sheep_loopConn then sheep_loopConn:Disconnect() sheep_loopConn = nil end end)
+		pcall(function() if sheep_autoConn then sheep_autoConn:Disconnect() sheep_autoConn = nil end end)
+		pcall(function() if sheep_conns then for _, c in ipairs(sheep_conns) do c:Disconnect() end sheep_conns = {} end end)
+		pcall(function() if elder_loopConn then elder_loopConn:Disconnect() elder_loopConn = nil end end)
+		pcall(function() if elder_autoConn then elder_autoConn:Disconnect() elder_autoConn = nil end end)
+		pcall(function() if elder_conns then for _, c in ipairs(elder_conns) do c:Disconnect() end elder_conns = {} end end)
+		pcall(function() if ge_labelConn then ge_labelConn:Disconnect() ge_labelConn = nil end end)
+		pcall(function() if ge_conns then for _, c in ipairs(ge_conns) do c:Disconnect() end ge_conns = {} end end)
+		pcall(function() if nt_updateConn then nt_updateConn:Disconnect() nt_updateConn = nil end end)
+		pcall(function() if nt_conns then for _, c in ipairs(nt_conns) do c:Disconnect() end nt_conns = {} end end)
+		pcall(function() if ie_updateConn then ie_updateConn:Disconnect() ie_updateConn = nil end end)
+		pcall(function() if ie_conns then for _, c in ipairs(ie_conns) do c:Disconnect() end ie_conns = {} end end)
+		-- Sword Skin Changer
+		pcall(function() if ssc_conn then ssc_conn:Disconnect() ssc_conn = nil end end)
+		pcall(sscClearAll)
+		-- Bed Alarm
+		pcall(cleanupAlarm)
+		-- BedESP
+		pcall(function() if workspace:FindFirstChild("BedESP") then workspace.BedESP:Destroy() end end)
+		-- NoVoid
+		pcall(function() if workspace:FindFirstChild("noVoid") then workspace.noVoid:Destroy() end end)
+		-- Active Push Force (LongJump)
+		pcall(function() if activePushForce then activePushForce:Destroy() activePushForce = nil end end)
+		-- Auto threads
+		pcall(function() if autoBalloonThread then task.cancel(autoBalloonThread) autoBalloonThread = nil end end)
+		pcall(function() if voidDropThread then task.cancel(voidDropThread) voidDropThread = nil end end)
+		pcall(function() if fastDropThread then task.cancel(fastDropThread) fastDropThread = nil end end)
+		pcall(function() if autoBuyThread then task.cancel(autoBuyThread) autoBuyThread = nil end end)
+		pcall(function() if autoStarThread then task.cancel(autoStarThread) autoStarThread = nil end end)
+		pcall(function() if autoMetalThread then task.cancel(autoMetalThread) autoMetalThread = nil end end)
+		pcall(function() if autoHannahThread then task.cancel(autoHannahThread) autoHannahThread = nil end end)
+		pcall(function() if autoWardenThread then task.cancel(autoWardenThread) autoWardenThread = nil end end)
+		pcall(function() if minerScanThread then task.cancel(minerScanThread) minerScanThread = nil end end)
+		pcall(function() if kaliyahThread then task.cancel(kaliyahThread) kaliyahThread = nil end end)
+		pcall(function() if autoFishThread then task.cancel(autoFishThread) autoFishThread = nil end end)
+		pcall(function() if autoYuziThread then task.cancel(autoYuziThread) autoYuziThread = nil end end)
+		pcall(function() if infinitecrystal then task.cancel(infinitecrystal) infinitecrystal = nil end end)
+		pcall(function() if breakThread then task.cancel(breakThread) breakThread = nil end end)
+		-- HitBoxes
+		pcall(hbClearAllHitboxes)
+		pcall(hbRestoreRanges)
+		if hb_conn then hb_conn:Disconnect() hb_conn = nil end
+		-- Shop Tier Bypass
+		pcall(function() if ShopTierBypassMechanic then ShopTierBypassMechanic:Toggle(false) end end)
+		-- Sprint
+		pcall(function()
+			if canRequire and SprintController and origStopSprinting then
+				SprintConstants.RUN_FOV_MULT = 1.1
+				SprintController.stopSprinting = origStopSprinting
+				SprintController:stopSprinting(true)
+			end
+		end)
+		-- Gravity
+		workspace.Gravity = 196.2
+		-- Zoom
+		Player.CameraMaxZoomDistance = 14
+		-- FOV
+		if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = 70 end
+		-- NoClickDelay
+		pcall(function() if originalIsClickingTooFast then sword_controller.isClickingTooFast = originalIsClickingTooFast end end)
+		-- BlockCPS
+		pcall(function() if canRequire then shared_constants.CpsConstants.BLOCK_PLACE_CPS = 12 end end)
+		-- Ping
+		pcall(function() if canRequire then shared_constants.PingConstants.PING_COOLDOWN = 2 shared_constants.PingConstants.PING_LIFETIME = 6 end end)
+		-- Animations
+		pcall(function() if cachedChar and cachedChar:FindFirstChild("Animate") then cachedChar.Animate.Enabled = true end end)
+		-- Headless
+		pcall(function() if cachedChar and cachedChar:FindFirstChild("Head") then cachedChar.Head.Transparency = 0 end end)
+		-- Night
+		game.Lighting.ClockTime = 14
+		-- RichShader
+		pcall(rsApply, false)
+		-- Trap Disabler
+		if trapConnections then for _, c in pairs(trapConnections) do pcall(function() c:Disconnect() end) end trapConnections = {} end
+		-- TrapESP
+		pcall(function()
+			for _, obj in pairs(workspace:GetDescendants()) do
+				if obj.Name == "snap_trap" and obj:IsA("Part") then obj.Transparency = 1 end
+			end
+		end)
+	end)
 
-	if mainScreenUI then
-		mainScreenUI:Destroy()
-	end
+	-- STEP 4: Destroy GUIs
+	pcall(function() if notificationsGui then notificationsGui:Destroy() end end)
+	pcall(function() if mainScreenUI then mainScreenUI:Destroy() end end)
+	pcall(function() if FW and FW.Destroy then FW:Destroy() end end)
+	pcall(function() if moduleGui then moduleGui:Destroy() end end)
+	pcall(function()
+		local espGui = CoreGui:FindFirstChild("EspScreenGui")
+		if espGui then espGui:Destroy() end
+	end)
+	pcall(function()
+		local tsGui = CoreGui:FindFirstChild("TS_PathEditor")
+		if tsGui then tsGui:Destroy() end
+	end)
+	pcall(function()
+		for _, desc in ipairs(workspace:GetDescendants()) do
+			if desc.Name == "3D_ESP_BOX" or desc.Name == "3D_KA_BOX" or desc.Name == "3D_NUKER_BOX" or desc.Name == "3D_CHEST_BOX" then
+				desc:Destroy()
+			end
+		end
+	end)
 
-	if FW and FW.Destroy then
-		FW:Destroy()
-	end
-
-	if moduleGui then
-		moduleGui:Destroy()
-	end
+	_G.__FW_ALL_MODULES = nil
 end
 
 FW.SettingsOverlay = {
@@ -3678,8 +3942,10 @@ function FW:CreateCategory(name)
 			Toggled = startingToggleState,
 			Values = {},
 			Callbacks = {},
-			UpdateFunctions = {} 
+			UpdateFunctions = {}
 		}
+		_G.__FW_ALL_MODULES = _G.__FW_ALL_MODULES or {}
+		table.insert(_G.__FW_ALL_MODULES, mod)
 
 		local container = Instance.new("Frame", fScroll)
 		container.Size = UDim2.new(1, 0, 0, 32)
@@ -4347,22 +4613,66 @@ end)
 
 FakeStats = Visuals:CreateButton("Fake Stats", nil, true)
 FakeStats:CreateTextbox("Clan", tostring(orginalClan), function(value)
-	if loops["fake stats"] then
-		Player:SetAttribute("ClanTag", value)
-	end
+	if loops["fake stats"] then Player:SetAttribute("ClanTag", value) end
 end)
-
 FakeStats:CreateTextbox("Level", tostring(orginalLevel), function(value)
+	if loops["fake stats"] then Player:SetAttribute("PlayerLevel", tonumber(value) or orginalLevel) end
+end)
+FakeStats:CreateColorPicker("ChatNameColor", orginalChatNameColor, function(value)
+	if loops["fake stats"] then Player:SetAttribute("ChatNameColor", value) end
+end)
+FakeStats:CreateTextbox("Wins", tostring(orginalWins), function(value)
 	if loops["fake stats"] then
-		Player:SetAttribute("PlayerLevel", tonumber(value) or orginalLevel)
+		if Player:FindFirstChild("leaderstats") and Player.leaderstats:FindFirstChild("Wins") then
+			Player.leaderstats.Wins.Value = tonumber(value)
+		end
+	end
+end)
+FakeStats:CreateTextbox("Winstreak", tostring(orginalStreak), function(value)
+	if loops["fake stats"] then
+		fs_char3 = Player.Character
+		if fs_char3 and fs_char3:FindFirstChild("Head") then
+			fs_nt2 = fs_char3.Head:FindFirstChild("Nametag", true)
+			if fs_nt2 and fs_nt2:FindFirstChild("WinStreakCounter") then
+				fs_wsVal2 = fs_nt2.WinStreakCounter:FindFirstChild("WinStreakValue")
+				if fs_wsVal2 then fs_wsVal2.Text = tostring(value) end
+			end
+		end
 	end
 end)
 
-FakeStats:CreateColorPicker("ChatNameColor", orginalChatNameColor, function(value)
+FakeStats:CreateDropdown("Rank", {"None", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Emerald", "Nightmare"}, "None", function(value)
 	if loops["fake stats"] then
-		Player:SetAttribute("ChatNameColor", value)
+		updateFakeRank(value)
 	end
 end)
+
+FakeStats:CreateTextbox("Display Name", tostring(Player.DisplayName), function(value)
+	if loops["fake stats"] then
+		fs_char3 = Player.Character
+		if fs_char3 and fs_char3:FindFirstChild("Head") then
+			fs_nt2 = fs_char3.Head:FindFirstChild("Nametag", true)
+			if fs_nt2 and fs_nt2:FindFirstChild("DisplayNameContainer") then
+				fs_wsVal2 = fs_nt2.DisplayNameContainer:FindFirstChild("DisplayName")
+				if fs_wsVal2 then fs_wsVal2.Text = tostring(value) end
+			end
+		end
+	end
+end)
+
+FakeStats:CreateTextbox("Lobby Title", tostring(orginalTitle), function(value)
+	if loops["fake stats"] then
+		fs_char3 = Player.Character
+		if fs_char3 and fs_char3:FindFirstChild("Head") then
+			fs_nt2 = fs_char3.Head:FindFirstChild("Nametag", true)
+			if fs_nt2 and fs_nt2:FindFirstChild("LobbyTitle") then
+				fs_wsVal2 = fs_nt2.LobbyTitle
+				if fs_wsVal2 then fs_wsVal2.Text = tostring(value) end
+			end
+		end
+	end
+end)
+
 if ssc_conn then pcall(function() ssc_conn:Disconnect() end) end
 if type(ssc_tracked) == "table" then
 	for ssc_it, ssc_info in pairs(ssc_tracked) do
@@ -7054,33 +7364,30 @@ local function findNearbyContainers(radius, espOnly)
 	local root = cachedHRP
 	if not root then return chests, crates end
 
-	-- FIX 1: Added OverlapParams and increased maxParts to 5000.
-	-- This prevents the function from blinding itself when near lots of wool/blocks.
+	-- FIX 1: MaxParts must be set as a property of OverlapParams!
 	local overlapParams = OverlapParams.new()
 	overlapParams.FilterDescendantsInstances = {Player.Character}
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+	overlapParams.MaxParts = 5000 
 
-	local parts = workspace:GetPartBoundsInRadius(root.Position, radius, overlapParams, 5000)
+	-- Only 3 arguments are passed to GetPartBoundsInRadius
+	local parts = workspace:GetPartBoundsInRadius(root.Position, radius, overlapParams)
 
 	for _, part in ipairs(parts) do
 		if part.Name == "chest" then
 			chests[#chests + 1] = part
-
 		elseif part.Name == "team_crate" then
-
 			if ChestStealer.Values["Own Crate"] == false then
 				if part:GetAttribute("Team") == Player:GetAttribute("Team") then
 					continue
 				end
 			end
-
 			crates[#crates + 1] = part
 		end
 	end
 
 	return chests, crates
 end
-
 
 
 -- ============ CHEST STEALER (EVENT-DRIVEN / ZERO LAG) ============
@@ -7100,6 +7407,40 @@ local chestStealerThread = nil
 local activeChestHooks = {} -- [container] = { conn = RBXScriptConnection, inventory = Folder }
 local highlightTween = nil
 local lastHighlightTarget = nil
+
+-- Queue System to prevent server throttling and infinite yields
+local stealQueue = {} 
+local queueActive = false
+
+local function processQueue()
+	if queueActive then return end
+	queueActive = true
+
+	task.spawn(function()
+		while #stealQueue > 0 and loops["chest stealer"] do
+			local data = table.remove(stealQueue, 1)
+			local inv, item, c = data.inv, data.item, data.c
+
+			-- Ensure the item is still in the chest and the chest exists
+			if item and item.Parent == inv and c and c.Parent then
+				local root = cachedHRP
+				if root then
+					-- FIX 2: Final distance check right before stealing
+					local dist = (c.Position - root.Position).Magnitude
+					local trueRange = tonumber(ChestStealer.Values["Range"]) or 20
+
+					if dist <= trueRange then
+						-- FIX 3: Wrap InvokeServer in spawn so server anti-cheat can't hang our loop
+						task.spawn(function()
+							pcall(function() takeItem:InvokeServer(inv, item) end)
+						end)
+					end
+				end
+			end
+		end
+		queueActive = false
+	end)
+end
 
 -- ---------- HIGHLIGHT HELPERS ----------
 local function hideChestHighlight()
@@ -7129,57 +7470,17 @@ local function highlightChestContainer(container)
 	highlightTween:Play()
 end
 
--- ---------- HOOK / UNHOOK LOGIC ----------
-local function unhookChest(container)
-	local hook = activeChestHooks[container]
-	if hook then
-		if hook.conn then hook.conn:Disconnect() end
-		activeChestHooks[container] = nil
-	end
-end
-
-local function hookChest(container)
-	if activeChestHooks[container] then return end -- Already tracking
-	local folderVal = container:FindFirstChild("ChestFolderValue")
-	local inventory = folderVal and folderVal.Value
-	if not inventory then return end
-
-	-- Mark as hooked immediately so the scan loop doesn't try to hook it twice
-	activeChestHooks[container] = { inventory = inventory }
-
-	-- 1. INITIAL SWEEP: Steal everything currently inside sequentially
-	-- FIX: We do this in a single thread with a task.wait() to bypass server remote throttling.
-	-- Firing 20 InvokeServers at the exact same millisecond gets flagged as spam and dropped by the server.
-	task.spawn(function()
-		for _, item in ipairs(inventory:GetChildren()) do
-			if item.Name ~= "ChestOwner" and item.Parent == inventory then
-				pcall(function() takeItem:InvokeServer(inventory, item) end)
-				task.wait(0.05) -- Yields slightly to bypass server remote throttling
-			end
-		end
-	end)
-
-	-- 2. EVENT LISTENER: The millisecond a NEW item is added, steal it instantly
-	local conn
-	conn = inventory.ChildAdded:Connect(function(item)
-		if item.Name ~= "ChestOwner" then
-			-- Re-highlight just in case it was empty and someone just dropped something in
-			highlightChestContainer(container)
-			task.wait(0.05) -- Tiny delay to ensure server is ready for the next remote
-			pcall(function() takeItem:InvokeServer(inventory, item) end)
-		end
-	end)
-
-	activeChestHooks[container].conn = conn
-end
-
 -- ---------- START / STOP ----------
 local function stopChestStealer()
 	if chestStealerThread then
 		task.cancel(chestStealerThread)
 		chestStealerThread = nil
 	end
-	for container, _ in pairs(activeChestHooks) do unhookChest(container) end
+	for container, hookInfo in pairs(activeChestHooks) do 
+		if hookInfo.conn then hookInfo.conn:Disconnect() end
+	end
+	activeChestHooks = {}
+	stealQueue = {}
 	hideChestHighlight()
 end
 
@@ -7192,8 +7493,10 @@ local function startChestStealer()
 			local hum = cachedHumanoid
 
 			if root and hum and hum.Health > 0 then
-				local scanRange = (tonumber(ChestStealer.Values["Range"]) or 20) + 15
-				local dChests, dCrates = findNearbyContainers(scanRange, true)
+				local trueRange = tonumber(ChestStealer.Values["Range"]) or 20
+				local visualRange = trueRange + 15 -- Detect further away for visuals ONLY
+
+				local dChests, dCrates = findNearbyContainers(visualRange, true)
 
 				local nearbyContainers = {}
 				local nearestContainer = nil
@@ -7202,17 +7505,48 @@ local function startChestStealer()
 				local function processDetected(c)
 					if not c or not c.Parent then return end
 					local dist = (c.Position - root.Position).Magnitude
-					
-					if dist <= scanRange then
-						nearbyContainers[c] = true
-						hookChest(c) -- Ensures it's hooked and swept
 
-						-- Check if it actually has items right now to highlight it
-						local hook = activeChestHooks[c]
+					if dist <= visualRange then
+						nearbyContainers[c] = true
+
+						local folderVal = c:FindFirstChild("ChestFolderValue")
+						local inv = folderVal and folderVal.Value
 						local hasItems = false
-						if hook and hook.inventory then
-							for _, child in ipairs(hook.inventory:GetChildren()) do
-								if child.Name ~= "ChestOwner" then hasItems = true break end
+
+						if inv then
+							-- 1. Main loop sweep (Retries items naturally if you walked away and walked back)
+							for _, item in ipairs(inv:GetChildren()) do
+								if item.Name ~= "ChestOwner" then
+									hasItems = true
+
+									-- Only push to steal queue if actually within stealing range
+									if dist <= trueRange then
+										local inQueue = false
+										for _, q in ipairs(stealQueue) do
+											if q.item == item then inQueue = true break end
+										end
+										if not inQueue then
+											table.insert(stealQueue, {inv = inv, item = item, c = c})
+										end
+									end
+								end
+							end
+
+							-- 2. Hook for instant reaction
+							if not activeChestHooks[c] then
+								local conn = inv.ChildAdded:Connect(function(item)
+									if item.Name ~= "ChestOwner" then
+										highlightChestContainer(c)
+
+										-- Only enqueue if we are close enough to steal it
+										local currentDist = (c.Position - cachedHRP.Position).Magnitude
+										if currentDist <= trueRange then
+											table.insert(stealQueue, {inv = inv, item = item, c = c})
+											processQueue()
+										end
+									end
+								end)
+								activeChestHooks[c] = { conn = conn, inventory = inv }
 							end
 						end
 
@@ -7226,10 +7560,14 @@ local function startChestStealer()
 				if ChestStealer.Values["Crates"] then for _, c in ipairs(dCrates) do processDetected(c) end end
 				if ChestStealer.Values["Chests"] then for _, c in ipairs(dChests) do processDetected(c) end end
 
-				-- Cleanup hooks for chests we walked away from or were destroyed
-				for container, _ in pairs(activeChestHooks) do
+				-- Start queue processing if we caught missed items
+				if #stealQueue > 0 then processQueue() end
+
+				-- Cleanup hooks for chests we walked too far away from
+				for container, hookInfo in pairs(activeChestHooks) do
 					if not nearbyContainers[container] or not container.Parent then
-						unhookChest(container)
+						if hookInfo.conn then hookInfo.conn:Disconnect() end
+						activeChestHooks[container] = nil
 					end
 				end
 
@@ -7241,7 +7579,7 @@ local function startChestStealer()
 				end
 			end
 
-			task.wait(1) -- ONLY runs once per second to find chests!
+			task.wait(1) 
 		end
 		chestStealerThread = nil
 	end)
@@ -8076,25 +8414,86 @@ end)
 
 FakeStats.Callbacks.OnToggle = function(state)
 	loops["fake stats"] = state
-
-	if state then
+	if loops["fake stats"] then
 		Player:SetAttribute("ClanTag", FakeStats.Values["Clan"])
+		Player:SetAttribute("PlayerLevel", tonumber(FakeStats.Values["Level"]) or orginalLevel)
+		Player:SetAttribute("ChatNameColor", FakeStats.Values["ChatNameColor"])
 
-		Player:SetAttribute(
-			"PlayerLevel",
-			tonumber(FakeStats.Values["Level"]) or orginalLevel
-		)
+		if Player:FindFirstChild("leaderstats") and Player.leaderstats:FindFirstChild("Wins") then
+			Player.leaderstats.Wins.Value = tonumber(FakeStats.Values["Wins"])
+		end
 
-		Player:SetAttribute(
-			"ChatNameColor",
-			FakeStats.Values["ChatNameColor"]
-		)
+		fs_char4 = Player.Character
+		if fs_char4 and fs_char4:FindFirstChild("Head") then
+			fs_nt3 = fs_char4.Head:FindFirstChild("Nametag", true)
+			if fs_nt3 and fs_nt3:FindFirstChild("WinStreakCounter") then
+				fs_wsVal3 = fs_nt3.WinStreakCounter:FindFirstChild("WinStreakValue")
+				if fs_wsVal3 then fs_wsVal3.Text = tostring(FakeStats.Values["Winstreak"]) end
+			end
+		end
+
+		updateFakeRank(FakeStats.Values["Rank"] or "None")
+
+		fs_char3 = Player.Character
+		if fs_char3 and fs_char3:FindFirstChild("Head") then
+			fs_nt2 = fs_char3.Head:FindFirstChild("Nametag", true)
+			if fs_nt2 and fs_nt2:FindFirstChild("DisplayNameContainer") then
+				fs_wsVal2 = fs_nt2.DisplayNameContainer:FindFirstChild("DisplayName")
+				if fs_wsVal2 then fs_wsVal2.Text = FakeStats.Values["Display Name"] end
+			end
+		end
+
+		if fs_char3 and fs_char3:FindFirstChild("Head") then
+			fs_nt2 = fs_char3.Head:FindFirstChild("Nametag", true)
+			if fs_nt2 and fs_nt2:FindFirstChild("LobbyTitle") then
+				fs_wsVal2 = fs_nt2.LobbyTitle
+				if fs_wsVal2 then fs_wsVal2.Text = FakeStats.Values["Lobby Title"] end
+			end
+		end
+
 	else
 		Player:SetAttribute("ClanTag", orginalClan)
 		Player:SetAttribute("PlayerLevel", orginalLevel)
 		Player:SetAttribute("ChatNameColor", orginalChatNameColor)
+
+		if Player:FindFirstChild("leaderstats") and Player.leaderstats:FindFirstChild("Wins") then
+			Player.leaderstats.Wins.Value = orginalWins
+		end
+
+		fs_char5 = Player.Character
+		if fs_char5 and fs_char5:FindFirstChild("Head") then
+			fs_nt4 = fs_char5.Head:FindFirstChild("Nametag", true)
+			if fs_nt4 and fs_nt4:FindFirstChild("WinStreakCounter") then
+				fs_wsVal4 = fs_nt4.WinStreakCounter:FindFirstChild("WinStreakValue")
+				if fs_wsVal4 then fs_wsVal4.Text = tostring(orginalStreak) end
+			end
+		end
+
+		if fw_RankImageLabel then
+			fw_RankImageLabel:Destroy()
+			fw_RankImageLabel = nil
+		end
+
+		fs_char3 = Player.Character
+		if fs_char3 and fs_char3:FindFirstChild("Head") then
+			fs_nt2 = fs_char3.Head:FindFirstChild("Nametag", true)
+			if fs_nt2 and fs_nt2:FindFirstChild("DisplayNameContainer") then
+				fs_wsVal2 = fs_nt2.DisplayNameContainer:FindFirstChild("DisplayName")
+				if fs_wsVal2 then fs_wsVal2.Text = Player.DisplayName end
+			end
+		end
+
+		if fs_char3 and fs_char3:FindFirstChild("Head") then
+			fs_nt2 = fs_char3.Head:FindFirstChild("Nametag", true)
+			if fs_nt2 and fs_nt2:FindFirstChild("LobbyTitle") then
+				fs_wsVal2 = fs_nt2.LobbyTitle
+				if fs_wsVal2 then fs_wsVal2.Text = orginalTitle end
+			end
+		end
 	end
 end
+
+
 
 local function playLocalAnimation(emoteName)
 	local character = game.Players.LocalPlayer.Character
@@ -11447,12 +11846,15 @@ for i, child in pairs(game.Workspace:GetDescendants()) do
 	end
 end
 
+nukerHighlightPart = nil
+nukerHighlight = nil
+nukerHighlightTween = nil
+lastNukerTarget = nil
+
+
+
 NukerConnection = nil
 lastBreakTime = 0
-currentHighlight = nil
-nukerRayParams = RaycastParams.new()
-nukerRayParams.FilterType = Enum.RaycastFilterType.Exclude
-
 targetMap = {
 	["bed"] = beds,
 	["tesla"] = teslas,
@@ -11461,27 +11863,49 @@ targetMap = {
 	["iron_ore"] = iron_ores
 }
 
-function updateNukerHighlight(targetPart)
-	if not Nuker.Values["Mining Highlight"] or not targetPart then
-		if currentHighlight then
-			currentHighlight.Adornee = nil
-			currentHighlight.Parent = nil
-		end
+nukerBox = Instance.new("Part")
+nukerBox.Name = "3D_NUKER_BOX"
+nukerBox.Anchored = true
+nukerBox.CanCollide = false
+nukerBox.CanQuery = false
+nukerBox.CanTouch = false
+nukerHighlight = Instance.new("Highlight")
+nukerHighlight.Adornee = nukerBox
+nukerHighlight.FillTransparency = 0.65
+nukerHighlight.OutlineTransparency = 0
+nukerHighlight.Parent = nukerBox
+nukerBox.Size = Vector3.new(0.1, 0.1, 0.1)
+nukerBox.Parent = game.Lighting
+
+nukerHighlightTween = nil
+lastNukerTarget = nil
+
+function updateNukerHighlight(target)
+	if not Nuker.Values["Mining Highlight"] or not target then
+		if nukerHighlightTween then nukerHighlightTween:Cancel() nukerHighlightTween = nil end
+		nukerBox.Parent = game.Lighting
+		nukerBox.Size = Vector3.new(0.1, 0.1, 0.1)
+		lastNukerTarget = nil
 		return
 	end
 
-	if not currentHighlight then
-		currentHighlight = Instance.new("Highlight")
-		currentHighlight.Name = "NukerVisual"
-		currentHighlight.FillColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 0, 0)
-		currentHighlight.OutlineColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 255, 255)
-		currentHighlight.FillTransparency = 0.7
-		currentHighlight.OutlineTransparency = 0
-		currentHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-		currentHighlight.Parent = workspace.CurrentCamera
-	end
+	nukerHighlight.FillColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 0, 0)
+	nukerHighlight.OutlineColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 255, 255)
 
-	currentHighlight.Adornee = targetPart
+	if target == lastNukerTarget and nukerBox.Parent == workspace then return end
+	lastNukerTarget = target
+
+	nukerBox.CFrame = target.CFrame
+	nukerBox.Size = Vector3.new(0.1, 0.1, 0.1)
+	nukerBox.Parent = workspace
+
+	if nukerHighlightTween then nukerHighlightTween:Cancel() end
+	nukerHighlightTween = TweenService:Create(
+		nukerBox,
+		TweenInfo.new(0.30, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{ Size = target.Size + Vector3.new(0.4, 0.4, 0.4) }
+	)
+	nukerHighlightTween:Play()
 end
 
 Nuker.Callbacks.OnToggle = function(state)
@@ -11489,24 +11913,20 @@ Nuker.Callbacks.OnToggle = function(state)
 	if NukerConnection then
 		NukerConnection:Disconnect()
 		NukerConnection = nil
-		updateNukerHighlight(nil)
 	end
+	updateNukerHighlight(nil)
+
 	if loops["nuker"] then
 		NukerConnection = RunService.Heartbeat:Connect(function()
-			if not loops["nuker"] then
-				if NukerConnection then
-					NukerConnection:Disconnect()
-					NukerConnection = nil
-				end
+			if not loops["nuker"] then return end
+			char = Player.Character
+			if not char or not char:FindFirstChild("HumanoidRootPart") then
 				updateNukerHighlight(nil)
 				return
 			end
-
-			hrp = cachedChar and cachedChar:FindFirstChild("HumanoidRootPart")
-			if not hrp then
-				updateNukerHighlight(nil)
-				return
-			end
+			hrp = char.HumanoidRootPart
+			cam = workspace.CurrentCamera
+			if not cam then return end
 
 			nearestTarget = nil
 			shortestDistance = Nuker.Values["Break Range"] or 21
@@ -11538,40 +11958,45 @@ Nuker.Callbacks.OnToggle = function(state)
 				return
 			end
 
-			-- Raycast to find what is actually blocking the target
-			nukerRayParams.FilterDescendantsInstances = {cachedChar, nearestTarget}
-			direction = (nearestTarget.Position - hrp.Position).Unit
-			hitResult = workspace:Raycast(hrp.Position, direction * (shortestDistance + 5), nukerRayParams)
-
-			blockToBreak = nearestTarget
-			hitPos = nearestTarget.Position
-			hitNormal = (hrp.Position - nearestTarget.Position).Unit
-
-			if hitResult then
-				hitDist = (hitResult.Position - hrp.Position).Magnitude
-				targetDist = (nearestTarget.Position - hrp.Position).Magnitude
-
-				-- If we hit a covering block that is IN FRONT of the target
-				if hitDist < targetDist and not hitResult.Instance:IsDescendantOf(nearestTarget) then
-					blockToBreak = hitResult.Instance
-					hitPos = hitResult.Position - (hitResult.Normal * 1.5)
-					hitNormal = hitResult.Normal
-				end
-			end
-
-			-- Highlight the actual block we are going to break
-			updateNukerHighlight(blockToBreak)
+			updateNukerHighlight(nearestTarget)
 
 			currentTime = os.clock()
 			breakSpeed = Nuker.Values["Break Speed"] or 0.30
 			if currentTime - lastBreakTime < breakSpeed then return end
 			lastBreakTime = currentTime
 
-			-- Calculate the exact 3x3x3 Bedwars grid coordinate for the block we hit
+			-- Raycast from Camera to target to find what's blocking it
+			origin = cam.CFrame.Position
+			direction = (nearestTarget.Position - origin)
+
+			rayParams = RaycastParams.new()
+			rayParams.FilterType = Enum.RaycastFilterType.Exclude
+			rayParams.FilterDescendantsInstances = {char, nearestTarget}
+			rayParams.IgnoreWater = true
+
+			rayResult = workspace:Raycast(origin, direction, rayParams)
+
+			blockToBreak = nearestTarget
+			hitPos = nearestTarget.Position
+			hitNormal = (origin - nearestTarget.Position).Unit
+
+			if rayResult and rayResult.Instance then
+				-- If we hit a covering block (wool/wood), target THAT block instead
+				if not rayResult.Instance:IsDescendantOf(nearestTarget) and rayResult.Instance ~= nearestTarget then
+					blockToBreak = rayResult.Instance
+					hitPos = rayResult.Position - (rayResult.Normal * 1.5)
+					hitNormal = rayResult.Normal
+				else
+					-- We hit the target itself, use the actual face normal we hit
+					hitPos = rayResult.Position
+					hitNormal = rayResult.Normal
+				end
+			end
+
 			blockPosition = Vector3.new(
-				math.floor(hitPos.X / 3 + 0.5),
-				math.floor(hitPos.Y / 3 + 0.5),
-				math.floor(hitPos.Z / 3 + 0.5)
+				math.round(hitPos.X / 3),
+				math.round(hitPos.Y / 3),
+				math.round(hitPos.Z / 3)
 			)
 
 			args = {
@@ -11584,11 +12009,15 @@ Nuker.Callbacks.OnToggle = function(state)
 				}
 			}
 
-			DamageBlock:InvokeServer(unpack(args))
+			-- CRITICAL FIX: task.spawn prevents InvokeServer from yielding/freezing the Heartbeat loop
+			task.spawn(function()
+				pcall(function()
+					DamageBlock:InvokeServer(unpack(args))
+				end)
+			end)
 		end)
 	end
 end
-
 function cleanupAlarm()
 	if activeAlarmData.model then
 		activeAlarmData.model:Destroy()
@@ -18412,3 +18841,210 @@ if ssc_vm then
 		sscApplySkin(ssc_item)
 	end)
 end
+
+KillEffectSpoof = Visuals:CreateButton("Kill Effects", nil, true)
+KillEffectSpoof:CreateDropdown("Effect", {
+	"None", "Pop", "Explode", "Shark Bite", "Statue", "Confetti", "Ascend", "Heart", "Nuke", "Rocket", 
+	"Bird", "Blackhole", "Jelly", "Blimp", "Gift", "Snowman", "Abduction", "Coffin", "Lantern", 
+	"Glitch", "Life Ring", "Beach Ball", "Pirate Ship Attack", "Ghost", "Knife Rain", "Mirror Dimension", 
+	"Butterfly", "Gravestone", "Wrapped Up", "Snowball Fight", "Ice Block", "Firework", "Rave", 
+	"Atomic", "Luminous Sword", "Bubbles", "Stars", "Skull Drop", "Boxing Glove", "Rage Blade", 
+	"Soul Leave", "Skeleton", "Giant Glove", "Broom Sweep", "Portal", "Penguin Crush", "Antler Strike", 
+	"Dragged Under", "Lunar Dragon", "Blasting Off Again", "Toilet Flush", "Blessed Heaven", 
+	"Float Away", "Judgement Day", "Summer Pet Dance", "Dismantling Slash", "Dark Omen", 
+	"Transmutation", "Webbed Up", "Gingerbread Man", "Snowglobe", "Tuck In", "Dynamite", 
+	"Paperize", "Yuzi Blade Storm", "Sarcophagus", "Mummy", "Genie Lamp", "Pillow", "Frozen", 
+	"Butterfly Explosion", "Electrocuted", "Jellyfish", "Block Transformation", "Dragon Incinerate", 
+	"Bat-Splode", "Witch Polymorph", "Meteor", "Sleigh Ran Over", "Rolling Snowball", 
+	"Aurora Blast", "Fire Crackers", "Shot by Cupid", "Voidify", "Egg Hatch", "Bee Sting", 
+	"Flower-Splosion", "Carrot-Splosion"
+}, "None", function(selected)
+	if loops["kill effects"] then
+		if selected == "None" then
+			Players.LocalPlayer:SetAttribute("KillEffectType", nil)
+		else
+			effectMap = {
+				["None"] = "none", ["Pop"] = "pop", ["Explode"] = "explode", ["Shark Bite"] = "shark",
+				["Statue"] = "statue", ["Confetti"] = "confetti", ["Ascend"] = "ascend", ["Heart"] = "heart",
+				["Nuke"] = "nuke", ["Rocket"] = "rocket", ["Bird"] = "bird", ["Blackhole"] = "blackhole",
+				["Jelly"] = "jelly", ["Blimp"] = "blimp", ["Gift"] = "gift", ["Snowman"] = "snowman",
+				["Abduction"] = "abduction", ["Coffin"] = "coffin", ["Lantern"] = "lantern", ["Glitch"] = "glitch",
+				["Life Ring"] = "lifering", ["Beach Ball"] = "beachball", ["Pirate Ship Attack"] = "pirateshipattack",
+				["Ghost"] = "ghost", ["Knife Rain"] = "kniferain", ["Mirror Dimension"] = "mirror",
+				["Butterfly"] = "butterfly", ["Gravestone"] = "gravestone", ["Wrapped Up"] = "ribbon",
+				["Snowball Fight"] = "snowball", ["Ice Block"] = "iceblock", ["Firework"] = "firework",
+				["Rave"] = "rave", ["Atomic"] = "atomic", ["Luminous Sword"] = "sword", ["Bubbles"] = "bubbles",
+				["Stars"] = "stars", ["Skull Drop"] = "skull_drop", ["Boxing Glove"] = "boxingglove",
+				["Rage Blade"] = "rage-blade", ["Soul Leave"] = "soul_leave", ["Skeleton"] = "skeleton",
+				["Giant Glove"] = "giant_glove", ["Broom Sweep"] = "broom", ["Portal"] = "portal",
+				["Penguin Crush"] = "penguin_crush", ["Antler Strike"] = "elk", ["Dragged Under"] = "spirit_assassin",
+				["Lunar Dragon"] = "lunar_dragon", ["Blasting Off Again"] = "blasting_off", ["Toilet Flush"] = "toilet",
+				["Blessed Heaven"] = "blessed_heaven", ["Float Away"] = "float_away", ["Judgement Day"] = "judgement_day",
+				["Summer Pet Dance"] = "summer_pet_dance", ["Dismantling Slash"] = "dismantle", ["Dark Omen"] = "raven_explosion",
+				["Transmutation"] = "alchemy_circle", ["Webbed Up"] = "webbed_up", ["Gingerbread Man"] = "gingerbreadded",
+				["Snowglobe"] = "snowglobe", ["Tuck In"] = "tuck_in", ["Dynamite"] = "dynamite", ["Paperize"] = "paper",
+				["Yuzi Blade Storm"] = "yuzi_blade_storm", ["Sarcophagus"] = "sarcophagus", ["Mummy"] = "mummy",
+				["Genie Lamp"] = "genie_lamp", ["Pillow"] = "pillow", ["Frozen"] = "frozen",
+				["Butterfly Explosion"] = "butterfly_explosion", ["Electrocuted"] = "electrocuted", ["Jellyfish"] = "jellyfish",
+				["Block Transformation"] = "milo", ["Dragon Incinerate"] = "dragon_incinerate", ["Bat-Splode"] = "bat",
+				["Witch Polymorph"] = "polymorph", ["Meteor"] = "meteor", ["Sleigh Ran Over"] = "sleigh_ran_over",
+				["Rolling Snowball"] = "snowball_ran_over", ["Aurora Blast"] = "aurora_blast", ["Fire Crackers"] = "fire_crackers",
+				["Shot by Cupid"] = "shot_by_cupid", ["Voidify"] = "void_knight", ["Egg Hatch"] = "egg_hatch",
+				["Bee Sting"] = "bee_sting", ["Flower-Splosion"] = "spring_splosion", ["Carrot-Splosion"] = "carrot_splosion"
+			}
+			Players.LocalPlayer:SetAttribute("KillEffectType", effectMap[selected])
+		end
+	end
+end)
+
+KillEffectSpoof.Callbacks.OnToggle = function(state)
+	loops["kill effects"] = state
+	if state then
+		selected = KillEffectSpoof.Values["Effect"] or "None"
+		if selected == "None" then
+			Players.LocalPlayer:SetAttribute("KillEffectType", nil)
+		else
+			KillEffectSpoof.UpdateFunctions["Effect"](selected)
+		end
+	else
+		Players.LocalPlayer:SetAttribute("KillEffectType", nil)
+	end
+end
+
+WinEffects = Visuals:CreateButton("Win Effects", nil, true)
+WinEffects:CreateDropdown("Win Effect Type", {
+	"None", "Juggernaut Barbarian", "Choo Choo Champion", "Haunted Spirit Assassin", 
+	"Grim Reaper", "Divine Triumph", "Spirit Blossom", "Dragon Rider", 
+	"Dust Devil", "Angel Wings", "Spirit Owl", "Mega Block", 
+	"Snowboarder", "Snowball Rider"
+}, "None", nil)
+
+winEffectMap = {
+	["None"] = "none",
+	["Juggernaut Barbarian"] = "juggernaut_barbarian",
+	["Choo Choo Champion"] = "train",
+	["Haunted Spirit Assassin"] = "spirit_assassin",
+	["Grim Reaper"] = "grim_reaper",
+	["Divine Triumph"] = "statue_of_triumph",
+	["Spirit Blossom"] = "spirit_blossom",
+	["Dragon Rider"] = "dragon_rider",
+	["Dust Devil"] = "dust_devil",
+	["Angel Wings"] = "angel_wings",
+	["Spirit Owl"] = "owl",
+	["Mega Block"] = "big_block",
+	["Snowboarder"] = "snowboarder",
+	["Snowball Rider"] = "snow_ball_rider"
+}
+
+WinEffects.Callbacks.OnToggle = function(state)
+	loops["win effects"] = state
+end
+
+if hookmetamethod and newcclosure then
+	oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+		method = getnamecheckmethod and getnamecheckmethod() or getnamecallmethod()
+		if self.Name == "WinEffectTriggered" and (method == "FireClient" or method == "Fire") then
+			args = {...}
+			if loops["win effects"] and args[1] and args[1].winEffectType then
+				selectedEffect = WinEffects.Values["Win Effect Type"]
+				if winEffectMap[selectedEffect] and selectedEffect ~= "None" then
+					args[1].winEffectType = winEffectMap[selectedEffect]
+				end
+			end
+			return oldNamecall(self, (unpack or table.unpack)(args))
+		end
+		return oldNamecall(self, ...)
+	end))
+end
+
+local function playNightmareEmote()
+	local character = Player.Character
+	if not character then return end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return end
+
+	local lowerTorso = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+	if not lowerTorso then return end
+
+	-- 1. Play Animation (Action Priority overrides everything)
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	local anim = Instance.new("Animation")
+	anim.AnimationId = "rbxassetid://9191822700"
+	local track = animator:LoadAnimation(anim)
+	track.Priority = Enum.AnimationPriority.Action
+	track:Play()
+
+	-- 2. Spawn & Setup VFX
+	local vfxClone = nil
+	local success, nightmareVfxTemplate = pcall(function()
+		return game:GetService("ReplicatedStorage"):WaitForChild("Assets", 2):WaitForChild("Effects", 2):WaitForChild("NightmareEmote", 2)
+	end)
+
+	if success and nightmareVfxTemplate then
+		vfxClone = nightmareVfxTemplate:Clone()
+		vfxClone.Parent = workspace
+
+		-- Position it exactly like the decompiled controller
+		vfxClone:PivotTo(lowerTorso.CFrame + Vector3.new(0, -2, 0))
+
+		-- Anchor and disable collisions/raycasting
+		for _, descendant in ipairs(vfxClone:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant.CanCollide = false
+				descendant.Anchored = true
+				descendant.CanQuery = false
+				descendant.CanTouch = false
+			end
+		end
+
+		-- Rotate Outer and Middle parts infinitely
+		local outer = vfxClone:FindFirstChild("Outer")
+		if outer then
+			TweenService:Create(outer, TweenInfo.new(1.5, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1), {Orientation = outer.Orientation + Vector3.new(0, 360, 0)}):Play()
+		end
+
+		local middle = vfxClone:FindFirstChild("Middle")
+		if middle then
+			TweenService:Create(middle, TweenInfo.new(12.5, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1), {Orientation = middle.Orientation + Vector3.new(0, -360, 0)}):Play()
+		end
+	end
+
+	-- 3. Cleanup on Movement / Jumping / Dying
+	local moveConnection, jumpConnection, deadConnection
+
+	local function cleanup()
+		if track and track.IsPlaying then track:Stop(0.1) end
+		if vfxClone and vfxClone.Parent then vfxClone:Destroy() end
+		if moveConnection then moveConnection:Disconnect() end
+		if jumpConnection then jumpConnection:Disconnect() end
+		if deadConnection then deadConnection:Disconnect() end
+	end
+
+	moveConnection = humanoid:GetPropertyChangedSignal("MoveDirection"):Connect(function()
+		if humanoid.MoveDirection.Magnitude > 0 then
+			cleanup()
+		end
+	end)
+
+	jumpConnection = humanoid:GetPropertyChangedSignal("Jump"):Connect(function()
+		if humanoid.Jump then
+			cleanup()
+		end
+	end)
+
+	deadConnection = humanoid.Died:Connect(function()
+		cleanup()
+	end)
+end
+
+-- Add the Button to your UI (Assuming 'GameTab' is already created in your script)
+local NightmareEmoteBtn = GameTab:CreateButton("Nightmare Emote", function()
+	playNightmareEmote()
+	NightmareEmoteBtn.Toggled = false
+	NightmareEmoteBtn:SetState(false)
+end, false)
