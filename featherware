@@ -7058,7 +7058,9 @@ local function findNearbyContainers(radius, espOnly)
 	local root = cachedHRP
 	if not root then return chests, crates end
 
-	overlapParams = OverlapParams.new()
+	-- FIX 1: Added OverlapParams and increased maxParts to 5000.
+	-- This prevents the function from blinding itself when near lots of wool/blocks.
+	local overlapParams = OverlapParams.new()
 	overlapParams.FilterDescendantsInstances = {Player.Character}
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -7142,28 +7144,37 @@ end
 
 local function hookChest(container)
 	if activeChestHooks[container] then return end -- Already tracking
-
 	local folderVal = container:FindFirstChild("ChestFolderValue")
 	local inventory = folderVal and folderVal.Value
 	if not inventory then return end
 
-	-- 1. INITIAL SWEEP: Steal everything currently inside immediately
-	for _, item in ipairs(inventory:GetChildren()) do
-		if item.Name ~= "ChestOwner" then
-			task.spawn(function() pcall(function() takeItem:InvokeServer(inventory, item) end) end)
-		end
-	end
+	-- Mark as hooked immediately so the scan loop doesn't try to hook it twice
+	activeChestHooks[container] = { inventory = inventory }
 
-	-- 2. EVENT LISTENER: The millisecond a NEW item is added, steal it instantly
-	local conn = inventory.ChildAdded:Connect(function(item)
-		if item.Name ~= "ChestOwner" then
-            -- Re-highlight just in case it was empty and someone just dropped something in
-            highlightChestContainer(container) 
-			task.spawn(function() pcall(function() takeItem:InvokeServer(inventory, item) end) end)
+	-- 1. INITIAL SWEEP: Steal everything currently inside
+	-- FIX 2: Do it sequentially inside a single thread with a tiny wait.
+	-- This mimics legitimate client behavior so the server doesn't throttle/drop your requests.
+	task.spawn(function()
+		for _, item in ipairs(inventory:GetChildren()) do
+			if item.Name ~= "ChestOwner" then
+				pcall(function() takeItem:InvokeServer(inventory, item) end)
+				task.wait() -- Yields slightly to bypass server remote throttling
+			end
 		end
 	end)
 
-	activeChestHooks[container] = { conn = conn, inventory = inventory }
+	-- 2. EVENT LISTENER: The millisecond a NEW item is added, steal it instantly
+	local conn
+	conn = inventory.ChildAdded:Connect(function(item)
+		if item.Name ~= "ChestOwner" then
+			highlightChestContainer(container)
+			task.spawn(function() 
+				pcall(function() takeItem:InvokeServer(inventory, item) end) 
+			end)
+		end
+	end)
+
+	activeChestHooks[container].conn = conn
 end
 
 -- ---------- START / STOP ----------
