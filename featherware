@@ -5153,10 +5153,6 @@ AutoQueue.Callbacks.OnToggle = function(state)
 	loops["auto queue"] = state
 end
 
-AutoWarden.Callbacks.OnToggle = function(state)
-	loops["auto warden"] = state
-end
-
 
 RunService.Heartbeat:Connect(function()
 
@@ -7372,25 +7368,15 @@ local function isValidGround(part)
 end
 
 local function getNearestGroundPoint(pos, ignoreModel)
-	local bestPoint = nil
-	local bestDist = math.huge
-
-	for _, part in ipairs(workspace:GetDescendants()) do
-		if isValidGround(part) and not (ignoreModel and part:IsDescendantOf(ignoreModel)) then
-
-			local topPoint = part.Position + Vector3.new(0, part.Size.Y / 2, 0)
-			local dist = (topPoint - pos).Magnitude
-
-			if dist < bestDist then
-				bestDist = dist
-				bestPoint = topPoint
-			end
-		end
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	if ignoreModel then rayParams.FilterDescendantsInstances = {ignoreModel} end
+	local hit = workspace:Raycast(pos, Vector3.new(0, -500, 0), rayParams)
+	if hit then
+		return hit.Position + Vector3.new(0, hit.Instance.Size.Y / 2, 0)
 	end
-
-	return bestPoint
+	return nil
 end
-
 local function getVelocity(origin, target, speed)
 	local direction = target - origin
 	local flat = Vector3.new(direction.X, 0, direction.Z)
@@ -8754,10 +8740,6 @@ for _, existingChild in ipairs(workspace:GetChildren()) do
 	task.spawn(checkAndConsume, existingChild)
 end
 
-AutoStar.Callbacks.OnToggle = function(state)
-	loops["auto star"] = state
-end
-
 local TARGET_STARS = {
 	["CritStar"] = true,
 	["VitalityStar"] = true
@@ -8815,33 +8797,36 @@ local function processStar(child)
 end
 
 
-task.spawn(function()
-	while task.wait(0.25) do
-		if not loops["auto star"] then continue end
-
-		local character = Player.Character
-		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-		if not rootPart then continue end
-
-		local maxRange = (AutoStar.Values and AutoStar.Values["Range"]) or 50
-
-		local overlapParams = OverlapParams.new()
-		overlapParams.FilterType = Enum.RaycastFilterType.Exclude
-
-		local nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, maxRange, overlapParams)
-
-		for i = 1, #nearbyParts do
-			local part = nearbyParts[i]
-			if part.Name == "RootPart" and part.Parent and TARGET_STARS[part.Parent.Name] then
-				task.defer(processStar, part.Parent)
+autoStarThread = nil
+local oldAutoStarToggle = AutoStar.Callbacks.OnToggle
+AutoStar.Callbacks.OnToggle = function(state)
+	if oldAutoStarToggle then oldAutoStarToggle(state) end
+	loops["auto star"] = state
+	if autoStarThread then task.cancel(autoStarThread) autoStarThread = nil end
+	if loops["auto star"] then
+		autoStarThread = task.spawn(function()
+			while loops["auto star"] do
+				character = Player.Character
+				rootPart = character and character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					maxRange = (AutoStar.Values and AutoStar.Values["Range"]) or 50
+					overlapParams = OverlapParams.new()
+					overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+					nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, maxRange, overlapParams)
+					for i = 1, #nearbyParts do
+						part = nearbyParts[i]
+						if part.Name == "RootPart" and part.Parent and TARGET_STARS[part.Parent.Name] then
+							task.defer(processStar, part.Parent)
+						end
+					end
+				end
+				task.wait(0.25)
 			end
-		end
+			autoStarThread = nil
+		end)
 	end
-end)
-
-AutoMetal.Callbacks.OnToggle = function(state)
-	loops["auto metal"] = state
 end
+
 
 local function isHoldingMetalDetector(character)
 	if character:FindFirstChild("metal_detector") then
@@ -8937,91 +8922,83 @@ local function processMetal(model)
 end
 
 
-task.spawn(function()
-	while task.wait(0.5) do
-		if not loops["auto metal"] then continue end
-
-		local character = Player.Character
-		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-		if not rootPart then continue end
-
-		local requireHeld = AutoMetal.Values and AutoMetal.Values["Require Metal Detector Held"]
-		if requireHeld and not isHoldingMetalDetector(character) then continue end
-
-		local maxRange = (AutoMetal.Values and AutoMetal.Values["Range"]) or 10
-
-		local overlapParams = OverlapParams.new()
-		overlapParams.FilterType = Enum.RaycastFilterType.Exclude
-
-		local nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, maxRange, overlapParams)
-
-		for i = 1, #nearbyParts do
-			local part = nearbyParts[i]
-			if part.Name == "Part" and part.Parent and part.Parent:IsA("Model") and part.Parent.Name == "Model" then
-				processMetal(part.Parent)
-			end
-		end
-	end
-end)
-
-
-AutoHannah.Callbacks.OnToggle = function(state)
-	loops["auto hannah"] = state
-end
-
-task.spawn(function()
-	while task.wait(0.1) do 
-		if not loops["auto hannah"] then continue end
-
-		local character = Player.Character
-		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-		if not rootPart then continue end
-
-		local maxRange = (AutoHannah.Values and AutoHannah.Values["Range"]) or 20
-
-		local allPlayers = Players:GetPlayers()
-		for i = 1, #allPlayers do
-			local targetPlayer = allPlayers[i]
-
-			if targetPlayer ~= Player then
-				local enemyChar = targetPlayer.Character
-
-				if enemyChar and not hannahTargetsProcessing[enemyChar] then
-					local enemyRoot = enemyChar:FindFirstChild("HumanoidRootPart")
-
-					local executionIcon = enemyChar:FindFirstChild("Hannah Execution Icon", true)
-
-					if enemyRoot and executionIcon then
-						local distance = (rootPart.Position - enemyRoot.Position).Magnitude
-
-						if distance <= maxRange then
-							hannahTargetsProcessing[enemyChar] = true
-
-							task.spawn(function()
-								local args = {
-									{
-										user = Player,
-										victimEntity = enemyChar
-									}
-								}
-
-								local success, result = pcall(function()
-									return HannahRemote:InvokeServer(unpack(args))
-								end)
-
-								if success then
-									print("executed " .. targetPlayer.Name)
-								else
-									hannahTargetsProcessing[enemyChar] = nil
-								end
-							end)
+autoMetalThread = nil
+local oldAutoMetalToggle = AutoMetal.Callbacks.OnToggle
+AutoMetal.Callbacks.OnToggle = function(state)
+	if oldAutoMetalToggle then oldAutoMetalToggle(state) end
+	loops["auto metal"] = state
+	if autoMetalThread then task.cancel(autoMetalThread) autoMetalThread = nil end
+	if loops["auto metal"] then
+		autoMetalThread = task.spawn(function()
+			while loops["auto metal"] do
+				character = Player.Character
+				rootPart = character and character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					requireHeld = AutoMetal.Values and AutoMetal.Values["Require Metal Detector Held"]
+					if not requireHeld or isHoldingMetalDetector(character) then
+						maxRange = (AutoMetal.Values and AutoMetal.Values["Range"]) or 10
+						overlapParams = OverlapParams.new()
+						overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+						nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, maxRange, overlapParams)
+						for i = 1, #nearbyParts do
+							part = nearbyParts[i]
+							if part.Name == "Part" and part.Parent and part.Parent:IsA("Model") and part.Parent.Name == "Model" then
+								processMetal(part.Parent)
+							end
 						end
 					end
 				end
+				task.wait(0.5)
 			end
-		end
+			autoMetalThread = nil
+		end)
 	end
-end)
+end
+
+
+
+
+autoHannahThread = nil
+local oldAutoHannahToggle = AutoHannah.Callbacks.OnToggle
+AutoHannah.Callbacks.OnToggle = function(state)
+	if oldAutoHannahToggle then oldAutoHannahToggle(state) end
+	loops["auto hannah"] = state
+	if autoHannahThread then task.cancel(autoHannahThread) autoHannahThread = nil end
+	if 	loops["auto hannah"] then
+		autoHannahThread = task.spawn(function()
+			while loops["auto hannah"] do
+				character = Player.Character
+				rootPart = character and character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					maxRange = (AutoHannah.Values and AutoHannah.Values["Range"]) or 20
+					allPlayers = Players:GetPlayers()
+					for i = 1, #allPlayers do
+						targetPlayer = allPlayers[i]
+						if targetPlayer ~= Player then
+							enemyChar = targetPlayer.Character
+							if enemyChar and not hannahTargetsProcessing[enemyChar] then
+								enemyRoot = enemyChar:FindFirstChild("HumanoidRootPart")
+								executionIcon = enemyChar:FindFirstChild("Hannah Execution Icon", true)
+								if enemyRoot and executionIcon then
+									distance = (rootPart.Position - enemyRoot.Position).Magnitude
+									if distance <= maxRange then
+										hannahTargetsProcessing[enemyChar] = true
+										task.spawn(function()
+											success, result = pcall(function() return HannahRemote:InvokeServer({{user = Player, victimEntity = enemyChar}}) end)
+											if not success then hannahTargetsProcessing[enemyChar] = nil end
+										end)
+									end
+								end
+							end
+						end
+					end
+				end
+				task.wait(0.1)
+			end
+			autoHannahThread = nil
+		end)
+	end
+end
 
 
 local function processJailorSoul(model)
@@ -9059,36 +9036,62 @@ local function processJailorSoul(model)
 end
 
 
-
-task.spawn(function()
-	while task.wait(0.1) do
-		if not loops["auto warden"] then continue end
-
-		local character = Player.Character
-		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-		if not rootPart then continue end
-
-		local maxRange = (AutoWarden.Values and AutoWarden.Values["Range"]) or 20
-
-		local overlapParams = OverlapParams.new()
-		overlapParams.FilterType = Enum.RaycastFilterType.Exclude
-
-		local nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, maxRange, overlapParams)
-
-		for i = 1, #nearbyParts do
-			local part = nearbyParts[i]
-			if part.Name == "Spirit" and part.Parent and part.Parent.Name == "JailorSoul" then
-				task.defer(processJailorSoul, part.Parent)
+autoWardenThread = nil
+local oldAutoWardenToggle = AutoWarden.Callbacks.OnToggle
+AutoWarden.Callbacks.OnToggle = function(state)
+	if oldAutoWardenToggle then oldAutoWardenToggle(state) end
+	loops["auto warden"] = state
+	if autoWardenThread then task.cancel(autoWardenThread) autoWardenThread = nil end
+	if loops["auto warden"] then
+		autoWardenThread = task.spawn(function()
+			while loops["auto warden"] do
+				character = Player.Character
+				rootPart = character and character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					maxRange = (AutoWarden.Values and AutoWarden.Values["Range"]) or 20
+					overlapParams = OverlapParams.new()
+					overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+					nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, maxRange, overlapParams)
+					for i = 1, #nearbyParts do
+						part = nearbyParts[i]
+						if part.Name == "Spirit" and part.Parent and part.Parent.Name == "JailorSoul" then
+							task.defer(processJailorSoul, part.Parent)
+						end
+					end
+				end
+				task.wait(0.1)
 			end
-		end
+			autoWardenThread = nil
+		end)
 	end
-end)
-
-AutoMiner.Callbacks.OnToggle = function(state)
-	loops["auto miner"] = state
 end
 
-local miningSessions = {}
+local minerScanThread = nil
+AutoMiner.Callbacks.OnToggle = function(state)
+	loops["auto miner"] = state
+	if minerScanThread then task.cancel(minerScanThread) minerScanThread = nil end
+	if loops["auto miner"] then
+		minerScanThread = task.spawn(function()
+			while loops["auto miner"] do
+				local character = Player.Character
+				local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					local maxRange = (AutoMiner.Values and AutoMiner.Values["Range"]) or 6
+					local overlapParams = OverlapParams.new()
+					overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+					local nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, maxRange, overlapParams)
+					for i = 1, #nearbyParts do
+						local part = nearbyParts[i]
+						if part.Name == "HumanoidRootPart" and part.Parent and part.Parent:IsA("Model") then
+							task.defer(processPetrifiedPlayer, part.Parent)
+						end
+					end
+				end
+				task.wait(0.1) -- Changed from 0.02 to 0.1 (Scanning 50x a second is overkill and causes lag, 10x is instant enough)
+			end
+		end)
+	end
+end
 
 local function processPetrifiedPlayer(model)
 	if not loops["auto miner"] then return end
@@ -9202,78 +9205,54 @@ task.spawn(function()
 	end
 end)
 
+local kaliyahThread = nil
 AutoKaliyah.Callbacks.OnToggle = function(state)
 	loops["auto kaliyah"] = state
-end
-
-Players.PlayerRemoving:Connect(function(player)
-	if player.Character then
-		kaliyahTargetsProcessing[player.Character] = nil
-	end
-end)
-
-task.spawn(function()
-	while task.wait(0.01) do 
-		if not loops["auto kaliyah"] then continue end
-
-		local character = Player.Character
-		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-		if not rootPart then continue end
-
-		local maxRange = (AutoKaliyah.Values and AutoKaliyah.Values["Range"]) or 14.4
-
-		local allPlayers = Players:GetPlayers()
-		for i = 1, #allPlayers do
-			local targetPlayer = allPlayers[i]
-
-			if targetPlayer ~= Player then
-				local enemyChar = targetPlayer.Character
-
-				if enemyChar and not kaliyahTargetsProcessing[enemyChar] then
-					local enemyRoot = enemyChar:FindFirstChild("HumanoidRootPart")
-
-					local punchPrompt = enemyChar:FindFirstChild("KaliyahPunchInteraction", true)
-
-					if enemyRoot and punchPrompt then
-						local distance = (rootPart.Position - enemyRoot.Position).Magnitude
-
-						if distance <= maxRange then
-							kaliyahTargetsProcessing[enemyChar] = true
-
-							local args = {
-								{
-									target = enemyChar
-								}
-							}
-
-							PunchRemote:FireServer(unpack(args))
-
-							if AutoKaliyah.Values and AutoKaliyah.Values["Use Punch Animation"] then
-								local humanoid = character:FindFirstChildOfClass("Humanoid")
-								if humanoid then
-									local anim = Instance.new("Animation")
-									anim.AnimationId = "rbxassetid://10968521285"
-
-									local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid
-									local track = animator:LoadAnimation(anim)
-
-									track.Looped = false
-									track:Play()
-
-									task.spawn(function()
-										track.Stopped:Wait()
-										anim:Destroy()
-									end)
+	if kaliyahThread then task.cancel(kaliyahThread) kaliyahThread = nil end
+	if loops["auto kaliyah"] then
+		kaliyahThread = task.spawn(function()
+			while loops["auto kaliyah"] do
+				local character = Player.Character
+				local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					local maxRange = (AutoKaliyah.Values and AutoKaliyah.Values["Range"]) or 14.4
+					local allPlayers = Players:GetPlayers()
+					for i = 1, #allPlayers do
+						local targetPlayer = allPlayers[i]
+						if targetPlayer ~= Player then
+							local enemyChar = targetPlayer.Character
+							if enemyChar and not kaliyahTargetsProcessing[enemyChar] then
+								local enemyRoot = enemyChar:FindFirstChild("HumanoidRootPart")
+								local punchPrompt = enemyChar:FindFirstChild("KaliyahPunchInteraction", true)
+								if enemyRoot and punchPrompt then
+									local distance = (rootPart.Position - enemyRoot.Position).Magnitude
+									if distance <= maxRange then
+										kaliyahTargetsProcessing[enemyChar] = true
+										local args = {{ target = enemyChar }}
+										PunchRemote:FireServer(unpack(args))
+										if AutoKaliyah.Values and AutoKaliyah.Values["Use Punch Animation"] then
+											local humanoid = character:FindFirstChildOfClass("Humanoid")
+											if humanoid then
+												local anim = Instance.new("Animation")
+												anim.AnimationId = "rbxassetid://10968521285"
+												local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid
+												local track = animator:LoadAnimation(anim)
+												track.Looped = false
+												track:Play()
+												task.spawn(function() track.Stopped:Wait() anim:Destroy() end)
+											end
+										end
+									end
 								end
 							end
-
 						end
 					end
 				end
+				task.wait(0.01)
 			end
-		end
+		end)
 	end
-end)
+end
 
 AutoToxic.Callbacks.OnToggle = function(state)
 	loops["auto toxic"] = state
@@ -9756,9 +9735,7 @@ AutoBuy.Callbacks.OnToggle = function(state)
 	end)
 
 end
-AutoFish.Callbacks.OnToggle = function(state)
-	loops["auto fish"] = state
-end
+
 
 
 ZoomUnlocker.Callbacks.OnToggle = function(state)
@@ -9824,9 +9801,6 @@ AutoMelody.Callbacks.OnToggle = function(state)
 	end
 end
 
-AutoFish.Callbacks.OnToggle = function(state)
-	loops["auto fish"] = state
-end
 local netFolder = replicatedStorage:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out")
 local ProjectileRemote = netFolder:FindFirstChild("_NetManaged") and netFolder._NetManaged:WaitForChild("ProjectileFire", 3) 
 	or netFolder:FindFirstChild("_NetRemotes") and netFolder._NetRemotes:WaitForChild("ProjectileFire", 3)
@@ -9858,208 +9832,131 @@ local function checkVoidAhead(rootPart)
 	return result == nil
 end
 
-task.spawn(function()
-	local isFishing = false
-	local idleLoopTrack = nil
-
-	while task.wait(0.1) do
-		if not loops["auto fish"] then 
-			isFishing = false
-			if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
-			continue 
-		end
-
-		local Character = Player.Character
-		if not Character then continue end
-
-		local rootPart = Character:FindFirstChild("HumanoidRootPart")
-		local humanoid = Character:FindFirstChild("Humanoid")
-		local handInvItem = Character:FindFirstChild("HandInvItem")
-
-		if not rootPart or not humanoid or humanoid.Health <= 0 or not handInvItem or not handInvItem.Value then 
-			isFishing = false
-			if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
-			continue 
-		end
-
-		if handInvItem.Value.Name ~= "fishing_rod" then 
-			isFishing = false
-			if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
-			continue 
-		end
-
-		-- Start Fishing Cycle
-		if not isFishing then
-			if not checkVoidAhead(rootPart) then
-				task.wait(0.5)
-				continue
-			end
-
-			isFishing = true
-			local launchDirection = rootPart.CFrame.LookVector.Unit
-
-			local inventoryFolder = replicatedStorage:WaitForChild("Inventories"):FindFirstChild(Player.Name) or ReplicatedStorage:WaitForChild("Inventories"):GetChildren()[1]
-			if not inventoryFolder then isFishing = false; continue end
-			local inventoryRod = inventoryFolder:WaitForChild("fishing_rod", 3)
-			if not inventoryRod then isFishing = false; continue end
-
-			local playAnims = (AutoFish.Values and AutoFish.Values["Play Casting Anims"]) ~= false
-			local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid
-
-			if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
-
-			-- 1. Play the requested Initial Cast track (7789127251) once
-			if playAnims then
-				local castAnim = Instance.new("Animation")
-				castAnim.AnimationId = "rbxassetid://7789127251"
-				local castTrack = animator:LoadAnimation(castAnim)
-				castTrack.Looped = false
-				castTrack:Play()
-				task.delay(1.2, function() castAnim:Destroy() end)
-			end
-
-			-- 2. Build Arguments and Fire Projectile
-			randomShotId = generateRandomString(8)
-			randomCode = generateRandomString(8)
-			launchOrigin = rootPart.Position + (launchDirection * 3)
-			originX, originY, originZ = launchOrigin.X, launchOrigin.Y + 0.5, launchOrigin.Z
-
-			velocityX = launchDirection.X * 12
-			velocityY = 4.45 
-			velocityZ = launchDirection.Z * 12
-
-			local fireArgs = {
-				[1] = inventoryRod,
-				[3] = "fisherman_bobber",
-				[4] = vec(originX, originY, originZ),
-				[5] = vec(originX, originY - 2, originZ),   
-				[6] = vec(velocityX, velocityY, velocityZ), 
-				[7] = randomCode,
-				[8] = { shotId = randomShotId, drawDurationSec = 0 },
-				[9] = workspace:GetServerTimeNow()
-			}
-
-			pcall(function()
-				if ProjectileRemote then
-					ProjectileRemote:InvokeServer(unpack(fireArgs, 1, 9))
+autoFishThread = nil
+local oldAutoFishToggle = AutoFish.Callbacks.OnToggle
+AutoFish.Callbacks.OnToggle = function(state)
+	if oldAutoFishToggle then oldAutoFishToggle(state) end
+	loops["auto fish"] = state
+	if autoFishThread then task.cancel(autoFishThread) autoFishThread = nil end
+	if loops["auto fish"] then
+		autoFishThread = task.spawn(function()
+			local isFishing = false
+			local idleLoopTrack = nil
+			while loops["auto fish"] do
+				Character = Player.Character
+				if not Character then task.wait(0.1) continue end
+				rootPart = Character:FindFirstChild("HumanoidRootPart")
+				humanoid = Character:FindFirstChild("Humanoid")
+				handInvItem = Character:FindFirstChild("HandInvItem")
+				if not rootPart or not humanoid or humanoid.Health <= 0 or not handInvItem or not handInvItem.Value then
+					isFishing = false
+					if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
+					task.wait(0.1) continue
 				end
-			end)
-
-			task.wait(0.8)
-
-			if playAnims and loops["auto fish"] then
-				local idleAnim = Instance.new("Animation")
-				idleAnim.AnimationId = "rbxassetid://7789132571"
-				idleLoopTrack = animator:LoadAnimation(idleAnim)
-				idleLoopTrack.Looped = true
-				idleLoopTrack:Play()
-			end
-
-			local initialPosition = rootPart.Position
-			local interrupted = false
-			local minigameApp = nil
-			local waitTimer = 0
-			local minigameWaitTime = (AutoFish.Values and AutoFish.Values["Minigame Wait Time"]) or 1.5
-
-			while waitTimer < 10 do
-				task.wait(0.05)
-				waitTimer += 0.05
-
-				local hasMoved = (rootPart.Position - initialPosition).Magnitude > 0.5
-				local isJumping = humanoid.FloorMaterial == Enum.Material.Air
-				local stillHoldingRod = (handInvItem.Value and handInvItem.Value.Name == "fishing_rod")
-
-				if hasMoved or isJumping or not stillHoldingRod then
-					interrupted = true
-					break
+				if handInvItem.Value.Name ~= "fishing_rod" then
+					isFishing = false
+					if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
+					task.wait(0.1) continue
 				end
-
-				local playerGui = Player:FindFirstChild("PlayerGui")
-				if playerGui then
-					local actionBar = playerGui:FindFirstChild("ActionBarScreenGui")
-					if actionBar and actionBar:FindFirstChild("ActionBar") then
-						local app = actionBar.ActionBar:FindFirstChild("FishingMinigameApp")
-						if app then
-							minigameApp = app
-							break
+				if not isFishing then
+					if not checkVoidAhead(rootPart) then task.wait(0.5) continue end
+					isFishing = true
+					launchDirection = rootPart.CFrame.LookVector.Unit
+					inventoryFolder = replicatedStorage:WaitForChild("Inventories"):FindFirstChild(Player.Name) or ReplicatedStorage:WaitForChild("Inventories"):GetChildren()[1]
+					if not inventoryFolder then isFishing = false task.wait(0.1) continue end
+					inventoryRod = inventoryFolder:WaitForChild("fishing_rod", 3)
+					if not inventoryRod then isFishing = false task.wait(0.1) continue end
+					playAnims = (AutoFish.Values and AutoFish.Values["Play Casting Anims"]) ~= false
+					animator = humanoid:FindFirstChildOfClass("Animator") or humanoid
+					if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
+					if playAnims then
+						castAnim = Instance.new("Animation")
+						castAnim.AnimationId = "rbxassetid://7789127251"
+						castTrack = animator:LoadAnimation(castAnim)
+						castTrack.Looped = false
+						castTrack:Play()
+						task.delay(1.2, function() castAnim:Destroy() end)
+					end
+					randomShotId = generateRandomString(8)
+					randomCode = generateRandomString(8)
+					launchOrigin = rootPart.Position + (launchDirection * 3)
+					originX, originY, originZ = launchOrigin.X, launchOrigin.Y + 0.5, launchOrigin.Z
+					velocityX = launchDirection.X * 12
+					velocityY = 4.45
+					velocityZ = launchDirection.Z * 12
+					fireArgs = { [1] = inventoryRod, [3] = "fisherman_bobber", [4] = vec(originX, originY, originZ), [5] = vec(originX, originY - 2, originZ), [6] = vec(velocityX, velocityY, velocityZ), [7] = randomCode, [8] = { shotId = randomShotId, drawDurationSec = 0 }, [9] = workspace:GetServerTimeNow() }
+					pcall(function() if ProjectileRemote then ProjectileRemote:InvokeServer(unpack(fireArgs, 1, 9)) end end)
+					task.wait(0.8)
+					if playAnims and loops["auto fish"] then
+						idleAnim = Instance.new("Animation")
+						idleAnim.AnimationId = "rbxassetid://7789132571"
+						idleLoopTrack = animator:LoadAnimation(idleAnim)
+						idleLoopTrack.Looped = true
+						idleLoopTrack:Play()
+					end
+					initialPosition = rootPart.Position
+					interrupted = false
+					minigameApp = nil
+					waitTimer = 0
+					minigameWaitTime = (AutoFish.Values and AutoFish.Values["Minigame Wait Time"]) or 1.5
+					while waitTimer < 10 and loops["auto fish"] do
+						task.wait(0.05)
+						waitTimer += 0.05
+						hasMoved = (rootPart.Position - initialPosition).Magnitude > 0.5
+						isJumping = humanoid.FloorMaterial == Enum.Material.Air
+						stillHoldingRod = (handInvItem.Value and handInvItem.Value.Name == "fishing_rod")
+						if hasMoved or isJumping or not stillHoldingRod then interrupted = true break end
+						playerGui = Player:FindFirstChild("PlayerGui")
+						if playerGui then
+							actionBar = playerGui:FindFirstChild("ActionBarScreenGui")
+							if actionBar and actionBar:FindFirstChild("ActionBar") then
+								app = actionBar.ActionBar:FindFirstChild("FishingMinigameApp")
+								if app then minigameApp = app break end
+							end
 						end
 					end
-				end
-			end
-
-			if minigameApp and not interrupted then
-				if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
-
-				local minigameContainer = minigameApp:FindFirstChild("3") and minigameApp["3"]:FindFirstChild("Minigame")
-				local elapsedMinigameTime = 0
-				local autoTrackVisual = (AutoFish.Values and AutoFish.Values["Visual UI Auto-Track"]) ~= false
-				local minigameInterrupted = false
-
-				while elapsedMinigameTime < minigameWaitTime and minigameApp.Parent ~= nil do
-					task.wait(0.01)
-					elapsedMinigameTime += 0.01
-
-					local hasMoved = (rootPart.Position - initialPosition).Magnitude > 0.5
-					local isJumping = humanoid.FloorMaterial == Enum.Material.Air
-					if hasMoved or isJumping then
-						minigameInterrupted = true
-						break
-					end
-
-					if autoTrackVisual and minigameContainer then
-						local marker = minigameContainer:FindFirstChild("Marker")
-						local fishZone = minigameContainer:FindFirstChild("FishZone")
-						if marker and fishZone then
-							fishZone.Position = fishZone.Position:Lerp(marker.Position, 0.35)
+					if minigameApp and not interrupted then
+						if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
+						minigameContainer = minigameApp:FindFirstChild("3") and minigameApp["3"]:FindFirstChild("Minigame")
+						elapsedMinigameTime = 0
+						autoTrackVisual = (AutoFish.Values and AutoFish.Values["Visual UI Auto-Track"]) ~= false
+						minigameInterrupted = false
+						while elapsedMinigameTime < minigameWaitTime and minigameApp.Parent ~= nil and loops["auto fish"] do
+							task.wait(0.01)
+							elapsedMinigameTime += 0.01
+							hasMoved = (rootPart.Position - initialPosition).Magnitude > 0.5
+							isJumping = humanoid.FloorMaterial == Enum.Material.Air
+							if hasMoved or isJumping then minigameInterrupted = true break end
+							if autoTrackVisual and minigameContainer then
+								marker = minigameContainer:FindFirstChild("Marker")
+								fishZone = minigameContainer:FindFirstChild("FishZone")
+								if marker and fishZone then fishZone.Position = fishZone.Position:Lerp(marker.Position, 0.35) end
+							end
 						end
+						if minigameInterrupted then
+							if playAnims then lostAnim = Instance.new("Animation") lostAnim.AnimationId = "rbxassetid://7789136489" lostTrack = animator:LoadAnimation(lostAnim) lostTrack:Play() task.delay(1.5, function() lostTrack:Stop() lostAnim:Destroy() end) end
+							pcall(function() if PullRemote then PullRemote:FireServer({success = false}) end end)
+						else
+							if playAnims then successAnim = Instance.new("Animation") successAnim.AnimationId = "rbxassetid://7789136489" successTrack = animator:LoadAnimation(successAnim) successTrack:Play() task.delay(1.5, function() successTrack:Stop() successAnim:Destroy() end) end
+							pcall(function() if PullRemote then PullRemote:FireServer({success = true}) end end)
+						end
+						if minigameApp then pcall(function() minigameApp:Destroy() end) end
+						task.wait(1.2)
+					else
+						if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
+						pcall(function() if PullRemote then PullRemote:FireServer({success = false}) end end)
+						if minigameApp then pcall(function() minigameApp:Destroy() end) end
+						task.wait(0.5)
 					end
+					isFishing = false
 				end
-
-				if minigameInterrupted then
-					if playAnims then
-						local lostAnim = Instance.new("Animation")
-						lostAnim.AnimationId = "rbxassetid://7789136489"
-						local lostTrack = animator:LoadAnimation(lostAnim)
-						lostTrack:Play()
-						task.delay(1.5, function() lostTrack:Stop() lostAnim:Destroy() end)
-					end
-
-					pcall(function()
-						if PullRemote then PullRemote:FireServer({success = false}) end
-					end)
-				else
-					if playAnims then
-						local successAnim = Instance.new("Animation")
-						successAnim.AnimationId = "rbxassetid://7789136489"
-						local successTrack = animator:LoadAnimation(successAnim)
-						successTrack:Play()
-						task.delay(1.5, function() successTrack:Stop() successAnim:Destroy() end)
-					end
-
-					pcall(function()
-						if PullRemote then PullRemote:FireServer({success = true}) end
-					end)
-				end
-
-				if minigameApp then pcall(function() minigameApp:Destroy() end) end
-				task.wait(1.2)
-			else
-				if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
-
-				pcall(function()
-					if PullRemote then
-						PullRemote:FireServer({success = false})
-					end
-				end)
-
-				if minigameApp then pcall(function() minigameApp:Destroy() end) end
-				task.wait(0.5)
+				task.wait(0.1)
 			end
-
-			isFishing = false
-		end
+			if idleLoopTrack then idleLoopTrack:Stop() idleLoopTrack = nil end
+			autoFishThread = nil
+		end)
 	end
-end)
+end
 
 local consumeAnimation = "rbxassetid://11170405197"
 
@@ -10543,11 +10440,11 @@ LongJump.Callbacks.OnToggle = function(state)
 									currentItemName = handInvItem.Value
 									oldItemInst = nil
 
-									if currentItemName ~= "fireball" then
+									if currentItemName ~= fireballInst then
 										if currentItemName and currentItemName ~= "" then
 											oldItemInst = playerInv:FindFirstChild(currentItemName)
 										end
-										equipArgs = {{ hand = "fireball" }}
+										equipArgs = {{ hand = fireballInst }}
 										netManaged:WaitForChild("SetInvItem"):InvokeServer(unpack(equipArgs))
 									end
 
@@ -10570,7 +10467,7 @@ LongJump.Callbacks.OnToggle = function(state)
 									netManaged:WaitForChild("ProjectileFire"):InvokeServer(unpack(fireArgs))
 
 									if oldItemInst then
-										restoreArgs = {{ hand = oldItemInst.Name }}
+										restoreArgs = {{ hand = oldItemInst }}
 										netManaged:WaitForChild("SetInvItem"):InvokeServer(unpack(restoreArgs))
 
 
@@ -10738,9 +10635,6 @@ asDefaultSel = {}
 ChestESP:CreateSlider("ESP Scale", 3, 3, 1, nil, 0.1)
 ChestESP:CreateDropdown("Items", asItemList, asDefaultSel, nil, true)
 
-ChestESP.Callbacks.OnToggle = function(state)
-	loops["chest esp"] = state
-end
 
 function asIsItemSelected(itemName)
 	asSel = ChestESP.Values["Items"]
@@ -10846,46 +10740,48 @@ local function updateChestESP(billboard, items)
 	end
 end
 
-task.spawn(function()
-	while true do
-		task.wait(0.15)
-		if loops["chest esp"] then
-			local chests = findNearbyContainers(CHEST_ESP_RANGE, true)
-			local currentlyVisibleChests = {}
-
-			for _, chestPart in pairs(chests) do
-				local chestInventoryFolder
-				for _, object in pairs(chestPart:GetChildren()) do
-					if object.Name == "ChestFolderValue" then
-						chestInventoryFolder = object.Value
-						break
+chestEspThread = nil
+local oldChestESPToggle = ChestESP.Callbacks.OnToggle
+ChestESP.Callbacks.OnToggle = function(state)
+	if oldChestESPToggle then oldChestESPToggle(state) end
+	loops["chest esp"] = state
+	if chestEspThread then task.cancel(chestEspThread) chestEspThread = nil end
+	if loops["chest esp"] then
+		chestEspThread = task.spawn(function()
+			while loops["chest esp"] do
+				chests = findNearbyContainers(CHEST_ESP_RANGE, true)
+				currentlyVisibleChests = {}
+				for _, chestPart in pairs(chests) do
+					chestInventoryFolder = nil
+					for _, object in pairs(chestPart:GetChildren()) do
+						if object.Name == "ChestFolderValue" then chestInventoryFolder = object.Value break end
 					end
-				end
-				if chestInventoryFolder then
-					local items = asGetFilteredItems(chestInventoryFolder)
-					if #items > 0 then
-						currentlyVisibleChests[chestPart] = true
-						if not activeESPs[chestPart] then
-							activeESPs[chestPart] = createChestESP(chestPart)
+					if chestInventoryFolder then
+						items = asGetFilteredItems(chestInventoryFolder)
+						if #items > 0 then
+							currentlyVisibleChests[chestPart] = true
+							if not activeESPs[chestPart] then activeESPs[chestPart] = createChestESP(chestPart) end
+							updateChestESP(activeESPs[chestPart], items)
 						end
-						updateChestESP(activeESPs[chestPart], items)
 					end
 				end
-			end
-
-			for chestPart, gui in pairs(activeESPs) do
-				if not currentlyVisibleChests[chestPart] or not chestPart.Parent then
-					gui:Destroy()
-					activeESPs[chestPart] = nil
+				for chestPart, gui in pairs(activeESPs) do
+					if not currentlyVisibleChests[chestPart] or not chestPart.Parent then
+						gui:Destroy()
+						activeESPs[chestPart] = nil
+					end
 				end
+				task.wait(0.15)
 			end
-		else
 			for chestPart, gui in pairs(activeESPs) do gui:Destroy() end
 			table.clear(activeESPs)
-		end
+			chestEspThread = nil
+		end)										
+	else
+		for chestPart, gui in pairs(activeESPs) do gui:Destroy() end
+		table.clear(activeESPs)
 	end
-end)
-
+end
 zephyrStackIncrease.OnClientEvent:Connect(function(data)
 
 	zephyrStacks = data.orbCount
@@ -14365,29 +14261,35 @@ WeatherIntensity = Shaders:CreateSlider("Weather Intensity", 100, 5000, 1500, fu
 
 UpdateShaderUI()
 
-if WeatherRenderLoop then WeatherRenderLoop:Disconnect() end
-WeatherRenderLoop = RunService.RenderStepped:Connect(function()
-	if not loops or not loops["shaders"] then return end
-
-	if Shaders.Values["Enable Clouds"] then
-		fwC = Terrain:FindFirstChild("FeatherwareClouds")
-		if fwC then fwC.Color = Shaders.Values["Cloud Color"] or Color3.fromRGB(255, 255, 255) end
-	end
-
-	if Shaders.Values["Enable Water"] then
-		Terrain.WaterColor = Shaders.Values["Water Color"] or Color3.fromRGB(0, 150, 255)
-	end
-
-	if Cam and Cam:FindFirstChild("FeatherwareWeather") then
-		Cam.FeatherwareWeather.Position = Cam.CFrame.Position + Vector3.new(0, 60, 0)
-	end
-end)
-
+local WeatherRenderLoop = nil
 Shaders.Callbacks.OnToggle = function(state)
 	if not loops then loops = {} end
 	loops["shaders"] = state
 	UpdateShaderUI()
 	ApplyShaders()
+
+	-- Only connect the RenderStepped loop when Shaders are ON
+	if state then
+		if not WeatherRenderLoop then
+			WeatherRenderLoop = RunService.RenderStepped:Connect(function()
+				if Shaders.Values["Enable Clouds"] then
+					local fwC = Terrain:FindFirstChild("FeatherwareClouds")
+					if fwC then fwC.Color = Shaders.Values["Cloud Color"] or Color3.fromRGB(255, 255, 255) end
+				end
+				if Shaders.Values["Enable Water"] then
+					Terrain.WaterColor = Shaders.Values["Water Color"] or Color3.fromRGB(0, 150, 255)
+				end
+				if Cam and Cam:FindFirstChild("FeatherwareWeather") then
+					Cam.FeatherwareWeather.Position = Cam.CFrame.Position + Vector3.new(0, 60, 0)
+				end
+			end)
+		end
+	else
+		if WeatherRenderLoop then
+			WeatherRenderLoop:Disconnect()
+			WeatherRenderLoop = nil
+		end
+	end
 end
 
 chams_gen = (chams_gen or 0) + 1
@@ -16996,20 +16898,14 @@ end
 
 function vaScanNpcs()
 	va_npcCache = {}
-	for _, va_obj in ipairs(workspace:GetDescendants()) do
-		if va_obj:IsA("Humanoid") then
-			va_m = va_obj.Parent
-			if va_m and va_m:IsA("Model") and va_m:FindFirstChild("HumanoidRootPart") then
-				va_isPlr = false
-				for _, va_p in ipairs(Players:GetPlayers()) do
-					if va_p.Character == va_m then va_isPlr = true; break end
-				end
-				if not va_isPlr then table.insert(va_npcCache, va_m) end
+	if typeof(EntityCache) == "table" and EntityCache.npcs then
+		for _, va_m in ipairs(EntityCache.npcs) do
+			if va_m and va_m.Parent and va_m:FindFirstChild("HumanoidRootPart") then
+				table.insert(va_npcCache, va_m)
 			end
 		end
 	end
 end
-
 -- ===== TARGET TRACKING (prediction) =====
 
 function vaResetTracking()
