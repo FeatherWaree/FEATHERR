@@ -952,7 +952,9 @@ loops = {
 	["scaffold"] = false,
 	["bowassist"] = false,
 	["kill effects"] = false,
-	["win effects"] = false
+	["win effects"] = false,
+	["knockback delay"] = false,
+	["crosshair customizer"] = false
 }
 
 --REMOTE EVENTS/FUNCTIONS--
@@ -11326,9 +11328,8 @@ trackingConnection = nil
 
 local function applyTracer(obj, isPreview)
 	if not isPreview and not VALID_PROJECTILES[obj.Name] then return end
-
-	task.spawn(function()
-		local handle = obj:FindFirstChild("Handle") or obj
+	-- Removed task.spawn to apply instantly before the visual renders
+	local handle = obj:FindFirstChild("Handle") or obj
 		if not handle then return end
 
 		local function getEffect(target, className)
@@ -11408,7 +11409,6 @@ local function applyTracer(obj, isPreview)
 				end
 			end
 		end
-	end)
 end
 
 
@@ -12922,17 +12922,16 @@ function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 	pas_modelName = (pPm and pPm.projectileModel) or pProj
 	pas_srcRoot = paItems and paItems:FindFirstChild(pas_modelName)
 	if not pas_srcRoot then return end
+
 	if pas_srcRoot:IsA("Accessory") then
 		pas_src = pas_srcRoot:FindFirstChild("Handle")
 	else
 		pas_src = pas_srcRoot
 	end
+
 	if not pas_src then return end
 	pas_clone = pas_src:Clone()
-
-	-- FIX: Rename the clone to the projectile name so tracers can identify it
-	pas_clone.Name = pProj 
-	pas_clone.Parent = workspace                       -- straight into workspace, no folder
+	pas_clone.Parent = workspace -- Kept as workspace like your original version
 
 	if pas_clone:IsA("BasePart") then
 		pas_mover = pas_clone; pas_isModel = false
@@ -12943,20 +12942,25 @@ function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 	else
 		pas_clone:Destroy(); return
 	end
+
 	if not pas_mover then pas_clone:Destroy(); return end
+
 	if pas_mover:IsA("BasePart") then
 		pas_mover.Anchored = true; pas_mover.CanCollide = false; pas_mover.CanQuery = false; pas_mover.CanTouch = false
 	end
+
 	pas_dir = pVel.Magnitude > 0 and pVel.Unit or Vector3.new(0,1,0)
 	pas_fr = (pPm and pPm.flightRotation) or Vector3.new(0,0,0)
 	pas_cf = CFrame.lookAt(pO, pO + pas_dir) * CFrame.Angles(pas_fr.X, pas_fr.Y, pas_fr.Z)
-	if pas_isModel then pas_clone:PivotTo(pas_cf) else pas_mover.CFrame = pas_cf end
-	table.insert(PA_VIS, { obj = pas_clone, mover = pas_mover, isModel = pas_isModel, O = pO, V = pVel, g = pG, fr = pas_fr, t0 = tick(), life = (pPm and pPm.lifetimeSec) or 2 })
 
-	-- FIX: Instantly apply tracers to the Projectile Aura's visual clone
-	if loops["projectile tracers"] then
+	if pas_isModel then pas_clone:PivotTo(pas_cf) else pas_mover.CFrame = pas_cf end
+
+	-- FIX: Instantly apply the tracer to the clone if the setting is enabled
+	if loops["projectile tracers"] and type(applyTracer) == "function" then
 		applyTracer(pas_clone, true)
 	end
+
+	table.insert(PA_VIS, { obj = pas_clone, mover = pas_mover, isModel = pas_isModel, O = pO, V = pVel, g = pG, fr = pas_fr, t0 = tick(), life = (pPm and pPm.lifetimeSec) or 2 })
 end
 
 -- in-flight shot: equip weapon, fire, delayed multi-tap hit; visual ONLY on a successful fire
@@ -18083,13 +18087,32 @@ end
 -- ============================================================
 --  MOVEMENT: Scaffold
 -- ============================================================
+-- Scaffold Module
 Scaffold = Movement:CreateButton("Scaffold", nil, true)
-Scaffold:CreateDropdown("Mode", { "Straight", "Diagonal", "Both", "Tower" }, "Straight", nil)
-Scaffold:CreateDropdown("Block Type", { "wool_white", "wool_blue", "wool_red", "wool_green", "wool_orange", "wool_yellow", "wool_pink", "wool_cyan", "wool_purple", "wool_brown", "stone_bricks", "oak_plank" }, "wool_white", nil)
-Scaffold:CreateSlider("Extend", 1, 5, 1, nil, 1)
 Scaffold:CreateToggle("Tower", false, nil)
+Scaffold:CreateToggle("Expand", false, nil)
 Scaffold:CreateToggle("Safe Walk", true, nil)
-Scaffold:CreateToggle("Sprint", true, nil)
+Scaffold:CreateToggle("Sprint", false, nil)
+Scaffold:CreateToggle("Show Counter", true, nil)
+
+-- Massive list of all block types in the game
+scaffoldBlockList = {
+	"wool_white", "wool_orange", "wool_magenta", "wool_light_blue", "wool_yellow", "wool_lime", "wool_pink", "wool_gray", "wool_light_gray", "wool_cyan", "wool_purple", "wool_blue", "wool_brown", "wool_green", "wool_red", "wool_black",
+	"oak_plank", "birch_plank", "spruce_plank", "acacia_plank", "dark_oak_plank", "jungle_plank",
+	"stone_bricks", "cracked_stone_bricks", "mossy_stone_bricks", "obsidian", "end_stone", "prismarine", "nether_brick", "red_nether_brick", "quartz_block", "purpur_block", "sponge", "wet_sponge", "glowstone", "sea_lantern", "glass", "stained_glass_white", "stained_glass_black"
+}
+Scaffold:CreateDropdown("Block Type", scaffoldBlockList, "wool_white", nil)
+
+-- Ensure the block placement remote is loaded
+if not sm_placeRemote then
+	pcall(function()
+		local net = replicatedStorage:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("block-engine"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged")
+		sm_placeRemote = net:WaitForChild("PlaceBlock")
+	end)
+end
+
+-- Counter Label Setup
+scaffoldCounterLabel = nil
 
 sc_lastPlace = 0
 sc_lastGrid = nil
@@ -18097,123 +18120,184 @@ sc_hbConn = nil
 sc_raycast = RaycastParams.new()
 sc_raycast.FilterType = Enum.RaycastFilterType.Exclude
 
-function scWorldToGrid(pos)
-	return Vector3.new(math.round(pos.X / sm_GRID), math.round(pos.Y / sm_GRID), math.round(pos.Z / sm_GRID))
-end
 
-function scGridToWorld(grid)
-	return Vector3.new(grid.X * sm_GRID + sm_GRID / 2, grid.Y * sm_GRID + sm_GRID / 2, grid.Z * sm_GRID + sm_GRID / 2)
-end
+	function scaffoldGetBlockCount(blockType)
+		local inv = replicatedStorage:FindFirstChild("Inventories")
+		if not inv then return 0 end
+		local playerInv = inv:FindFirstChild(Player.Name)
+		if not playerInv then return 0 end
+		local item = playerInv:FindFirstChild(blockType)
+		if not item then return 0 end
+		return item:GetAttribute("Amount") or 0
+	end
 
-function scHasSupport(gridPos, char)
-	sc_raycast.FilterDescendantsInstances = { char }
-	sc_origin = scGridToWorld(gridPos + Vector3.new(0, 1, 0))
-	sc_hit = workspace:Raycast(sc_origin, Vector3.new(0, -sm_GRID - 0.5, 0), sc_raycast)
-	return sc_hit ~= nil
-end
+	function scaffoldUpdateCounter()
+		if not Scaffold.Values["Show Counter"] then
+			if scaffoldCounterLabel then scaffoldCounterLabel.Visible = false end
+			return
+		end
 
-function scPlaceBlock(gridPos, char)
-	if not sm_placeRemote then return end
-	sc_below = gridPos - Vector3.new(0, 1, 0)
-	sc_hitWorld = scGridToWorld(sc_below) + Vector3.new(0, sm_GRID / 2, 0)
-	pcall(function()
-		sm_placeRemote:InvokeServer({
-			position = Vector3.new(gridPos.X, gridPos.Y, gridPos.Z),
-			blockType = Scaffold.Values["Block Type"] or "wool_white",
+		if not scaffoldCounterLabel then
+			scaffoldCounterLabel = Instance.new("TextLabel")
+			scaffoldCounterLabel.Name = "ScaffoldCounter"
+			scaffoldCounterLabel.Size = UDim2.new(0, 220, 0, 40)
+			scaffoldCounterLabel.Position = UDim2.new(0.5, -110, 0.6, 0) -- Middle, slightly lower
+			scaffoldCounterLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+			scaffoldCounterLabel.BackgroundTransparency = 0.4
+			scaffoldCounterLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+			scaffoldCounterLabel.TextSize = 22
+			scaffoldCounterLabel.Font = Enum.Font.GothamBold
+			scaffoldCounterLabel.Parent = CoreGui
+			Instance.new("UICorner", scaffoldCounterLabel).CornerRadius = UDim.new(0, 8)
+		end
+
+		scaffoldCounterLabel.Visible = true
+		local blockType = Scaffold.Values["Block Type"] or "wool_white"
+		local count = scaffoldGetBlockCount(blockType)
+		scaffoldCounterLabel.Text = blockType:gsub("_", " ") .. ": " .. count
+	end
+
+function scaffoldIsBlockEmpty(gridPos)
+	local worldPos = gridPos * 3
+	local params = OverlapParams.new()
+	params.FilterDescendantsInstances = {Player.Character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local parts = workspace:GetPartBoundsInBox(CFrame.new(worldPos), Vector3.new(2.8, 2.8, 2.8), params)
+	for _, p in ipairs(parts) do
+		if p.CanCollide and not p:IsDescendantOf(Player.Character) then
+			return false -- A solid block already exists here
+		end
+	end
+	return true
+end
+	function scaffoldPlaceBlock(newGridPos, targetGridPos)
+		if not sm_placeRemote then return end
+
+		-- Calculate the hit normal based on which face of the target block we are clicking
+		local diff = newGridPos - targetGridPos
+		local hitNormal = Vector3.new(0, 1, 0)
+		if diff.Y == 1 then hitNormal = Vector3.new(0, 1, 0)
+		elseif diff.Y == -1 then hitNormal = Vector3.new(0, -1, 0)
+		elseif diff.X == 1 then hitNormal = Vector3.new(1, 0, 0)
+		elseif diff.X == -1 then hitNormal = Vector3.new(-1, 0, 0)
+		elseif diff.Z == 1 then hitNormal = Vector3.new(0, 0, 1)
+		elseif diff.Z == -1 then hitNormal = Vector3.new(0, 0, -1)
+		end
+
+		local targetWorldPos = targetGridPos * 3
+		local hitPosition = targetWorldPos + (hitNormal * 1.5)
+		local blockType = Scaffold.Values["Block Type"] or "wool_white"
+
+		-- Exact game arguments for placing a block
+		local args = {
+			position = Vector3.new(newGridPos.X, newGridPos.Y, newGridPos.Z),
+			blockType = blockType,
 			blockData = 0,
 			mouseBlockInfo = {
 				target = {
-					blockRef = { blockPosition = Vector3.new(sc_below.X, sc_below.Y, sc_below.Z) },
-					hitPosition = Vector3.new(sc_hitWorld.X, sc_hitWorld.Y, sc_hitWorld.Z),
-					hitNormal = Vector3.new(0, 1, 0),
+					blockRef = { blockPosition = Vector3.new(targetGridPos.X, targetGridPos.Y, targetGridPos.Z) },
+					hitPosition = hitPosition,
+					hitNormal = hitNormal,
 				},
-				placementPosition = Vector3.new(gridPos.X, gridPos.Y, gridPos.Z),
+				placementPosition = Vector3.new(newGridPos.X, newGridPos.Y, newGridPos.Z),
 			},
-		})
-	end)
-end
+		}
 
-function scGetMoveDirs(hum, cam)
-	sc_moveDir = hum.MoveDirection
-	if sc_moveDir.Magnitude < 0.1 then return {} end
-	sc_moveDir = Vector3.new(sc_moveDir.X, 0, sc_moveDir.Z).Unit
-	sc_mode = Scaffold.Values["Mode"] or "Straight"
-	sc_dirs = {}
-	sc_straight = Vector3.new(math.round(sc_moveDir.X), 0, math.round(sc_moveDir.Z))
-	if sc_straight.Magnitude > 0 then sc_straight = sc_straight.Unit end
-
-	if sc_mode == "Straight" or sc_mode == "Both" then
-		if sc_straight.Magnitude > 0 then table.insert(sc_dirs, Vector3.new(math.round(sc_straight.X), 0, math.round(sc_straight.Z))) end
+		pcall(function()
+			sm_placeRemote:InvokeServer(args)
+		end)
 	end
-	if sc_mode == "Diagonal" or sc_mode == "Both" then
-		sc_camLook = cam.CFrame.LookVector
-		sc_camFlat = Vector3.new(sc_camLook.X, 0, sc_camLook.Z)
-		if sc_camFlat.Magnitude > 0.1 then
-			sc_camFlat = sc_camFlat.Unit
-			sc_diag1 = Vector3.new(math.round(sc_camFlat.X + sc_straight.X), 0, math.round(sc_camFlat.Z + sc_straight.Z))
-			if sc_diag1.Magnitude > 0 then table.insert(sc_dirs, sc_diag1) end
+
+	scaffoldLoopConn = nil
+
+	function scaffoldLoop()
+		local char = Player.Character
+		if not char then return end
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if not hrp or not hum then return end
+
+		scaffoldUpdateCounter()
+
+		local feetPos = hrp.Position - Vector3.new(0, 2.5, 0)
+		local gridBelow = Vector3.new(math.round(feetPos.X / 3), math.round(feetPos.Y / 3), math.round(feetPos.Z / 3))
+
+		local placed = false
+
+		-- Tower: Place directly below
+		if Scaffold.Values["Tower"] then
+			if scaffoldIsBlockEmpty(gridBelow) then
+				local targetGrid = gridBelow + Vector3.new(0, 1, 0)
+				if not scaffoldIsBlockEmpty(targetGrid) then
+					scaffoldPlaceBlock(gridBelow, targetGrid)
+					placed = true
+				end
+			end
+		end
+
+		-- Expand: Place behind the player based on movement direction
+		if not placed and Scaffold.Values["Expand"] then
+			local moveDir = hum.MoveDirection
+			if moveDir.Magnitude > 0.1 then
+				local dirGrid = Vector3.new(math.round(moveDir.X), 0, math.round(moveDir.Z))
+				if dirGrid.Magnitude > 0 then
+					local gridBehind = gridBelow - dirGrid
+					if scaffoldIsBlockEmpty(gridBehind) then
+						local targetGrid = gridBehind + dirGrid
+						if not scaffoldIsBlockEmpty(targetGrid) then
+							scaffoldPlaceBlock(gridBehind, targetGrid)
+						end
+					end
+				end
+			end
+		end
+
+		-- Safe Walk: Prevent walking off edges
+		if Scaffold.Values["Safe Walk"] then
+			local moveDir = hum.MoveDirection
+			if moveDir.Magnitude > 0.1 then
+				local dirGrid = Vector3.new(math.round(moveDir.X), 0, math.round(moveDir.Z))
+				if dirGrid.Magnitude > 0 then
+					local gridAhead = gridBelow + dirGrid
+					if scaffoldIsBlockEmpty(gridAhead) then
+						local belowAhead = gridAhead - Vector3.new(0, 1, 0)
+						if scaffoldIsBlockEmpty(belowAhead) then
+							hum.WalkSpeed = math.min(hum.WalkSpeed, 8)
+						end
+					end
+				end
+			end
+		end
+
+		-- Sprint
+		if Scaffold.Values["Sprint"] then
+			if canRequire and SprintController then
+				SprintController.attemptingSprint = true
+				SprintController:startSprinting()
+			end
 		end
 	end
-	return sc_dirs
-end
 
-Scaffold.Callbacks.OnToggle = function(state)
-	loops["scaffold"] = state
-	if state then
-		sc_lastPlace = 0
-		sc_lastGrid = nil
-		sc_hbConn = sm_rs2.Heartbeat:Connect(function()
-			if not loops["scaffold"] then return end
-			sc_char = Player.Character
-			if not sc_char then return end
-			sc_hrp = sc_char:FindFirstChild("HumanoidRootPart")
-			sc_hum = sc_char:FindFirstChildOfClass("Humanoid")
-			sc_cam = workspace.CurrentCamera
-			if not sc_hrp or not sc_hum or not sc_cam or sc_hum.Health <= 0 then return end
-
-			sc_feet = sc_hrp.Position - Vector3.new(0, 1.5, 0)
-			sc_feetGrid = scWorldToGrid(sc_feet)
-			sc_mode = Scaffold.Values["Mode"] or "Straight"
-
-			if sc_mode == "Tower" or Scaffold.Values["Tower"] then
-				sc_camLook = sc_cam.CFrame.LookVector
-				if sc_camLook.Y > 0.5 then
-					sc_towerGrid = sc_feetGrid + Vector3.new(0, 1, 0)
-					if sc_lastGrid ~= sc_towerGrid then
-						scPlaceBlock(sc_towerGrid, sc_char)
-						sc_lastGrid = sc_towerGrid
-					end
-					return
-				end
+	Scaffold.Callbacks.OnToggle = function(state)
+		loops["scaffold"] = state
+		if state then
+			if not scaffoldLoopConn then
+				scaffoldLoopConn = RunService.Heartbeat:Connect(scaffoldLoop)
 			end
-
-			sc_dirs = scGetMoveDirs(sc_hum, sc_cam)
-			if #sc_dirs == 0 then return end
-
-			sc_extend = Scaffold.Values["Extend"] or 1
-			for _, sc_dir in ipairs(sc_dirs) do
-				for sc_i = 1, sc_extend do
-					sc_nextGrid = sc_feetGrid + sc_dir * sc_i
-					if sc_lastGrid == sc_nextGrid then continue end
-					if scHasSupport(sc_nextGrid, sc_char) then
-						scPlaceBlock(sc_nextGrid, sc_char)
-						sc_lastGrid = sc_nextGrid
-					end
-				end
+		else
+			if scaffoldLoopConn then
+				scaffoldLoopConn:Disconnect()
+				scaffoldLoopConn = nil
 			end
-
-			if Scaffold.Values["Safe Walk"] then
-				sc_aheadGrid = sc_feetGrid + Vector3.new(math.round(sc_hum.MoveDirection.X), 0, math.round(sc_hum.MoveDirection.Z))
-				if not scHasSupport(sc_aheadGrid - Vector3.new(0, 1, 0), sc_char) then
-					sc_hum.WalkSpeed = math.min(sc_hum.WalkSpeed, 8)
-				end
+			if scaffoldCounterLabel then
+				scaffoldCounterLabel.Visible = false
 			end
-		end)
-	else
-		if sc_hbConn then sc_hbConn:Disconnect(); sc_hbConn = nil end
-		sc_lastGrid = nil
+			-- Restore normal walk speed if Safe Walk slowed it down
+			if cachedHumanoid then
+				cachedHumanoid.WalkSpeed = 16
+			end
+		end
 	end
-end
 
 -- ============================================================
 --  VISUALS: Generator ESP
@@ -19058,3 +19142,272 @@ local NightmareEmoteBtn = GameTab:CreateButton("Nightmare Emote", function()
 	NightmareEmoteBtn.Toggled = false
 	NightmareEmoteBtn:SetState(false)
 end, false)
+
+-- ============================================================
+--  VISUALS: Crosshair Customizer
+-- ============================================================
+CrosshairCustomizer = Visuals:CreateButton("Crosshair Customizer", nil, true)
+CrosshairCustomizer:CreateToggle("Enable Custom Crosshair", false, nil)
+CrosshairCustomizer:CreateToggle("Hide Default Crosshair", false, nil)
+CrosshairCustomizer:CreateDropdown("Style", {"Cross", "Dot", "Circle", "T-Shape", "Engineer"}, "Cross", nil, false)
+CrosshairCustomizer:CreateColorPicker("Crosshair Color", Color3.fromRGB(255, 255, 255), nil)
+CrosshairCustomizer:CreateSlider("Opacity", 0, 1, 1, nil, 0.05)
+CrosshairCustomizer:CreateSlider("Size", 1, 50, 15, nil, 1)
+CrosshairCustomizer:CreateSlider("Thickness", 1, 10, 2, nil, 1)
+CrosshairCustomizer:CreateSlider("Gap", 0, 30, 5, nil, 1)
+CrosshairCustomizer:CreateToggle("Show Outline", true, nil)
+CrosshairCustomizer:CreateColorPicker("Outline Color", Color3.fromRGB(0, 0, 0), nil)
+CrosshairCustomizer:CreateSlider("Outline Thickness", 1, 5, 1, nil, 1)
+CrosshairCustomizer:CreateToggle("Center Dot", false, nil)
+CrosshairCustomizer:CreateSlider("Dot Size", 1, 10, 3, nil, 1)
+
+ch_gui = nil
+ch_parts = {}
+ch_renderConn = nil
+ ch_defaultCrosshairs = {}
+ch_turretImageId = nil
+
+function chGetCoreGui()
+	success, coreGui = pcall(function() return game:GetService("CoreGui") end)
+	if success then return coreGui end
+	return Player:WaitForChild("PlayerGui")
+end
+
+function chCreatePart(name, parent, isImage)
+	part = nil
+	if isImage then
+		part = Instance.new("ImageLabel")
+		part.BackgroundTransparency = 1
+	else
+		part = Instance.new("Frame")
+		part.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	end
+	part.Name = name
+	part.BorderSizePixel = 0
+	part.AnchorPoint = Vector2.new(0.5, 0.5)
+	part.ZIndex = 10
+	part.Parent = parent
+
+	if not isImage then
+		outline = Instance.new("UIStroke")
+		outline.Name = "Outline"
+		outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		outline.Color = Color3.fromRGB(0, 0, 0)
+		outline.Thickness = 1
+		outline.Parent = part
+	end
+
+	return part
+end
+
+function chInitGUI()
+	if ch_gui then return end
+ coreGui = chGetCoreGui()
+	ch_gui = Instance.new("ScreenGui")
+	ch_gui.Name = "Featherware_CustomCrosshair"
+	ch_gui.ResetOnSpawn = false
+	ch_gui.IgnoreGuiInset = true
+	ch_gui.DisplayOrder = 999
+	ch_gui.Parent = coreGui
+
+	 container = Instance.new("Frame")
+	container.Name = "Container"
+	container.Size = UDim2.fromOffset(0, 0)
+	container.Position = UDim2.fromScale(0.5, 0.5)
+	container.AnchorPoint = Vector2.new(0.5, 0.5)
+	container.BackgroundTransparency = 1
+	container.Parent = ch_gui
+
+	ch_parts.Top = chCreatePart("Top", container)
+	ch_parts.Bottom = chCreatePart("Bottom", container)
+	ch_parts.Left = chCreatePart("Left", container)
+	ch_parts.Right = chCreatePart("Right", container)
+	ch_parts.CenterDot = chCreatePart("CenterDot", container)
+	ch_parts.EngineerImg = chCreatePart("EngineerImg", container, true)
+
+	ch_parts.Circle = Instance.new("Frame")
+	ch_parts.Circle.Name = "Circle"
+	ch_parts.Circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	ch_parts.Circle.BackgroundTransparency = 1
+	ch_parts.Circle.BorderSizePixel = 0
+	ch_parts.Circle.AnchorPoint = Vector2.new(0.5, 0.5)
+	ch_parts.Circle.ZIndex = 9
+	ch_parts.Circle.Parent = container
+
+	circleCorner = Instance.new("UICorner")
+	circleCorner.CornerRadius = UDim.new(1, 0)
+	circleCorner.Parent = ch_parts.Circle
+
+	circleOutline = Instance.new("UIStroke")
+	circleOutline.Name = "Outline"
+	circleOutline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	circleOutline.Color = Color3.fromRGB(0, 0, 0)
+	circleOutline.Thickness = 1
+	circleOutline.Parent = ch_parts.Circle
+	ch_parts.CircleOutline = circleOutline
+
+	dotCorner = Instance.new("UICorner")
+	dotCorner.CornerRadius = UDim.new(1, 0)
+	dotCorner.Parent = ch_parts.CenterDot
+end
+
+function chUpdateCrosshair()
+	if not ch_gui then return end
+
+	enabled = CrosshairCustomizer.Values["Enable Custom Crosshair"]
+	 hideDefault = CrosshairCustomizer.Values["Hide Default Crosshair"]
+	 style = CrosshairCustomizer.Values["Style"]
+	 color = CrosshairCustomizer.Values["Crosshair Color"] or Color3.fromRGB(255, 255, 255)
+ opacity = CrosshairCustomizer.Values["Opacity"] or 1
+	 size = CrosshairCustomizer.Values["Size"] or 15
+	thickness = CrosshairCustomizer.Values["Thickness"] or 2
+	gap = CrosshairCustomizer.Values["Gap"] or 5
+ showOutline = CrosshairCustomizer.Values["Show Outline"]
+outlineColor = CrosshairCustomizer.Values["Outline Color"] or Color3.fromRGB(0, 0, 0)
+	outlineThickness = CrosshairCustomizer.Values["Outline Thickness"] or 1
+	centerDot = CrosshairCustomizer.Values["Center Dot"]
+	 dotSize = CrosshairCustomizer.Values["Dot Size"] or 3
+
+	ch_gui.Enabled = enabled
+
+	-- ONLY REQUIRE / MODIFY GAME CROSSHAIRS IF canRequire IS TRUE
+	if canRequire then
+		if hideDefault then
+			local playerGui = Player:FindFirstChild("PlayerGui")
+			if playerGui then
+				for _, gui in ipairs(playerGui:GetChildren()) do
+					if gui:IsA("ScreenGui") and (gui.Name:lower():find("crosshair") or gui.Name:lower():find("engineer")) then
+						if not ch_defaultCrosshairs[gui] then
+							ch_defaultCrosshairs[gui] = gui.Enabled
+						end
+						gui.Enabled = false
+					end
+				end
+			end
+		else
+			for gui, originalState in pairs(ch_defaultCrosshairs) do
+				if gui and gui.Parent then
+					gui.Enabled = originalState
+				end
+			end
+			table.clear(ch_defaultCrosshairs)
+		end
+
+		-- Fetch Engineer Turret Image ID if needed
+		if style == "Engineer" and not ch_turretImageId then
+			local success, imgModule = pcall(function()
+				return require(game:GetService("ReplicatedStorage").TS.image["image-id"]).BedwarsImageId
+			end)
+			if success and imgModule and imgModule.TURRET_CROSSHAIR then
+				ch_turretImageId = imgModule.TURRET_CROSSHAIR
+			end
+		end
+	end
+
+	if not enabled then return end
+
+	transp = 1 - opacity
+	outlineTransp = showOutline and 0 or 1
+
+	-- Reset visibility
+	for _, part in pairs(ch_parts) do
+		if typeof(part) == "Instance" then
+			part.Visible = false
+		end
+	end
+
+	if style == "Cross" or style == "T-Shape" then
+		ch_parts.Top.Visible = true
+		ch_parts.Top.Size = UDim2.fromOffset(thickness, size)
+		ch_parts.Top.Position = UDim2.fromOffset(0, -(size/2 + gap))
+		ch_parts.Top.BackgroundColor3 = color
+		ch_parts.Top.BackgroundTransparency = transp
+
+		ch_parts.Bottom.Visible = (style == "Cross")
+		ch_parts.Bottom.Size = UDim2.fromOffset(thickness, size)
+		ch_parts.Bottom.Position = UDim2.fromOffset(0, (size/2 + gap))
+		ch_parts.Bottom.BackgroundColor3 = color
+		ch_parts.Bottom.BackgroundTransparency = transp
+
+		ch_parts.Left.Visible = true
+		ch_parts.Left.Size = UDim2.fromOffset(size, thickness)
+		ch_parts.Left.Position = UDim2.fromOffset(-(size/2 + gap), 0)
+		ch_parts.Left.BackgroundColor3 = color
+		ch_parts.Left.BackgroundTransparency = transp
+
+		ch_parts.Right.Visible = true
+		ch_parts.Right.Size = UDim2.fromOffset(size, thickness)
+		ch_parts.Right.Position = UDim2.fromOffset((size/2 + gap), 0)
+		ch_parts.Right.BackgroundColor3 = color
+		ch_parts.Right.BackgroundTransparency = transp
+
+		for _, part in pairs({ch_parts.Top, ch_parts.Bottom, ch_parts.Left, ch_parts.Right}) do
+			local outline = part:FindFirstChild("Outline")
+			if outline then
+				outline.Color = outlineColor
+				outline.Thickness = outlineThickness
+				outline.Transparency = outlineTransp
+			end
+		end
+	elseif style == "Circle" then
+		ch_parts.Circle.Visible = true
+		ch_parts.Circle.Size = UDim2.fromOffset(size * 2, size * 2)
+		ch_parts.Circle.Position = UDim2.fromOffset(0, 0)
+		if ch_parts.CircleOutline then
+			ch_parts.CircleOutline.Color = color
+			ch_parts.CircleOutline.Thickness = thickness
+			ch_parts.CircleOutline.Transparency = transp
+		end
+	elseif style == "Engineer" then
+		ch_parts.EngineerImg.Visible = true
+		ch_parts.EngineerImg.Size = UDim2.fromOffset(size * 3, size * 3)
+		ch_parts.EngineerImg.Position = UDim2.fromOffset(0, 0)
+		ch_parts.EngineerImg.Image = ch_turretImageId or "rbxassetid://6869295332" -- Fallback
+		ch_parts.EngineerImg.ImageColor3 = color
+		ch_parts.EngineerImg.ImageTransparency = transp
+	end
+
+	-- Center Dot / Dot Style
+	ch_parts.CenterDot.Visible = centerDot or style == "Dot"
+	ch_parts.CenterDot.BackgroundColor3 = color
+	ch_parts.CenterDot.BackgroundTransparency = transp
+	ch_parts.CenterDot.Size = UDim2.fromOffset(dotSize, dotSize)
+	ch_parts.CenterDot.Position = UDim2.fromOffset(0, 0)
+
+	local dotOutline = ch_parts.CenterDot:FindFirstChild("Outline")
+	if dotOutline then
+		dotOutline.Color = outlineColor
+		dotOutline.Thickness = outlineThickness
+		dotOutline.Transparency = outlineTransp
+	end
+end
+
+CrosshairCustomizer.Callbacks.OnToggle = function(state)
+	loops["crosshair customizer"] = state
+	if state then
+		chInitGUI()
+		chUpdateCrosshair()
+		if not ch_renderConn then
+			ch_renderConn = game:GetService("RunService").RenderStepped:Connect(function()
+				if CrosshairCustomizer.Values["Enable Custom Crosshair"] then
+					chUpdateCrosshair()
+				end
+			end)
+		end
+	else
+		if ch_renderConn then
+			ch_renderConn:Disconnect()
+			ch_renderConn = nil
+		end
+		if ch_gui then
+			ch_gui.Enabled = false
+		end
+		-- Restore default crosshairs
+		for gui, originalState in pairs(ch_defaultCrosshairs) do
+			if gui and gui.Parent then
+				gui.Enabled = originalState
+			end
+		end
+		table.clear(ch_defaultCrosshairs)
+	end
+end
