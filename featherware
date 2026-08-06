@@ -11447,9 +11447,11 @@ for i, child in pairs(game.Workspace:GetDescendants()) do
 	end
 end
 
-local NukerConnection = nil
+NukerConnection = nil
 lastBreakTime = 0
-local currentHighlight = nil
+currentHighlight = nil
+nukerRayParams = RaycastParams.new()
+nukerRayParams.FilterType = Enum.RaycastFilterType.Exclude
 
 targetMap = {
 	["bed"] = beds,
@@ -11459,39 +11461,36 @@ targetMap = {
 	["iron_ore"] = iron_ores
 }
 
-function updateHighlight(target)
-	if not Nuker.Values["Mining Highlight"] or not target then
+function updateNukerHighlight(targetPart)
+	if not Nuker.Values["Mining Highlight"] or not targetPart then
 		if currentHighlight then
 			currentHighlight.Adornee = nil
+			currentHighlight.Parent = nil
 		end
 		return
 	end
 
-	if not currentHighlight or currentHighlight.Parent == nil then
-		currentHighlight = Instance.new("SelectionBox")
+	if not currentHighlight then
+		currentHighlight = Instance.new("Highlight")
 		currentHighlight.Name = "NukerVisual"
-		currentHighlight.Color3 = Nuker.Values["Highlight Color"] or Color3.new(0.333333, 0, 0)  
-		currentHighlight.LineThickness = 0.04
-
-		currentHighlight.SurfaceColor3 = Color3.fromRGB(255, 0, 0) 
-		currentHighlight.SurfaceTransparency = 0.75 
-
-		currentHighlight.Parent = workspace
+		currentHighlight.FillColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 0, 0)
+		currentHighlight.OutlineColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 255, 255)
+		currentHighlight.FillTransparency = 0.7
+		currentHighlight.OutlineTransparency = 0
+		currentHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		currentHighlight.Parent = workspace.CurrentCamera
 	end
 
-	currentHighlight.Adornee = target
+	currentHighlight.Adornee = targetPart
 end
-
 
 Nuker.Callbacks.OnToggle = function(state)
 	loops["nuker"] = state
-
 	if NukerConnection then
 		NukerConnection:Disconnect()
 		NukerConnection = nil
-		updateHighlight(nil) 
+		updateNukerHighlight(nil)
 	end
-
 	if loops["nuker"] then
 		NukerConnection = RunService.Heartbeat:Connect(function()
 			if not loops["nuker"] then
@@ -11499,27 +11498,24 @@ Nuker.Callbacks.OnToggle = function(state)
 					NukerConnection:Disconnect()
 					NukerConnection = nil
 				end
-				updateHighlight(nil)
+				updateNukerHighlight(nil)
 				return
 			end
 
-			if not cachedChar or not cachedChar:FindFirstChild("HumanoidRootPart") then 
-				updateHighlight(nil)
-				return 
+			hrp = cachedChar and cachedChar:FindFirstChild("HumanoidRootPart")
+			if not hrp then
+				updateNukerHighlight(nil)
+				return
 			end
 
-			hrp = cachedChar.HumanoidRootPart
 			nearestTarget = nil
 			shortestDistance = Nuker.Values["Break Range"] or 21
 			breakSettings = Nuker.Values["Break"]
 
 			for targetName, targetGroup in pairs(targetMap) do
-				local isEnabled = false
-
+				isEnabled = false
 				if type(breakSettings) == "table" then
 					if breakSettings[targetName] == true or table.find(breakSettings, targetName) then
-						isEnabled = true
-					elseif breakSettings[targetName] and (breakSettings[targetName].Value == true or breakSettings[targetName].State == true) then
 						isEnabled = true
 					end
 				end
@@ -11527,8 +11523,7 @@ Nuker.Callbacks.OnToggle = function(state)
 				if isEnabled then
 					for _, block in ipairs(targetGroup) do
 						if block and block.Parent then
-							local distance = (hrp.Position - block.Position).Magnitude
-
+							distance = (hrp.Position - block.Position).Magnitude
 							if distance < shortestDistance then
 								shortestDistance = distance
 								nearestTarget = block
@@ -11538,31 +11533,58 @@ Nuker.Callbacks.OnToggle = function(state)
 				end
 			end
 
-			updateHighlight(nearestTarget)
-
-			local currentTime = os.clock()
-			local breakSpeed = Nuker.Values["Break Speed"] or 0.30
-			if currentTime - lastBreakTime < breakSpeed then return end
-
-			if nearestTarget then
-				lastBreakTime = currentTime
-
-				local targetPos = nearestTarget.Position
-				local args = {
-					{
-						blockRef = {
-							blockPosition = Vector3.new(
-								math.round(targetPos.X / 3), 
-								math.round(targetPos.Y / 3), 
-								math.round(targetPos.Z / 3)
-							)
-						},
-						hitPosition = targetPos,
-						hitNormal = Vector3.new(0, 1, 0)
-					}
-				}
-				DamageBlock:InvokeServer(unpack(args))
+			if not nearestTarget then
+				updateNukerHighlight(nil)
+				return
 			end
+
+			-- Raycast to find what is actually blocking the target
+			nukerRayParams.FilterDescendantsInstances = {cachedChar, nearestTarget}
+			direction = (nearestTarget.Position - hrp.Position).Unit
+			hitResult = workspace:Raycast(hrp.Position, direction * (shortestDistance + 5), nukerRayParams)
+
+			blockToBreak = nearestTarget
+			hitPos = nearestTarget.Position
+			hitNormal = (hrp.Position - nearestTarget.Position).Unit
+
+			if hitResult then
+				hitDist = (hitResult.Position - hrp.Position).Magnitude
+				targetDist = (nearestTarget.Position - hrp.Position).Magnitude
+
+				-- If we hit a covering block that is IN FRONT of the target
+				if hitDist < targetDist and not hitResult.Instance:IsDescendantOf(nearestTarget) then
+					blockToBreak = hitResult.Instance
+					hitPos = hitResult.Position - (hitResult.Normal * 1.5)
+					hitNormal = hitResult.Normal
+				end
+			end
+
+			-- Highlight the actual block we are going to break
+			updateNukerHighlight(blockToBreak)
+
+			currentTime = os.clock()
+			breakSpeed = Nuker.Values["Break Speed"] or 0.30
+			if currentTime - lastBreakTime < breakSpeed then return end
+			lastBreakTime = currentTime
+
+			-- Calculate the exact 3x3x3 Bedwars grid coordinate for the block we hit
+			blockPosition = Vector3.new(
+				math.floor(hitPos.X / 3 + 0.5),
+				math.floor(hitPos.Y / 3 + 0.5),
+				math.floor(hitPos.Z / 3 + 0.5)
+			)
+
+			args = {
+				{
+					blockRef = {
+						blockPosition = blockPosition
+					},
+					hitPosition = hitPos,
+					hitNormal = hitNormal
+				}
+			}
+
+			DamageBlock:InvokeServer(unpack(args))
 		end)
 	end
 end
