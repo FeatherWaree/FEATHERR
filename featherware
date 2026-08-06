@@ -7151,14 +7151,14 @@ local function hookChest(container)
 	-- Mark as hooked immediately so the scan loop doesn't try to hook it twice
 	activeChestHooks[container] = { inventory = inventory }
 
-	-- 1. INITIAL SWEEP: Steal everything currently inside
-	-- FIX 2: Do it sequentially inside a single thread with a tiny wait.
-	-- This mimics legitimate client behavior so the server doesn't throttle/drop your requests.
+	-- 1. INITIAL SWEEP: Steal everything currently inside sequentially
+	-- FIX: We do this in a single thread with a task.wait() to bypass server remote throttling.
+	-- Firing 20 InvokeServers at the exact same millisecond gets flagged as spam and dropped by the server.
 	task.spawn(function()
 		for _, item in ipairs(inventory:GetChildren()) do
-			if item.Name ~= "ChestOwner" then
+			if item.Name ~= "ChestOwner" and item.Parent == inventory then
 				pcall(function() takeItem:InvokeServer(inventory, item) end)
-				task.wait() -- Yields slightly to bypass server remote throttling
+				task.wait(0.05) -- Yields slightly to bypass server remote throttling
 			end
 		end
 	end)
@@ -7167,10 +7167,10 @@ local function hookChest(container)
 	local conn
 	conn = inventory.ChildAdded:Connect(function(item)
 		if item.Name ~= "ChestOwner" then
+			-- Re-highlight just in case it was empty and someone just dropped something in
 			highlightChestContainer(container)
-			task.spawn(function() 
-				pcall(function() takeItem:InvokeServer(inventory, item) end) 
-			end)
+			task.wait(0.05) -- Tiny delay to ensure server is ready for the next remote
+			pcall(function() takeItem:InvokeServer(inventory, item) end)
 		end
 	end)
 
@@ -7879,60 +7879,56 @@ local function isEnemyInRange(range)
 	return false
 end
 
+autoArmorThread = nil
 AutoArmorSwitch.Callbacks.OnToggle = function(state)
 	loops["auto armor switch"] = state
-	currentArmorState = "unknown" 
-end
+	currentArmorState = "unknown"
 
-task.spawn(function()
-	while true do
-		task.wait(0.1) 
+	if autoArmorThread then
+		task.cancel(autoArmorThread)
+		autoArmorThread = nil
+	end
 
-		if loops["auto armor switch"] then
-			local character = Player.Character
-			if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then 
-				continue 
-			end
+	if loops["auto armor switch"] then
+		autoArmorThread = task.spawn(function()
+			while loops["auto armor switch"] do
+				character = Player.Character
+				if character and character:FindFirstChild("Humanoid") and character.Humanoid.Health > 0 then
+					range = tonumber(AutoArmorSwitch.Values["Range"]) or 20
+					enemyNearby = isEnemyInRange(range)
 
-			local range = tonumber(AutoArmorSwitch.Values["Range"]) or 20
-			local enemyNearby = isEnemyInRange(range)
-
-			if enemyNearby and currentArmorState ~= "equipped" then
-				currentArmorState = "equipped"
-
-				removeClientArmorVisuals(character)
-
-				for slotId, slotName in pairs(armorSlots) do
-					local bestItem, bestTier = getStrongestArmorForSlot(slotName)
-
-					if bestItem then
-						task.spawn(function()
-							local args = {{ item = bestItem, armorSlot = slotId }}
-							setArmorRemote:InvokeServer(unpack(args))
-						end)
-
-						task.spawn(function()
-							applyClientArmorVisuals(character, bestTier, slotName)
-						end)
+					if enemyNearby and currentArmorState ~= "equipped" then
+						currentArmorState = "equipped"
+						removeClientArmorVisuals(character)
+						for slotId, slotName in pairs(armorSlots) do
+							bestItem, bestTier = getStrongestArmorForSlot(slotName)
+							if bestItem then
+								task.spawn(function()
+									args = {{ item = bestItem, armorSlot = slotId }}
+									setArmorRemote:InvokeServer(unpack(args))
+								end)
+								task.spawn(function()
+									applyClientArmorVisuals(character, bestTier, slotName)
+								end)
+							end
+						end
+					elseif not enemyNearby and currentArmorState ~= "unequipped" then
+						currentArmorState = "unequipped"
+						removeClientArmorVisuals(character)
+						for slotId = 0, 2 do
+							task.spawn(function()
+								args = {{ item = false, armorSlot = slotId }}
+								setArmorRemote:InvokeServer(unpack(args))
+							end)
+						end
 					end
 				end
-
-			elseif not enemyNearby and currentArmorState ~= "unequipped" then
-				currentArmorState = "unequipped"
-
-				removeClientArmorVisuals(character)
-
-				for slotId = 0, 2 do
-					task.spawn(function()
-						local args = {{ item = false, armorSlot = slotId }}
-						setArmorRemote:InvokeServer(unpack(args))
-					end)
-				end
+				task.wait(0.5) -- 0.5 Second Interval
 			end
-		end
+			autoArmorThread = nil
+		end)
 	end
-end)
-
+end
 
 local function playEmote(emoteName)
 	if emoteName and emoteName ~= "" then
@@ -10626,26 +10622,30 @@ LongJump.Callbacks.OnToggle = function(state)
 	end
 end
 
+autoYuziThread = nil
 AutoYuzi.Callbacks.OnToggle = function(state)
 	loops["auto yuzi"] = state
-end
 
-task.spawn(function()
-	while true do
-		task.wait()
-		if loops["auto yuzi"] then
-			character = Players.LocalPlayer.Character
-			if character then
-				if character:GetAttribute("CanDashNext") then
-					character:SetAttribute(
-						"CanDashNext",
-						workspace:GetServerTimeNow() + AutoYuzi.Values["Cooldown"]
-					)
-				end
-			end
-		end
+	if autoYuziThread then
+		task.cancel(autoYuziThread)
+		autoYuziThread = nil
 	end
-end)
+
+	if loops["auto yuzi"] then
+		autoYuziThread = task.spawn(function()
+			while loops["auto yuzi"] do
+				character = Players.LocalPlayer.Character
+				if character then
+					if character:GetAttribute("CanDashNext") then
+						character:SetAttribute("CanDashNext", workspace:GetServerTimeNow() + AutoYuzi.Values["Cooldown"])
+					end
+				end
+				task.wait(0.5) 
+			end
+			autoYuziThread = nil
+		end)
+	end
+end
 
 GloopDisabler.Callbacks.OnToggle = function(state)
 	loops["gloop disabler"] = state
