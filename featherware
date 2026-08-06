@@ -1076,7 +1076,181 @@ orginalWins = nil
 orginalStreak = nil
 orginalRank = nil
 orginalTitle = nil
+originalAccessories = {}
+ isAvatarSpoofed = false
 
+local function manualEquipAccessory(char, accessory)
+	local handle = accessory:FindFirstChild("Handle")
+	if not handle then return end
+
+	-- 1. Strip all physics restrictions and broken welds
+	handle.Anchored = false
+	handle.CanCollide = false
+	for _, v in ipairs(handle:GetChildren()) do
+		if v:IsA("Weld") or v:IsA("JointInstance") then
+			v:Destroy()
+		end
+	end
+
+	-- 2. Find how this accessory is supposed to attach
+	local accAttachment = handle:FindFirstChildOfClass("Attachment")
+	if not accAttachment then 
+		accessory.Parent = char
+		return 
+	end
+
+	-- 3. Find the matching attachment point on the character's body
+	local targetPart, targetAttachment
+	for _, part in ipairs(char:GetChildren()) do
+		if part:IsA("BasePart") then
+			local foundAtt = part:FindFirstChild(accAttachment.Name)
+			if foundAtt and foundAtt:IsA("Attachment") then
+				targetPart = part
+				targetAttachment = foundAtt
+				break
+			end
+		end
+	end
+
+	-- 4. Manually force the weld if we found the attachment point
+	if targetPart and targetAttachment then
+		accessory.Parent = char
+
+		-- Create a perfect weld mathematically bypassing the engine's broken logic
+		local weld = Instance.new("Weld")
+		weld.Name = "AccessoryWeld"
+		weld.Part0 = handle
+		weld.Part1 = targetPart
+		weld.C0 = accAttachment.CFrame
+		weld.C1 = targetAttachment.CFrame
+		weld.Parent = handle
+	else
+		accessory.Parent = char
+	end
+end
+
+local function applyLocalAvatar(username)
+	local success, userId = pcall(function()
+		return Players:GetUserIdFromNameAsync(username)
+	end)
+
+	if not success or not userId then 
+		warn("[Fake Stats] Invalid username")
+		return 
+	end
+
+	local char = Player.Character
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	if not char or not humanoid then return end
+
+	-- 1. Save original appearance
+	if not isAvatarSpoofed then
+		originalAppearance = {}
+
+		for _, child in ipairs(char:GetChildren()) do
+			if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("CharacterMesh") or child:IsA("BodyColors") then
+				table.insert(originalAppearance, child:Clone())
+			end
+		end
+
+		local head = char:FindFirstChild("Head")
+		if head then
+			for _, child in ipairs(head:GetChildren()) do
+				if child:IsA("Decal") or child:IsA("SpecialMesh") then
+					table.insert(originalAppearance, child:Clone())
+				end
+			end
+		end
+
+		isAvatarSpoofed = true
+	end
+
+	-- 2. Clear current appearance
+	for _, child in ipairs(char:GetChildren()) do
+		if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("CharacterMesh") or child:IsA("BodyColors") then
+			child:Destroy()
+		end
+	end
+
+	local head = char:FindFirstChild("Head")
+	if head then
+		for _, child in ipairs(head:GetChildren()) do
+			if child:IsA("Decal") or child:IsA("SpecialMesh") then
+				child:Destroy()
+			end
+		end
+	end
+
+	-- 3. Load target appearance locally
+	local successModel, targetModel = pcall(function()
+		return Players:CreateHumanoidModelFromUserId(userId, humanoid.RigType)
+	end)
+
+	if successModel and targetModel then
+		for _, child in ipairs(targetModel:GetChildren()) do
+			if child:IsA("Accessory") then
+				-- Use our new custom manual welder
+				manualEquipAccessory(char, child:Clone())
+			elseif child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("CharacterMesh") or child:IsA("BodyColors") then
+				child:Clone().Parent = char
+			end
+		end
+
+		local targetHead = targetModel:FindFirstChild("Head")
+		if targetHead and head then
+			for _, child in ipairs(targetHead:GetChildren()) do
+				if child:IsA("Decal") or child:IsA("SpecialMesh") then
+					child:Clone().Parent = head
+				end
+			end
+		end
+
+		targetModel:Destroy()
+	else
+		warn("[Fake Stats] Failed to load target character model.")
+	end
+end
+
+local function revertLocalAvatar()
+	if not isAvatarSpoofed then return end
+	local char = Player.Character
+	if not char then return end
+	local head = char:FindFirstChild("Head")
+
+	-- 1. Clear spoofed
+	for _, child in ipairs(char:GetChildren()) do
+		if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("CharacterMesh") or child:IsA("BodyColors") then
+			child:Destroy()
+		end
+	end
+
+	if head then
+		for _, child in ipairs(head:GetChildren()) do
+			if child:IsA("Decal") or child:IsA("SpecialMesh") then
+				child:Destroy()
+			end
+		end
+	end
+
+	-- 2. Restore original
+	for _, item in ipairs(originalAppearance) do
+		local clone = item:Clone()
+
+		if clone:IsA("Accessory") then
+			-- Weld the originals back perfectly as well
+			manualEquipAccessory(char, clone)
+		elseif clone:IsA("Decal") or clone:IsA("SpecialMesh") then
+			if head then
+				clone.Parent = head
+			end
+		else
+			clone.Parent = char
+		end
+	end
+
+	isAvatarSpoofed = false
+	originalAppearance = {}
+end
 if Player:GetAttribute("ClanTag") then orginalClan = Player:GetAttribute("ClanTag") end
 if Player:GetAttribute("PlayerLevel") then orginalLevel = Player:GetAttribute("PlayerLevel") end
 if Player:GetAttribute("ChatNameColor") then orginalChatNameColor = Player:GetAttribute("ChatNameColor") end
@@ -4674,6 +4848,13 @@ FakeStats:CreateTextbox("Lobby Title", tostring(orginalTitle), function(value)
 		end
 	end
 end)
+
+FakeStats:CreateTextbox("Avatar Username", "", function(value)
+	if loops["fake stats"] and value ~= "" then
+		applyLocalAvatar(value)
+	end
+end)
+
 
 if ssc_conn then pcall(function() ssc_conn:Disconnect() end) end
 if type(ssc_tracked) == "table" then
@@ -8452,6 +8633,11 @@ FakeStats.Callbacks.OnToggle = function(state)
 				if fs_wsVal2 then fs_wsVal2.Text = FakeStats.Values["Lobby Title"] end
 			end
 		end
+		
+		local avatarName = FakeStats.Values["Avatar Username"]
+		if avatarName and avatarName ~= "" then
+			applyLocalAvatar(avatarName)
+		end
 
 	else
 		Player:SetAttribute("ClanTag", orginalClan)
@@ -8492,6 +8678,9 @@ FakeStats.Callbacks.OnToggle = function(state)
 				if fs_wsVal2 then fs_wsVal2.Text = orginalTitle end
 			end
 		end
+		
+		revertLocalAvatar()
+
 	end
 end
 
@@ -12916,12 +13105,13 @@ function paPickTarget()
 	return pap_best, pap_bh, pap_bv
 end
 
--- clone the Handle out of an Accessory (or part/model) -> aimable, no Accessory errors; parented to workspace
 function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 	if #PA_VIS >= 16 then return end
 	pas_modelName = (pPm and pPm.projectileModel) or pProj
 	pas_srcRoot = paItems and paItems:FindFirstChild(pas_modelName)
-	if not pas_srcRoot then return end
+	if not pas_srcRoot then 
+		return 
+	end
 
 	if pas_srcRoot:IsA("Accessory") then
 		pas_src = pas_srcRoot:FindFirstChild("Handle")
@@ -12929,21 +13119,31 @@ function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 		pas_src = pas_srcRoot
 	end
 
-	if not pas_src then return end
+	if not pas_src then 
+		return 
+	end
+
 	pas_clone = pas_src:Clone()
-	pas_clone.Parent = workspace -- Kept as workspace like your original version
+	pas_clone.Parent = workspace
 
 	if pas_clone:IsA("BasePart") then
 		pas_mover = pas_clone; pas_isModel = false
 	elseif pas_clone:IsA("Model") then
 		pas_isModel = true
 		pas_mover = pas_clone.PrimaryPart
-		if not pas_mover then pas_clone.PrimaryPart = pas_clone:FindFirstChildWhichIsA("BasePart"); pas_mover = pas_clone.PrimaryPart end
+		if not pas_mover then 
+			pas_clone.PrimaryPart = pas_clone:FindFirstChildWhichIsA("BasePart")
+			pas_mover = pas_clone.PrimaryPart 
+		end
 	else
-		pas_clone:Destroy(); return
+		pas_clone:Destroy()
+		return
 	end
 
-	if not pas_mover then pas_clone:Destroy(); return end
+	if not pas_mover then 
+		pas_clone:Destroy()
+		return 
+	end
 
 	if pas_mover:IsA("BasePart") then
 		pas_mover.Anchored = true; pas_mover.CanCollide = false; pas_mover.CanQuery = false; pas_mover.CanTouch = false
@@ -12955,14 +13155,98 @@ function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 
 	if pas_isModel then pas_clone:PivotTo(pas_cf) else pas_mover.CFrame = pas_cf end
 
-	-- FIX: Instantly apply the tracer to the clone if the setting is enabled
-	if loops["projectile tracers"] and type(applyTracer) == "function" then
-		applyTracer(pas_clone, true)
+
+	if loops["projectile tracers"] then
+		local function getEffect(target, className)
+			if not target then return nil end
+			if target:IsA(className) then return target end
+			return target:FindFirstChildWhichIsA(className, true) 
+		end
+
+		local trail = getEffect(pas_clone, "Trail")
+		local beam = getEffect(pas_clone, "Beam")
+		local particle = getEffect(pas_clone, "ParticleEmitter")
+
+		if trail then
+			local colorVal = ProjectileTracers.Values["Color"]
+
+			-- FORCE ENABLE THE TRAIL SO IT ACTUALLY RENDERS
+			trail.Enabled = true
+
+			if typeof(colorVal) == "Color3" and colorVal.R == 0 and colorVal.G == 0 and colorVal.B == 0 then
+				trail.Texture = "rbxassetid://446111719" 
+				trail.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255)) 
+				trail.Transparency = NumberSequence.new(0) 
+				trail.LightEmission = 0 
+				trail.LightInfluence = 1 
+			else
+				local colorSeq = typeof(colorVal) == "Color3" and ColorSequence.new(colorVal) or colorVal
+				trail.Color = colorSeq
+				if trail.Texture == "" then
+					trail.Texture = "rbxassetid://446111719"
+				end
+				trail.LightEmission = ProjectileTracers.Values["Glow"] and ProjectileTracers.Values["Glow Intensity"] or 0
+			end
+
+			-- Safety check for attachments
+			if not trail.Attachment0 or not trail.Attachment1 then
+			else
+			end
+		end
+
+		if beam then
+			local widthVal = ProjectileTracers.Values["Width"]
+			local colorVal = ProjectileTracers.Values["Color"]
+
+			if typeof(widthVal) == "number" then
+				pcall(function()
+					beam.Width0 = widthVal
+					beam.Width1 = widthVal * 0.5
+				end)
+			elseif typeof(widthVal) == "NumberSequence" then
+				beam.Transparency = widthVal
+			end
+
+			local colorSeq = typeof(colorVal) == "Color3" and ColorSequence.new(colorVal) or colorVal
+			beam.Color = colorSeq
+			beam.LightEmission = ProjectileTracers.Values["Glow"] and ProjectileTracers.Values["Glow Intensity"] or 0
+		end
+
+		if particle then
+			local colorVal = ProjectileTracers.Values["Color"]
+			particle.Color = typeof(colorVal) == "Color3" and ColorSequence.new(colorVal) or colorVal
+			if ProjectileTracers.Values["Glow"] then
+				particle.LightEmission = ProjectileTracers.Values["Glow Intensity"]
+			end
+		end
+
+		local partsToColor = pas_clone:GetDescendants()
+		table.insert(partsToColor, pas_clone)
+
+		local handle = pas_clone:FindFirstChild("Handle")
+
+		for _, descendant in ipairs(partsToColor) do
+			if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
+				local nameLower = descendant.Name:lower()
+
+				if descendant == handle or descendant == pas_clone or nameLower:find("arrow") or nameLower:find("projectile") or nameLower:find("bolt") then
+
+					local colorVal = ProjectileTracers.Values["Color"]
+					local partColor = typeof(colorVal) == "ColorSequence" and colorVal.Keypoints[1].Value or colorVal
+					descendant.Color = partColor
+
+					if ProjectileTracers.Values["Glow"] then
+						descendant.Material = Enum.Material.Neon
+					end
+				end
+			end
+		end
+	else
 	end
+
 
 	table.insert(PA_VIS, { obj = pas_clone, mover = pas_mover, isModel = pas_isModel, O = pO, V = pVel, g = pG, fr = pas_fr, t0 = tick(), life = (pPm and pPm.lifetimeSec) or 2 })
 end
-
 -- in-flight shot: equip weapon, fire, delayed multi-tap hit; visual ONLY on a successful fire
 function paDoShot(pL, pO, pSpawnO, pVel, pT, pTgt, pG, pProj, pPm, pFid, pSid)
 	pae_char = Players.LocalPlayer.Character
@@ -19411,3 +19695,156 @@ CrosshairCustomizer.Callbacks.OnToggle = function(state)
 		table.clear(ch_defaultCrosshairs)
 	end
 end
+
+FreeLobbyGadget = Visuals:CreateButton("Free Lobby Gadget", nil, true)
+
+gadgetList = {
+	"Hang Glider", "Rageblade", "Snow Ball", "Jump Boots", "Speed Boots", 
+	"Jade Hammer", "Freiya Ice Sword", "Raven", "Infernal Saber", "Light Sword", 
+	"Grappling Hook", "Void Sword", "Scythe", "Blunderbuss", "Ghost Cutlass", 
+	"Toy Hammer", "Twirl Blade", "Grenade Launcher", "Rocket Belt", "Necromancer Staff", 
+	"Frosty Hammer", "Dodo Bird", "Laser Sword", "Void Axe", "Glitch Guitar", 
+	"Tennis Racket", "Dino Mount", "Mythic Gauntlets", "Flying Backpack", "Mythic Dagger", 
+	"Impulse Gun", "Rainbow Staff", "Paragon", "Leather Helmet", "Barbarian Helmet", 
+	"Headhunter", "Can of Beans", "Flying Broom", "Hunter's Echo", "Firework Rocket Launcher", 
+	"Snowball Launcher", "Elk Mount", "Spirit Dagger", "Nyoka Staff", "Bekzat Bow", 
+	"Diamond Chakram", "Ares Spear", "Nocturne", "Angel Wings", "Party Hat Launcher", 
+	"Anniversary Balloons", "Beachball", "Water Gun", "Grim Reaper Scythe", "Jellyfish Mount", 
+	"Summer 2024 Crab", "Summer 2024 Turtle", "Hot Air Balloon", "Lasso", "Cloak", 
+	"Invisibility Potion", "Sky Scythe", "Halloween 2024 Spider", "Sleigh", "Christmas Tree", 
+	"Bananarang", "Kaida's Claw", "Pogo Stick", "Hoverboard Pro Max", "Shrink Potion", 
+	"Spring Punch", "LNY 2025 Golden Snake", "Emerald Dao", "Egyptian Cat", "Flying Carpet", 
+	"Diamond Cutlass and Blunderbuss", "Pillow", "Aery Crown", "Adetunde Crown", "Elektra Crown", 
+	"Jellyfish", "Spirit Owl", "Chameleon Mount", "Dragon", "Baby Penguin", "Brb", 
+	"Meteor Caller", "Snowboard", "Gift-Wrapped Snowboard", "Freezing Staff", "Web Launcher", 
+	"Love Chair", "Noctium Blade", "Noctium Armor", "Chicken"
+}
+
+gadgetToItem = {
+	["Hang Glider"] = "hang_glider",
+	["Rageblade"] = "rageblade",
+	["Snow Ball"] = "snowball",
+	["Jump Boots"] = "jump_boots",
+	["Speed Boots"] = "speed_boots",
+	["Jade Hammer"] = "jade_hammer",
+	["Freiya Ice Sword"] = "ice_sword",
+	["Raven"] = "raven",
+	["Infernal Saber"] = "infernal_saber",
+	["Light Sword"] = "heavenly_sword",
+	["Grappling Hook"] = "grappling_hook",
+	["Void Sword"] = "void_sword",
+	["Scythe"] = "scythe",
+	["Blunderbuss"] = "blunderbuss",
+	["Ghost Cutlass"] = "cutlass_ghost",
+	["Toy Hammer"] = "toy_hammer",
+	["Twirl Blade"] = "twirlblade",
+	["Grenade Launcher"] = "grenade_launcher",
+	["Rocket Belt"] = "rocket_belt",
+	["Necromancer Staff"] = "necromancer_staff",
+	["Frosty Hammer"] = "frosty_hammer",
+	["Dodo Bird"] = "dodo_bird",
+	["Laser Sword"] = "laser_sword",
+	["Void Axe"] = "void_axe",
+	["Glitch Guitar"] = "glitch_guitar",
+	["Tennis Racket"] = "tennis_racket",
+	["Dino Mount"] = "dino",
+	["Mythic Gauntlets"] = "mythic_gauntlets",
+	["Flying Backpack"] = "flying_backpack",
+	["Mythic Dagger"] = "mythic_dagger",
+	["Impulse Gun"] = "impulse_gun",
+	["Rainbow Staff"] = "rainbow_staff",
+	["Paragon"] = "mythic_great_hammer",
+	["Leather Helmet"] = "leather_helmet",
+	["Barbarian Helmet"] = "barbarian_helmet",
+	["Headhunter"] = "headhunter",
+	["Can of Beans"] = "can_of_beans",
+	["Flying Broom"] = "flying_broom_deploy",
+	["Hunter's Echo"] = "hunters_echo",
+	["Firework Rocket Launcher"] = "firework_rocket_launcher",
+	["Snowball Launcher"] = "snowball_launcher",
+	["Elk Mount"] = "elk",
+	["Spirit Dagger"] = "spirit_dagger",
+	["Nyoka Staff"] = "mending_canopy_staff_tier_3",
+	["Bekzat Bow"] = "falconer_bow",
+	["Diamond Chakram"] = "ninja_chakram_3",
+	["Ares Spear"] = "spear",
+	["Nocturne"] = "mythic_scythe",
+	["Angel Wings"] = "angel_wings",
+	["Party Hat Launcher"] = "party_hat_launcher",
+	["Anniversary Balloons"] = "anniversary_balloon",
+	["Beachball"] = "beachball",
+	["Water Gun"] = "water_gun",
+	["Grim Reaper Scythe"] = "reaper_scythe",
+	["Jellyfish Mount"] = "jellyfish_mount_deploy",
+	["Summer 2024 Crab"] = "crab",
+	["Summer 2024 Turtle"] = "turtle",
+	["Hot Air Balloon"] = "hot_air_balloon_deploy",
+	["Lasso"] = "lasso",
+	["Cloak"] = "cloak",
+	["Invisibility Potion"] = "invisibility_potion",
+	["Sky Scythe"] = "sky_scythe",
+	["Halloween 2024 Spider"] = "default_spider",
+	["Sleigh"] = "sleigh_deploy",
+	["Christmas Tree"] = "christmas_tree_deploy",
+	["Bananarang"] = "bananarang",
+	["Kaida's Claw"] = "summoner_claw_4",
+	["Pogo Stick"] = "pogo_stick",
+	["Hoverboard Pro Max"] = "lobby_vip_hoverboard",
+	["Shrink Potion"] = "shrink_potion",
+	["Spring Punch"] = "lobby_spring_punch",
+	["LNY 2025 Golden Snake"] = "golden_snake",
+	["Emerald Dao"] = "emerald_dao",
+	["Egyptian Cat"] = "egyptian_cat",
+	["Flying Carpet"] = "flying_carpet_deploy",
+	["Diamond Cutlass and Blunderbuss"] = "diamond_gun_blade",
+	["Pillow"] = "pillow",
+	["Aery Crown"] = "aery_crown",
+	["Adetunde Crown"] = "adetunde_crown",
+	["Elektra Crown"] = "elektra_crown",
+	["Jellyfish"] = "jellyfish",
+	["Spirit Owl"] = "owl",
+	["Chameleon Mount"] = "chameleon",
+	["Dragon"] = "dragon",
+	["Baby Penguin"] = "baby_penguin",
+	["Brb"] = "brb_sign",
+	["Meteor Caller"] = "meteor_caller",
+	["Snowboard"] = "lobby_snowboard",
+	["Gift-Wrapped Snowboard"] = "lobby_snowboard_special",
+	["Freezing Staff"] = "frost_staff_3",
+	["Web Launcher"] = "big_web_launcher",
+	["Love Chair"] = "love_chair_deploy",
+	["Noctium Blade"] = "noctium_blade_4",
+	["Noctium Armor"] = "noctium_armor",
+	["Chicken"] = "chicken"
+}
+
+FreeLobbyGadget:CreateDropdown("Gadget", gadgetList, "None", function(selected)
+	if selected == "None" then return end
+
+	itemType = gadgetToItem[selected]
+	if not itemType then return end
+
+	task.spawn(function()
+		itemsFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Items")
+		if not itemsFolder then return end
+
+		gadgetModel = itemsFolder:FindFirstChild(itemType)
+		if not gadgetModel then 
+			-- Fallback: search everywhere in ReplicatedStorage just in case
+			gadgetModel = game:GetService("ReplicatedStorage"):FindFirstChild(itemType, true)
+		end
+
+		if gadgetModel then
+			clone = gadgetModel:Clone()
+
+			if replicatedStorage and replicatedStorage.Inventories and replicatedStorage.Inventories:FindFirstChild(Player.Name) then
+				clone.Parent = replicatedStorage.Inventories:FindFirstChild(Player.Name)
+			end
+
+			-- Optional: Notify the user that it spawned
+			pcall(function() 
+				NotificationSystem.Notify("Lobby Gadget", "Client-side spawned: " .. selected, 2) 
+			end)
+		end
+	end)
+end)
