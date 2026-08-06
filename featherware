@@ -3,7 +3,7 @@ repeat
 until game.Players.LocalPlayer.PlayerGui and game.Players.LocalPlayer.Character
 
 bootstrapCode = [[
-	    loadstring(game:HttpGet("https://raw.githubusercontent.com/NotFeen/FEEN-WARE/refs/heads/main/featherware"))()
+	    loadstring(game:HttpGet("https://raw.githubusercontent.com/FeatherWaree/FEATHERR/refs/heads/main/featherware"))()
 	]]
 
 canRequire = false
