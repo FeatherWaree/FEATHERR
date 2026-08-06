@@ -12929,7 +12929,11 @@ function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 	end
 	if not pas_src then return end
 	pas_clone = pas_src:Clone()
+
+	-- FIX: Rename the clone to the projectile name so tracers can identify it
+	pas_clone.Name = pProj 
 	pas_clone.Parent = workspace                       -- straight into workspace, no folder
+
 	if pas_clone:IsA("BasePart") then
 		pas_mover = pas_clone; pas_isModel = false
 	elseif pas_clone:IsA("Model") then
@@ -12948,6 +12952,11 @@ function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 	pas_cf = CFrame.lookAt(pO, pO + pas_dir) * CFrame.Angles(pas_fr.X, pas_fr.Y, pas_fr.Z)
 	if pas_isModel then pas_clone:PivotTo(pas_cf) else pas_mover.CFrame = pas_cf end
 	table.insert(PA_VIS, { obj = pas_clone, mover = pas_mover, isModel = pas_isModel, O = pO, V = pVel, g = pG, fr = pas_fr, t0 = tick(), life = (pPm and pPm.lifetimeSec) or 2 })
+
+	-- FIX: Instantly apply tracers to the Projectile Aura's visual clone
+	if loops["projectile tracers"] then
+		applyTracer(pas_clone, true)
+	end
 end
 
 -- in-flight shot: equip weapon, fire, delayed multi-tap hit; visual ONLY on a successful fire
@@ -18715,16 +18724,17 @@ workspace.ChildAdded:Connect(function(child)
 		end
 	end
 
-	-- 6. Projectile Tracers
-	if loops["projectile tracers"] then
-		applyTracer(child, false)
-	end
-
 	-- 7. Auto Whisper (Owl Tracking)
 	if loops["auto whisper"] and child.Name == "ServerOwl" then
 		if child:GetAttribute("Owner") == Player.UserId then
 			currentWhisper = child
 		end
+	end
+end)
+
+workspace.DescendantAdded:Connect(function(child)
+	if loops["projectile tracers"] then
+		applyTracer(child, false)
 	end
 end)
 
