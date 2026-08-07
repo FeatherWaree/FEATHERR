@@ -11601,19 +11601,98 @@ local function applyTracer(obj, isPreview)
 end
 
 
-ProjectileTracers.Callbacks.OnToggled = function(state)
+-- Projectile Tracers Event-Based System
+ projectileTracerConnections = {}
+projectileEventBus = nil
+
+-- Function to setup event-based tracers
+ function setupEventBasedTracers()
+	if not canRequire then return false end
+
+	success = pcall(function()
+		-- Try to get the event bus
+		local eventBusPath = replicatedStorage:WaitForChild("TS"):WaitForChild("shared"):WaitForChild("event"):WaitForChild("event-bus")
+		if eventBusPath then
+			projectileEventBus = require(eventBusPath).EventBus
+		end
+
+		if not projectileEventBus then return false end
+
+		-- Connect to ProjectileLaunchedEvent
+		ProjectileLaunchedEvent = require(replicatedStorage:WaitForChild("TS"):WaitForChild("controllers"):WaitForChild("game"):WaitForChild("combat"):WaitForChild("projectile"):WaitForChild("event"):WaitForChild("projectile-launched-event")).ProjectileLaunchedEvent
+
+		conn1 = projectileEventBus:connect(ProjectileLaunchedEvent, function(event)
+			if loops["projectile tracers"] and event and event.projectile then
+				task.spawn(function()
+					applyTracer(event.projectile, false)
+				end)
+			end
+		end)
+		table.insert(projectileTracerConnections, conn1)
+
+		-- Connect to FireClientProjectileEvent for preview projectiles
+		FireClientProjectileEvent = require(replicatedStorage:WaitForChild("TS"):WaitForChild("controllers"):WaitForChild("game"):WaitForChild("combat"):WaitForChild("projectile"):WaitForChild("event"):WaitForChild("fire-client-projectile-event")).FireClientProjectileEvent
+
+		conn2 = projectileEventBus:connect(FireClientProjectileEvent, function(event)
+			if loops["projectile tracers"] and event and event.projectile then
+				task.spawn(function()
+					applyTracer(event.projectile, true)
+				end)
+			end
+		end)
+		table.insert(projectileTracerConnections, conn2)
+
+		return true
+	end)
+
+	return success
+end
+
+-- Fallback workspace scanner
+function connectWorkspaceScanner()
+	if projectileTracerConnections.workspace then
+		projectileTracerConnections.workspace:Disconnect()
+	end
+
+	projectileTracerConnections.workspace = workspace.DescendantAdded:Connect(function(child)
+		if loops["projectile tracers"] then
+			task.spawn(function()
+				applyTracer(child, false)
+			end)
+		end
+	end)
+end
+
+-- Update the toggle callback
+ProjectileTracers.Callbacks.OnToggle = function(state)
 	loops["projectile tracers"] = state
 
 	if state then
+		-- Try event-based first (optimized)
+		eventSuccess = setupEventBasedTracers()
+
+		if not eventSuccess then
+			-- Fallback to workspace scanner
+			connectWorkspaceScanner()
+		end
+
+		-- Apply to existing projectiles
 		for _, obj in pairs(workspace:GetDescendants()) do
 			if VALID_PROJECTILES[obj.Name] then
 				applyTracer(obj, false)
 			end
 		end
-
 		for _, child in pairs(ProjectileTargeting:GetDescendants()) do
 			applyTracer(child, true)
 		end
+	else
+		-- Disconnect all connections
+		for i, conn in ipairs(projectileTracerConnections) do
+			if conn.Disconnect then
+				conn:Disconnect()
+			end
+		end
+		projectileTracerConnections = {}
 	end
 end
 
@@ -11621,9 +11700,7 @@ ProjectileTargeting.DescendantAdded:Connect(function(child)
 	if loops["projectile tracers"] then
 		applyTracer(child, true)
 	end
-
 end)
-
 
 NoClickDelay.Callbacks.OnToggle = function(state)
 	loops["no click delay"] = state
