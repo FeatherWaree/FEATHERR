@@ -4706,13 +4706,12 @@ Reach = Combat:CreateButton("Reach", nil, true, true)
 Reach:CreateToggle("Sword", true, nil)
 Reach:CreateToggle("Placing", true, nil)
 Reach:CreateToggle("Mining", true, nil)
-Reach:CreateSlider("Sword Reach", 1, 28, 14.8, function(val)
-	if loops["reach"] then hbSetSwordRange(val) end
-end, 0.25)
+Reach:CreateSlider("Sword Reach", 14.4, 18, 14.4, function(val)
+	if loops["reach"] and canRequire then hbSetSwordRange(val) end
+end, 0.1)
 
-
-Reach:CreateSlider("Placing Reach", 1, 60, 18, nil,  0.25)
-Reach:CreateSlider("Mining Reach", 1, 30, 18, nil,0.25)
+Reach:CreateSlider("Placing Reach", 1, 60, 18, nil, 0.25)
+Reach:CreateSlider("Mining Reach", 1, 30, 18, nil, 0.25)
 
 Desync = Combat:CreateButton("Desync", nil, true)
 Desync:CreateToggle("Show RootPart", true, nil)
@@ -5249,7 +5248,7 @@ end)
 
 LongJump = Movement:CreateButton("LongJump", nil, true)
 LongJump:CreateToggle("Fireball Jump", nil, false)
-LongJump:CreateToggle("Auto UnToggle", nil, false)
+LongJump:CreateToggle("Yuzi Jump", nil, false)
 
 Swim = Movement:CreateButton("Swim", nil, true)
 
@@ -5573,14 +5572,39 @@ BlockCPSBypass.Callbacks.OnToggle = function(state)
 	end
 end
 
+if hookmetamethod and newcclosure then
+	reachOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+		method = getnamecallmethod and getnamecallmethod() or getnamecheckmethod()
+		if self.Name == "SwordHit" and method == "FireServer" then
+			if loops["reach"] and Reach.Values["Sword"] then
+				args = {...}
+				data = args[1]
+				if type(data) == "table" and data.validate and data.validate.targetPosition and data.validate.selfPosition then
+					selfPos = data.validate.selfPosition.value
+					targetPos = data.validate.targetPosition.value
+					dist = (targetPos - selfPos).Magnitude
+					swordReach = Reach.Values["Sword Reach"] or 14.8
+
+					if swordReach > 14.4 and dist > 14.4 then
+						dir = (targetPos - selfPos).Unit
+						data.validate.targetPosition.value = selfPos + dir * 14.0
+					end
+				end
+				return reachOldNamecall(self, (unpack or table.unpack)(args))
+			end
+		end
+		return reachOldNamecall(self, ...)
+	end))
+end
+
 
 
 Reach.Callbacks.OnToggle = function(state)
 	loops["reach"] = state
 
 	if loops["reach"] then
-		-- Sword
-		if Reach.Values["Sword"] == true then
+		-- Sword (Only if canRequire is true)
+		if canRequire and Reach.Values["Sword"] == true then
 			CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = Reach.Values["Sword Reach"]
 			hbSetSwordRange(Reach.Values["Sword Reach"] or 14.4)
 		end
@@ -5601,12 +5625,14 @@ Reach.Callbacks.OnToggle = function(state)
 	end
 
 	if not loops["reach"] then
-		CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = 14.4
-		CombatConstant.REGION_SWORD_CHARACTER_DISTANCE = 12.6
-		hbRestoreRanges()
+		if canRequire then
+			CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = 14.4
+			CombatConstant.REGION_SWORD_CHARACTER_DISTANCE = 12.6
+			hbRestoreRanges()
 
-		if canRequire and BlockSelector and originalGetMouseInfo then
-			BlockSelector.getMouseInfo = originalGetMouseInfo
+			if BlockSelector and originalGetMouseInfo then
+				BlockSelector.getMouseInfo = originalGetMouseInfo
+			end
 		end
 	end
 end
@@ -10642,6 +10668,8 @@ end
 speedThread = nil
 speedConnection = nil
 
+consumingPotion = false 
+
 Speed.Callbacks.OnToggle = function(value)
 	loops["speed"] = value
 
@@ -10651,33 +10679,50 @@ Speed.Callbacks.OnToggle = function(value)
 	end
 
 	if loops["speed"] then
-
 		speedConnection = RunService.Heartbeat:Connect(function(deltaTime)
 			if not mainScreenUI or mainScreenUI:GetAttribute("Running") == false then return end
+
 			local humanoid = cachedHumanoid
 			local hrp = cachedChar and cachedChar:FindFirstChild("HumanoidRootPart")
 
 			if humanoid and hrp and humanoid.Health > 0 then
+				targetSpeed = nil
+				hasLegitBoost = false 
 
-
-				local targetSpeed
-
-				if zephyrStacks >= 1 or cachedChar:GetAttribute("SpeedBoost") == 1.5 then
+				if zephyrStacks >= 1 then
 					targetSpeed = 34
+					hasLegitBoost = true
+				elseif cachedChar:GetAttribute("SpeedBoost") == 1.5 then
+					targetSpeed = 34
+					hasLegitBoost = true
+				elseif localInventory and localInventory:FindFirstChild("speed_potion") then
+					targetSpeed = 34
+					hasLegitBoost = true
+
+					-- Consume the potion safely without pausing the Heartbeat loop
+					if not consumingPotion then
+						consumingPotion = true
+						task.spawn(function()
+							print("Consuming speed potion...")
+							game:GetService("ReplicatedStorage").rbxts_include.node_modules["@rbxts"].net.out._NetManaged.ConsumeItem:InvokeServer({item = localInventory["speed_potion"]})
+							task.wait(1) 
+							consumingPotion = false
+						end)
+					end
 				else
 					targetSpeed = tonumber(Speed.Values["Speed"]) or 20
 				end
 
 				if Speed.Values["Speed Booster"] then
 					local timeInCycle = os.clock() % 1.5 
-
 					if timeInCycle < 1.25 then
 						targetSpeed = targetSpeed + 1
 					end
 				end
 
-				if targetSpeed <= 20 then
-
+				if hasLegitBoost then
+					humanoid.WalkSpeed = targetSpeed
+				elseif targetSpeed <= 20 then
 					humanoid.WalkSpeed = targetSpeed
 				else
 					humanoid.WalkSpeed = 20 
@@ -10685,15 +10730,11 @@ Speed.Callbacks.OnToggle = function(value)
 					if humanoid.MoveDirection.Magnitude > 0 then
 						local extraSpeed = targetSpeed - 20 
 						local displacement = humanoid.MoveDirection * (extraSpeed * deltaTime)
-
 						hrp.CFrame = hrp.CFrame + displacement
-
 					end
 				end
-
 			end
 		end)
-
 	else
 		if cachedHumanoid then
 			cachedHumanoid.WalkSpeed = 20
@@ -10996,7 +11037,6 @@ vec = (vector and vector.create) or Vector3.new
 LongJump.Callbacks.OnToggle = function(state)
 	loops["long jump"] = state
 
-
 	if state then
 		task.spawn(function()
 			character = Players.LocalPlayer.Character
@@ -11018,7 +11058,40 @@ LongJump.Callbacks.OnToggle = function(state)
 					originalGravity = workspace.Gravity
 				end
 
-				if LongJump.Values["Fireball Jump"] then
+				local executedAbilityJump = false
+
+				-- 1. Check for Yuzi Dash First
+				if LongJump.Values["Yuzi Jump"] then
+					local handInvItem = character:FindFirstChild("HandInvItem")
+					if handInvItem and handInvItem.Value then
+						local currentWeaponName = handInvItem.Value.Name
+
+						-- Verify if the held item is a valid Yuzi Dao
+						if currentWeaponName == "wood_dao" or currentWeaponName == "stone_dao" or currentWeaponName == "iron_dao" or currentWeaponName == "diamond_dao" or currentWeaponName == "emerald_dao" then
+
+							local lookDir = localRootPart.CFrame.LookVector
+							local currentPos = localRootPart.Position
+
+							local dashArgs = {
+								"dash",
+								{
+									direction = Vector3.new(lookDir.X, lookDir.Y, lookDir.Z),
+									origin = Vector3.new(currentPos.X, currentPos.Y, currentPos.Z),
+									weapon = currentWeaponName
+								}
+							}
+
+							-- Fire the Yuzi Dash instantly
+							replicatedStorage:WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events"):WaitForChild("useAbility"):FireServer(unpack(dashArgs))
+
+							task.wait(0.07)
+							executedAbilityJump = true
+						end
+					end
+				end
+
+				-- 2. Fallback to Fireball Jump if no Yuzi Dash occurred
+				if not executedAbilityJump and LongJump.Values["Fireball Jump"] then
 					invFolder = replicatedStorage:FindFirstChild("Inventories")
 					if invFolder then
 						playerInv = invFolder:FindFirstChild(Players.LocalPlayer.Name)
@@ -11027,10 +11100,10 @@ LongJump.Callbacks.OnToggle = function(state)
 							if fireballInst then
 								local handInvItem = character:FindFirstChild("HandInvItem")
 								if handInvItem then
-									currentItemName = handInvItem.Value
+									currentItemName = handInvItem.Value.Name
 									oldItemInst = nil
 
-									if currentItemName ~= fireballInst then
+									if currentItemName ~= fireballInst.Name then
 										if currentItemName and currentItemName ~= "" then
 											oldItemInst = playerInv:FindFirstChild(currentItemName)
 										end
@@ -11043,7 +11116,7 @@ LongJump.Callbacks.OnToggle = function(state)
 									local velocity = Vector3.new(0, -68, 0)
 
 									local fireArgs = {
-										fireballInst.Name,
+										localInventory:FindFirstChild("fireball"),
 										"fireball",
 										"fireball",
 										vec(origin.X, origin.Y, origin.Z),
@@ -11055,16 +11128,12 @@ LongJump.Callbacks.OnToggle = function(state)
 									}
 
 									netManaged:WaitForChild("ProjectileFire"):InvokeServer(unpack(fireArgs))
+									print(oldItemInst)
 
-									if oldItemInst then
-										restoreArgs = {{ hand = oldItemInst }}
-										netManaged:WaitForChild("SetInvItem"):InvokeServer(unpack(restoreArgs))
-
-
-									end
-
-									if LongJump.Values["Auto UnToggle"] then
-										LongJump:SetState(false)
+									if oldItemInst and oldItemInst ~= fireballInst then
+										print(oldItemInst)
+										task.wait(0.05) 
+										netManaged:WaitForChild("SetInvItem"):InvokeServer({ hand = oldItemInst })
 									end
 								end
 							end
@@ -11072,6 +11141,7 @@ LongJump.Callbacks.OnToggle = function(state)
 					end
 				end
 
+				-- 3. Execute the Standard Long Jump / Glide (Runs instantly after abilities)
 				localRootPart.CFrame = localRootPart.CFrame + Vector3.new(0, 3, 0)
 
 				if not activePushForce or not activePushForce.Parent then
@@ -13639,6 +13709,7 @@ end
 
 function asTick()
 	asOk, asErr = pcall(function()
+		-- DYNAMIC LOOKUP: This ensures it never breaks on respawn/equip (From Script 2)
 		asHandler = nil
 		if asKnit and asKnit.Controllers then
 			for _, asC in pairs(asKnit.Controllers) do
@@ -13654,26 +13725,24 @@ function asTick()
 				asChar = Player.Character
 				asHrp = asChar and asChar:FindFirstChild("HumanoidRootPart")
 				asHum = asChar and asChar:FindFirstChildOfClass("Humanoid")
+
 				if asHrp and asHum and asHum.Health > 0 and not asIsSpectator(Player.Team) then
-					asHead = asChar:FindFirstChild("Head")
-					if (asCam.CFrame.Position - (asHead and asHead.Position or asHrp.Position)).Magnitude <= 2 then
-						asTool = asChar:FindFirstChildOfClass("Tool")
-						asHi = asChar:FindFirstChild("HandInvItem"); asHv = asHi and asHi.Value
-						asHname = asHv and (typeof(asHv) == "Instance" and asHv.Name or tostring(asHv)) or (asTool and asTool.Name) or nil
-						asHeldLower = asHname and asHname:lower() or ""
-						asHinst = asHname and paInv and paInv:FindFirstChild(asHname) or nil
-						if asHinst then
-							asL = asResolve(asHname, asHinst)
-							if asL then
-								asPm = PA_PROJ_META[asL.projectile]
-								if asPm then
-									if not (ProjectileAssist.Values["Ignore Telepearls"] and (asL.projectile == "telepearl" or asHeldLower:find("telepearl"))) then
-										if not (ProjectileAssist.Values["Ignore Fireballs"] and (asL.projectile == "fireball" or asHeldLower:find("fireball"))) then
-											if paAmount(asL.ammo) > 0 then asShould = true end
-										end
-									end
-								end
-							end
+					asTool = asChar:FindFirstChildOfClass("Tool")
+					asHi = asChar:FindFirstChild("HandInvItem"); asHv = asHi and asHi.Value
+					asHname = asHv and (typeof(asHv) == "Instance" and asHv.Name or tostring(asHv)) or (asTool and asTool.Name) or nil
+					asHeldLower = asHname and asHname:lower() or ""
+					asHinst = asHname and paInv and paInv:FindFirstChild(asHname) or nil
+
+					-- INSTANT ENGAGEMENT: Removed the camera magnitude check and strict ammo/meta requirements (From Script 1)
+					if asHinst or asTool then
+						asL = asHinst and asResolve(asHname, asHinst) or nil
+						asPm = (asL and PA_PROJ_META[asL.projectile]) or nil
+
+						local ignorePearl = ProjectileAssist.Values["Ignore Telepearls"] and (asHeldLower:find("telepearl") or (asL and asL.projectile == "telepearl"))
+						local ignoreFire = ProjectileAssist.Values["Ignore Fireballs"] and (asHeldLower:find("fireball") or (asL and asL.projectile == "fireball"))
+
+						if not ignorePearl and not ignoreFire then
+							asShould = true 
 						end
 					end
 				end
@@ -13706,8 +13775,15 @@ function asTick()
 		asLead = Vector3.new(asVel.X, asLeadY, asVel.Z)
 		if asLead.Magnitude > 200 then asLead = asLead.Unit * 200 end
 
-		asEffV = (asPm.launchVelocity or 100) * (asHandler.velocityMultiplier or 1)
-		asVt, asT = asAim(asSolveO, asPart.Position, asLead, asEffV, asPm.gravitationalAcceleration or 0, asPm.predictionLifetimeSec or asPm.lifetimeSec or 3, asTgtG)
+		-- UNIVERSAL FALLBACK: If projectile has no meta, defaults to a fast velocity so it always works (From Script 1)
+		local baseVel = (asPm and asPm.launchVelocity) or 150
+		local handlerMult = asHandler.velocityMultiplier or 1
+		asEffV = baseVel * handlerMult
+
+		local predLife = (asPm and (asPm.predictionLifetimeSec or asPm.lifetimeSec)) or 3
+		local predGrav = (asPm and asPm.gravitationalAcceleration) or 0
+
+		asVt, asT = asAim(asSolveO, asPart.Position, asLead, asEffV, predGrav, predLife, asTgtG)
 		if not asVt then
 			if asAssisted then asHandler.targetPoint = nil; asAssisted = false end
 			return
@@ -13741,7 +13817,6 @@ ProjectileAssist.Callbacks.OnToggle = function(state)
 	pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ProjectileAssist_AimLine") end)
 	game:GetService("RunService"):BindToRenderStep("ProjectileAssist_AimLine", Enum.RenderPriority.First.Value, asTick)
 end
-
 if not asKnit then
 	pcall(function() asKnit = require(game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("knit",5):WaitForChild("src",5)).KnitClient end)
 end
@@ -19924,4 +19999,10 @@ FreeLobbyGadget:CreateDropdown("Gadget", gadgetList, "None", function(selected)
 			end)
 		end
 	end)
+end)
+
+
+
+mainScreenUI.Destroying:Connect(function()
+	UninjectFW()	
 end)
