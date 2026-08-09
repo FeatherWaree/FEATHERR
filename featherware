@@ -1026,7 +1026,8 @@ loops = {
 	["auto crypt"] = false,
 	["auto ember"] = false,
 	["auto farmer"] = false,
-	["auto infernal"] = false
+	["auto infernal"] = false,
+	["free lobby gadget"] = false
 }
 
 --REMOTE EVENTS/FUNCTIONS--
@@ -12598,10 +12599,10 @@ Speed.Callbacks.OnToggle = function(value)
 					targetSpeed = 34
 					hasLegitBoost = true
 				elseif cachedChar:GetAttribute("SpeedBoost") == 1.5 then
-					targetSpeed = 34
+					targetSpeed = 33
 					hasLegitBoost = true
 				elseif localInventory and localInventory:FindFirstChild("speed_potion") then
-					targetSpeed = 34
+					targetSpeed = 33
 					hasLegitBoost = true
 
 					-- Consume the potion safely without pausing the Heartbeat loop
@@ -22359,6 +22360,7 @@ FreeLobbyGadget:CreateDropdown("Gadget", gadgetList, "None", function(selected)
 		end
 
 		if gadgetModel then
+			if loops["free lobby gadget"] then
 			clone = gadgetModel:Clone()
 
 			if replicatedStorage and replicatedStorage.Inventories and replicatedStorage.Inventories:FindFirstChild(Player.Name) then
@@ -22369,6 +22371,7 @@ FreeLobbyGadget:CreateDropdown("Gadget", gadgetList, "None", function(selected)
 			pcall(function() 
 				NotificationSystem.Notify("Lobby Gadget", "Client-side spawned: " .. selected, 2) 
 			end)
+			end
 		end
 	end)
 end)
