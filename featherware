@@ -14485,15 +14485,7 @@ Fly.Callbacks.OnToggle = function(state)
 	end
 end
 
-Player.OnTeleport:Connect(function(teleportState)
-	if teleportState == Enum.TeleportState.InProgress then
 
-		if mainScreenUI and mainScreenUI:GetAttribute("Running") == true and FW.SettingsOverlay.Values["Auto Execute"] == true then
-
-			queue_on_teleport(bootstrapCode)
-		end 
-	end
-end)
 
 Headless.Callbacks.OnToggle = function(state)
 	loops["headless"] = state
@@ -26246,4 +26238,14 @@ end, true)
 
 AutoInfernal:CreateToggle("Auto Projectile Dodge", true, function(state)
 	infernalSettings.autoDodge = state
+end)
+
+Player.OnTeleport:Connect(function(teleportState)
+	if teleportState == Enum.TeleportState.InProgress then
+
+		if mainScreenUI and mainScreenUI:GetAttribute("Running") == true and FW.SettingsOverlay.Values["Auto Execute"] == true then
+
+			queue_on_teleport(bootstrapCode)
+		end 
+	end
 end)
