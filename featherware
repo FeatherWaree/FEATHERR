@@ -1027,7 +1027,13 @@ loops = {
 	["auto ember"] = false,
 	["auto farmer"] = false,
 	["auto infernal"] = false,
-	["free lobby gadget"] = false
+	["free lobby gadget"] = false,
+	["kaida reach"] = false,
+	["auto lumen"] = false,
+	["auto marina"] = false,
+	["auto lian"] = false,
+	["auto eldric"] = false,
+	["auto nazar"] = false
 }
 
 --REMOTE EVENTS/FUNCTIONS--
@@ -1770,7 +1776,7 @@ end
 
 NPCs = {}
 PlayersTable = {}
-GameSounds = game.Lighting:WaitForChild("GameSounds")
+GameSounds = game.Lighting:WaitForChild("GameAudioPlayers")
 
 local function findNearestNPCs()
 	table.clear(NPCs)
@@ -2702,7 +2708,6 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 		lbl.TextXAlignment = Enum.TextXAlignment.Left
 		lbl.FontFace = Font.fromName(textFont)
 	end
-
 	function mod:CreateToggle(tName, default, tCallback)
 		local settingID = uniquePrefix .. "_" .. tName
 
@@ -2723,11 +2728,16 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 		tFrame.TextXAlignment = Enum.TextXAlignment.Left
 		tFrame.FontFace = Font.fromName(textFont)
 
+		local toggleElement = {}
+
+		function toggleElement:SetVisible(state)
+			tFrame.Visible = state
+		end
+
 		local toggledState = default
 
 		if tCallback then tCallback(toggledState) end
 
-		-- Add this block:
 		mod.UpdateFunctions[tName] = function(forceState)
 			toggledState = forceState
 			tFrame.TextColor3 = toggledState and Color3.fromRGB(78, 173, 73) or Color3.fromRGB(180, 180, 180)
@@ -2738,7 +2748,6 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 			if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(tName, toggledState) end
 		end
 
-
 		tFrame.MouseButton1Click:Connect(function()
 			toggledState = not toggledState
 			tFrame.TextColor3 = toggledState and Color3.fromRGB(78, 173, 73) or Color3.fromRGB(180, 180, 180)
@@ -2748,14 +2757,14 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 			saveConfigToPC()
 
 			if tCallback then tCallback(toggledState) end
-			if tCallback then tCallback(toggledState) end
-			if tCallback then tCallback(toggledState) end
 
 			if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(tName, toggledState) end
-
-			return { SetVisible = function(esp_sv) tFrame.Visible = esp_sv end }
 		end)
-	end
+
+		return toggleElement
+	end	
+
+
 
 	function mod:CreateSlider(sName, min, max, default, sCallback, sStep)
 		sStep = (type(sStep) == "number") and sStep or 0.01
@@ -2994,7 +3003,7 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 			end
 		else
 			mod.Values[dName] = default
-		end
+		end 
 
 		local dropCont = Instance.new("Frame", settingsCont)
 		dropCont.BackgroundTransparency = 1
@@ -3024,6 +3033,12 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 
 		local oLayout = Instance.new("UIListLayout", optFrame)
 		oLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		
+		dropdownElement = {}
+
+		function dropdownElement:SetVisible(state)
+			dropCont.Visible = state
+		end
 
 		local function updateDropdownText()
 			if multiSelect then
@@ -4611,18 +4626,7 @@ TriggerBot:CreateToggle("Target NPCs/Dummies", true, nil)
 TriggerBot:CreateSlider("CPS", 1, 9, 9, nil, 0.2)
 
 
-KaidaKa = Combat:CreateButton("KaidaKa",nil, true, true)
-KaidaKa:CreateToggle("Manual Swing", false, nil)
-KaidaKa:CreateSlider("Hit Delay", 0.000001, 1, 0.1, nil, 0.005)
-KaidaKa:CreateDropdown("Priority", {"Player", "NPC/Dummy", "Nearest"}, "Player", nil)
-KaidaKa:CreateSlider("Reach", 0, 40, 12.4, nil)
-KaidaKa:CreateSlider("Angle Check", 0,360,180, nil, 1)
-KaidaKa:CreateToggle("Wall Check", true, nil)
-KaidaKa:CreateToggle("Target Players", true, nil)
-KaidaKa:CreateToggle("Target NPCs/Dummies", false, nil)
-KaidaKa:CreateToggle("Highlight Target", false, nil)
-KaidaKa:CreateToggle("Require Claw Equipped", true, nil)
-KaidaKa:CreateToggle("Check If Sophia Frozen", true, nil)
+
 
 AimAssist = Combat:CreateButton("Aim Assist",nil, true, true)
 AimAssist:CreateSlider("Range", 1, 150, 100, nil)
@@ -4801,6 +4805,9 @@ end, 0.1)
 
 Reach:CreateSlider("Placing Reach", 1, 60, 18, nil, 0.25)
 Reach:CreateSlider("Mining Reach", 1, 30, 18, nil, 0.25)
+
+KaidaReach = Combat:CreateButton("Kaida Reach", nil, true)
+KaidaReach:CreateSlider("Claw Reach", 21, 33, 21, nil, 1)
 
 Desync = Combat:CreateButton("Desync", nil, true)
 Desync:CreateToggle("Show RootPart", true, nil)
@@ -6783,11 +6790,84 @@ AutoFish:CreateToggle("Visual UI Auto-Track", true, nil)
 AutoYuzi = Kits:CreateButton("Auto Yuzi", nil, true)
 AutoYuzi:CreateSlider("Cooldown", 0, 5, 0, nil, 0.05)
 
-AutoMilo = Kits:CreateButton("Auto Milo", nil, true)
+miloTriggeredBeds = {}
+
+AutoMilo = Kits:CreateButton("Auto Milo", function(state)
+	loops["auto milo"] = state
+	if state then
+		if not miloConn then
+			miloConn = RunService.Heartbeat:Connect(function()
+				if not loops["auto milo"] then return end
+				if not AutoMilo.Values["Disguise near bed"] then return end
+
+				char = Player.Character
+				if not char then return end
+				hrp = char:FindFirstChild("HumanoidRootPart")
+				if not hrp then return end
+
+				now = os.clock()
+				if now - (lastMiloCheck or 0) < 0.15 then return end
+				lastMiloCheck = now
+
+				range = AutoMilo.Values["Bed Range"] or 25
+				currentInRangeBeds = {}
+
+				if beds then
+					for _, bed in ipairs(beds) do
+						if bed and bed.Parent then
+							dist = (hrp.Position - bed.Position).Magnitude
+							if dist <= range then
+								currentInRangeBeds[bed] = true
+								if not miloTriggeredBeds[bed] then
+									miloTriggeredBeds[bed] = true
+
+									mode = AutoMilo.Values["Mimic Mode"] or "Custom Block"
+									if mode == "Surface" then
+										args = {
+											"MIMIC_BLOCK"
+										}
+										game:GetService("ReplicatedStorage"):WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events"):WaitForChild("useAbility"):FireServer(unpack(args))
+									else
+										args = {
+											{
+												data = {
+													blockType = AutoMilo.Values["Block"]
+												}
+											}
+										}
+										mimicBlock:FireServer(unpack(args))
+									end
+								end
+							end
+						end
+					end
+				end
+
+				for bed, _ in pairs(miloTriggeredBeds) do
+					if not currentInRangeBeds[bed] then
+						miloTriggeredBeds[bed] = nil
+					end
+				end
+			end)
+		end
+	else
+		if miloConn then
+			miloConn:Disconnect()
+			miloConn = nil
+		end
+	end
+end, true)
+
+AutoMilo:CreateToggle("Disguise near bed", false, nil)
+
+AutoMilo:CreateSlider("Bed Range", 10, 50, 25, nil, 1)
+
+AutoMilo:CreateDropdown("Mimic Mode", {"Custom Block", "Surface"}, "Custom Block", nil)
+
 AutoMilo:CreateToggle("Disguise", true, function(value)
 	if value then
 		if loops["auto milo"] then
-			local args = {
+			args = {
 				{
 					data = {
 						blockType = AutoMilo.Values["Block"]
@@ -6796,11 +6876,44 @@ AutoMilo:CreateToggle("Disguise", true, function(value)
 			}
 			mimicBlock:FireServer(unpack(args))
 			AutoMilo.Values["Disguise"] = false
-
 		end
 	end
 end)
-AutoMilo:CreateDropdown("Block", {"bedrock", "obsidian", "tnt", "personal_chest", "team_crate", "chest", "grave_trap", "barrier", "magma_block", "slime_block", "fake_bed", "emerald_ore", "enchant_table", "cannon", "classic_auto_turret", "pinata", "satellite_dish", "smoke_block"}, nil, nil, false, false)
+
+AutoMilo:CreateDropdown("Block", {
+	"bedrock", "obsidian", "tnt", "personal_chest", "team_crate", "chest", "grave_trap", "barrier",
+	"magma_block", "slime_block", "fake_bed", "emerald_ore", "enchant_table", "cannon", "classic_auto_turret",
+	"pinata", "satellite_dish", "smoke_block",
+	"dirt", "grass", "stone", "stone_tiles", "cobblestone", "moss_block", "stone_pillar", "stone_slab",
+	"stone_brick", "brick", "andesite", "andesite_polished", "diorite", "diorite_polished", "granite", "granite_polished",
+	"fisherman_coral", "wood_plank_oak", "drawbridge", "scaffold", "oak_log", "birch_log", "spruce_log", "hickory_log",
+	"maple_log", "wood_plank_birch", "wood_plank_spruce", "wood_plank_hickory", "wood_plank_maple", "bookshelf", "glass",
+	"bed", "og_bed", "inflatable_bed", "flag", "wool_white", "wool_blue", "wool_red", "wool_green", "wool_orange",
+	"wool_yellow", "wool_pink", "wool_cyan", "wool_purple", "wool_brown", "wool_black", "wool_gray", "volatile_stone",
+	"void_block", "invisible_block", "flying_monster_block", "damage_banner", "defense_banner", "heal_banner", "pirate_flag",
+	"iron_ore_mesh_block", "clay", "clay_orange", "clay_dark_green", "clay_light_green", "clay_red", "clay_pink", "clay_blue",
+	"clay_purple", "clay_black", "clay_tan", "clay_light_brown", "clay_dark_brown", "clay_yellow", "clay_white", "clay_gray",
+	"clay_green", "concrete_green", "marble", "marble_pillar", "slate_brick", "slate_tiles", "sand", "red_sand", "sandstone",
+	"sandstone_polished", "sandstone_smooth", "red_sandstone", "red_sandstone_polished", "red_sandstone_smooth", "snow", "ice",
+	"siege_tnt", "blastproof_ceramic", "magic_glass", "melon", "carrot", "chicken_egg_block", "zipline_base", "manual_cannon",
+	"auto_cannon", "spread_cannon", "party_cannon", "ballista", "excalibur", "beehive", "brewing_cauldron", "tesla_trap",
+	"lucky_block", "purple_lucky_block", "lucky_block_trap", "snap_trap", "teleport_block", "void_portal", "team_door",
+	"void_turret", "spike_trap", "auto_turret", "shock_wave_turret", "huge_lucky_block", "small_bush", "large_bush",
+	"flower_purple", "broken_snow_cone_machine", "snow_cone_machine", "water_tank", "glitched_lucky_block", "dragon_egg",
+	"solar_panel", "cosmic_lucky_block", "new_years_lucky_block", "fire_sheep_statue", "rainbow_lucky_block", "rainbow_pot_of_gold",
+	"lantern_block", "aquamarine_lantern", "glowstone", "desert_pot", "pirate_gunpowder_barrel", "forge", "cake_one", "cake_three",
+	"flying_lucky_block", "gum_block", "radioactive_plant", "nest", "broken_arrow_board", "arrow_board", "barrel", "haybale",
+	"pumpkin_block", "cursed_coffin", "growing_halloween_lucky_block", "halloween_lucky_block", "lightning_coil", "diamond_capture_block",
+	"healing_fountain", "healing_turret", "target_dummy_tier_1", "target_dummy_tier_2", "target_dummy_tier_3", "target_dummy_tier_4",
+	"forge_lucky_block", "firework_crate", "new_years_lucky_block_2024", "magical_hero_lucky_block", "blue_tile", "egg_block",
+	"nest_deposit_block", "iron_chicken_nest", "diamond_chicken_nest", "emerald_chicken_nest", "void_chicken_incubator",
+	"styx_entrance_portal", "styx_exit_portal", "broken_altar_block", "altar_block_one", "altar_block_two", "altar_block_three",
+	"void_teleport_portal", "lasso_hook", "survival_crate", "titan_heal_totem", "jellyfish_block_snapping", "black_market_shop",
+	"limestone", "spider_queen_web", "royale_bed", "christmas_scaffold", "christmas_drawbridge", "snake_shrine", "ladder",
+	"vine_ladder", "sacrophagus", "cotton_candy_block", "cotton_candy_block_blue", "cotton_candy_block_pink", "cotton_candy_block_orange",
+	"cotton_candy_block_yellow", "cotton_candy_machine", "scarab_portal", "void_bait", "grave_trap_block", "exploding_tank_block",
+	"iron_ore", "diamond_ore", "emerald_ore", "snow_pile"}, nil, nil, false, false)
+
 AutoMilo:CreateToggle("Infinite Milo", false, nil)
 
 AutoKrystal = Kits:CreateButton("Auto Krystal", nil, true)
@@ -6900,6 +7013,8 @@ end
 if hookmetamethod and newcclosure then
 	reachOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 		method = getnamecallmethod and getnamecallmethod() or getnamecheckmethod()
+
+		-- === SWORD REACH ===
 		if self.Name == "SwordHit" and method == "FireServer" then
 			if loops["reach"] and Reach.Values["Sword"] then
 				args = {...}
@@ -6909,7 +7024,6 @@ if hookmetamethod and newcclosure then
 					targetPos = data.validate.targetPosition.value
 					dist = (targetPos - selfPos).Magnitude
 					swordReach = Reach.Values["Sword Reach"] or 14.8
-
 					if swordReach > 14.4 and dist > 14.4 then
 						dir = (targetPos - selfPos).Unit
 						data.validate.targetPosition.value = selfPos + dir * 14.0
@@ -6917,7 +7031,34 @@ if hookmetamethod and newcclosure then
 				end
 				return reachOldNamecall(self, (unpack or table.unpack)(args))
 			end
+
+			-- === KAIDA REACH ===
+		elseif self.Name == "SummonerClawAttackRequest" and method == "FireServer" then
+			if loops["kaida reach"] then
+				args = {...}
+				data = args[1]
+				if type(data) == "table" and data.position and data.direction then
+					targetReach = tonumber(KaidaReach.Values["Claw Reach"]) or 21
+					if targetReach > 21 then
+						extraDist = targetReach - 21
+						dir = data.direction
+						pos = data.position
+
+						newX = pos.X + (dir.X * extraDist)
+						newY = pos.Y + (dir.Y * extraDist)
+						newZ = pos.Z + (dir.Z * extraDist)
+
+						if vector and vector.create then
+							data.position = vector.create(newX, newY, newZ)
+						else
+							data.position = Vector3.new(newX, newY, newZ)
+						end
+					end
+				end
+				return reachOldNamecall(self, (unpack or table.unpack)(args))
+			end
 		end
+
 		return reachOldNamecall(self, ...)
 	end))
 end
@@ -7871,24 +8012,407 @@ Killaura.Callbacks.OnToggle = function(state)
 		end
 	end)
 end
+Player = Player or game:GetService("Players").LocalPlayer
+Players = Players or game:GetService("Players")
+UserInputService = UserInputService or game:GetService("UserInputService")
+TweenService = TweenService or game:GetService("TweenService")
+loops = loops or {}
+Combat = Combat or {}
+
+claws = {"summoner_claw_1", "summoner_claw_2", "summoner_claw_3", "summoner_claw_4"}
+
+swingAnimation = Instance.new("Animation")
+swingAnimation.AnimationId = "rbxassetid://18964634583" 
+
+kaHighlight = Instance.new("Highlight")
+kaHighlight.FillColor = Color3.fromRGB(255, 255, 255)
+kaHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+kaHighlight.FillTransparency = 0.5
+kaHighlight.OutlineTransparency = 1
+kaHighlight.Adornee = nil
+kaHighlight.Parent = game:GetService("CoreGui")
+
+boxVisualizer = Instance.new("BoxHandleAdornment")
+boxVisualizer.Name = "KaidaBoxVis"
+boxVisualizer.Size = Vector3.new(4, 5, 2)
+boxVisualizer.Color3 = Color3.fromRGB(255, 255, 255)
+boxVisualizer.Transparency = 0.6
+boxVisualizer.ZIndex = 10
+boxVisualizer.AlwaysOnTop = true
+boxVisualizer.Adornee = nil
+boxVisualizer.Parent = game:GetService("CoreGui")
+
+kaidaHitTrack = nil
+currentKaTarget = nil
+clicking = false
+swingRequested = false
+currentHitSound = nil
+
+netManaged = nil
+summonerClawRemote = nil
+setInvItemRemote = nil
+
+function getNetManaged()
+	if netManaged then return netManaged end
+	pcall(function()
+		rep = game:GetService("ReplicatedStorage")
+		include = rep:WaitForChild("rbxts_include", 1)
+		if not include then return end
+		nodeModules = include:WaitForChild("node_modules", 1)
+		if not nodeModules then return end
+		rbxts = nodeModules:WaitForChild("@rbxts", 1)
+		if not rbxts then return end
+		net = rbxts:WaitForChild("net", 1)
+		if not net then return end
+		out = net:WaitForChild("out", 1)
+		if not out then return end
+		netManaged = out:WaitForChild("_NetManaged", 1)
+	end)
+	return netManaged
+end
+
+function getClawRemote()
+	if summonerClawRemote then return summonerClawRemote end
+	managed = getNetManaged()
+	if managed then
+		pcall(function()
+			summonerClawRemote = managed:WaitForChild("SummonerClawAttackRequest", 1)
+		end)
+	end
+	return summonerClawRemote
+end
+
+function getSetInvRemote()
+	if setInvItemRemote then return setInvItemRemote end
+	managed = getNetManaged()
+	if managed then
+		pcall(function()
+			setInvItemRemote = managed:WaitForChild("SetInvItem", 1)
+		end)
+	end
+	return setInvItemRemote
+end
+
+clawSoundIds = {}
+if canRequire or canrequire then
+	tsFolder = game:GetService("ReplicatedStorage"):FindFirstChild("TS")
+	if tsFolder then
+		soundFolder = tsFolder:FindFirstChild("sound")
+		if soundFolder then
+			soundModule = soundFolder:FindFirstChild("game-sound")
+			if soundModule then
+				ok, mod = pcall(require, soundModule)
+				if ok and mod then
+					gs = mod.GameSound or mod
+					for i = 1, 4 do
+						id = gs["SUMMONER_CLAW_ATTACK_" .. i]
+						if typeof(id) == "string" and id:find("rbxasset") then
+							table.insert(clawSoundIds, id)
+						elseif typeof(id) == "number" then
+							table.insert(clawSoundIds, "rbxassetid://" .. id)
+						elseif typeof(id) == "Instance" and id:IsA("Sound") then
+							table.insert(clawSoundIds, id.SoundId)
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+if #clawSoundIds == 0 then
+	for _, sound in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+		if sound:IsA("Sound") and string.find(string.lower(sound.Name), "summoner_claw_attack") then
+			table.insert(clawSoundIds, sound.SoundId)
+		end
+	end
+end
+
+if #clawSoundIds == 0 then
+	clawSoundIds = {"rbxassetid://5765933065"}
+end
+
+clawVfxAnimId = nil
+for _, anim in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+	if anim:IsA("Animation") and anim.AnimationId ~= "" then
+		lowerName = string.lower(anim.Name)
+		if string.find(lowerName, "claw") or string.find(lowerName, "summoner") or string.find(lowerName, "attack") then
+			clawVfxAnimId = anim.AnimationId
+			break
+		end
+	end
+end
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		clicking = true
+		swingRequested = true
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gpe)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		clicking = false
+	end
+end)
+
+function isInFOV(originPart, targetPart, angleLimit)
+	if not originPart or not targetPart then return false end
+	dirToTarget = (targetPart.Position - originPart.Position).Unit
+	dot = originPart.CFrame.LookVector:Dot(dirToTarget)
+	angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+	return angle <= angleLimit
+end
+
+function isClawEquipped()
+	char = Player.Character
+	if not char then return false end
+
+	handItem = char:FindFirstChild("HandInvItem")
+	if not handItem then return false end
+
+	clawName = tostring(handItem.Value)
+	return table.find(claws, clawName) ~= nil
+end
+
+function equipClaw()
+	inventories = game:GetService("ReplicatedStorage"):FindFirstChild("Inventories")
+	if not inventories then return false end
+
+	inventoryFolder = inventories:FindFirstChild(Player.Name)
+	if not inventoryFolder then return false end
+
+	inventoryClaw = nil
+
+	for i = 4, 1, -1 do
+		checkClaw = "summoner_claw_" .. tostring(i)
+		claw = inventoryFolder:FindFirstChild(checkClaw)
+		if claw then
+			inventoryClaw = claw
+			break
+		end
+	end
+
+	if not inventoryClaw then
+		for _, item in ipairs(inventoryFolder:GetChildren()) do
+			if table.find(claws, item.Name) then
+				inventoryClaw = item
+				break
+			end
+		end
+	end
+
+	if not inventoryClaw then return false end
+
+	remote = getSetInvRemote()
+	if not remote then return false end
+
+	success = false
+	pcall(function()
+		remote:InvokeServer({hand = inventoryClaw})
+		success = true
+	end)
+
+	if success then
+		task.wait(0.1)
+	end
+
+	return success
+end
+
+function handleClawRequirement()
+	if KaidaKa.Values["Require Claw Equipped"] then
+		return isClawEquipped()
+	end
+
+	if isClawEquipped() then
+		return true
+	end
+
+	equipClaw()
+
+	for i = 1, 8 do
+		if isClawEquipped() then
+			return true
+		end
+		task.wait(0.05)
+	end
+
+	return isClawEquipped()
+end
+
+function playSwingAnim()
+	if not KaidaKa.Values["Swing Anim"] then return end
+	char = Player.Character
+	if not char then return end
+	humanoid = char:FindFirstChild("Humanoid")
+	if not humanoid then return end
+
+	animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	if not kaidaHitTrack or not kaidaHitTrack.IsPlaying then
+		if not kaidaHitTrack then
+			kaidaHitTrack = animator:LoadAnimation(swingAnimation)
+			kaidaHitTrack.Priority = Enum.AnimationPriority.Action
+			kaidaHitTrack.Looped = false
+		end
+		kaidaHitTrack:Play()
+	end
+end
+
+function playHitSound()
+	if KaidaKa and KaidaKa.Values and not KaidaKa.Values["Hit Sound"] then
+		if currentHitSound and currentHitSound.Parent then
+			currentHitSound:Stop()
+			currentHitSound:Destroy()
+			currentHitSound = nil
+		end
+		return
+	end
+
+	if #clawSoundIds == 0 then return end
+
+	if currentHitSound and currentHitSound.Parent and currentHitSound.IsPlaying then
+		return
+	end
+
+	if currentHitSound and currentHitSound.Parent then
+		currentHitSound:Stop()
+		currentHitSound:Destroy()
+		currentHitSound = nil
+	end
+
+	s = Instance.new("Sound")
+	s.Volume = 1
+	s.SoundId = clawSoundIds[math.random(1, #clawSoundIds)]
+	s.Parent = workspace.CurrentCamera or workspace
+	currentHitSound = s
+	s:Play()
+
+	s.Ended:Connect(function()
+		if currentHitSound == s then
+			currentHitSound = nil
+		end
+		if s and s.Parent then
+			s:Destroy()
+		end
+	end)
+
+	task.delay(10, function()
+		if s and s.Parent and not s.IsPlaying then
+			if currentHitSound == s then
+				currentHitSound = nil
+			end
+			s:Destroy()
+		end
+	end)
+end
+
+function spawnClawVFX(position, direction)
+	task.spawn(function()
+		clawModel = game.ReplicatedStorage.Assets.Misc.Kaida.Summoner_DragonClaw:Clone()
+		clawModel.Parent = workspace
+
+		unitDir = Vector3.new(direction.X, 0, direction.Z).Unit
+		rightVec = unitDir:Cross(Vector3.new(0, 1, 0)).Unit * -1
+		spawnPos = position + rightVec * 5 + unitDir * 6
+		lookAt = spawnPos + direction * 13
+
+		clawModel:PivotTo(CFrame.new(spawnPos, lookAt))
+		if clawModel.PrimaryPart then clawModel.PrimaryPart.Anchored = true end
+
+		animController = clawModel:FindFirstChild("AnimationController")
+		if animController then
+			animator = animController:FindFirstChildOfClass("Animator")
+			if not animator then
+				animator = Instance.new("Animator")
+				animator.Parent = animController
+			end
+
+			clawAnim = clawModel:FindFirstChildWhichIsA("Animation", true)
+			if not clawAnim and clawVfxAnimId then
+				clawAnim = Instance.new("Animation")
+				clawAnim.AnimationId = clawVfxAnimId
+			end
+
+			if clawAnim then
+				track = animator:LoadAnimation(clawAnim)
+				track:Play(0.1, 1, 1)
+			end
+		end
+
+		meshParts = {}
+		for _, child in ipairs(clawModel:GetDescendants()) do
+			if child:IsA("MeshPart") or child:IsA("BasePart") then
+				child.Transparency = 0
+				table.insert(meshParts, child)
+			end
+		end
+
+		task.wait(0.2)
+		fadeInfo = TweenInfo.new(0.25, Enum.EasingStyle.Linear, Enum.EasingDirection.In)
+		for _, part in ipairs(meshParts) do
+			TweenService:Create(part, fadeInfo, {Transparency = 1}):Play()
+		end
+
+		task.delay(0.3, function()
+			if clawModel and clawModel.Parent then
+				clawModel:Destroy()
+			end
+		end)
+	end)
+end
+
+KaidaKa = Combat:CreateButton("Kaida KA", nil, true)
+KaidaKa:CreateToggle("Target Players", true, nil)
+KaidaKa:CreateToggle("Target NPCs/Dummies", true, nil)
+KaidaKa:CreateDropdown("Priority", {"Nearest", "Player", "NPC/Dummy"}, "Nearest", nil)
+KaidaKa:CreateSlider("Reach", 5, 33, 20, nil, 1)
+KaidaKa:CreateSlider("Angle Check", 10, 360, 90, nil, 5)
+KaidaKa:CreateSlider("Hit Delay", 0.55, 2.0, 0.55, nil, 0.01)
+KaidaKa:CreateToggle("Manual Swing", false, nil)
+KaidaKa:CreateToggle("Face Target", true, nil)
+KaidaKa:CreateToggle("Highlight Target", true, nil)
+KaidaKa:CreateToggle("3D Box", false, nil)
+KaidaKa:CreateToggle("Swing Anim", true, nil)
+KaidaKa:CreateToggle("Hit Sound", true, function(state)
+	if not state and currentHitSound and currentHitSound.Parent then
+		currentHitSound:Stop()
+		currentHitSound:Destroy()
+		currentHitSound = nil
+	end
+end)
+KaidaKa:CreateToggle("Require Claw Equipped", false, nil)
+KaidaKa:CreateToggle("Check If Sophia Frozen", true, nil)
 
 KaidaKa.Callbacks.OnToggle = function(state)
-
 	loops["kaidaka"] = state
 
-	if loops["kaidaka"] == false then
+	if not loops["kaidaka"] then
 		currentKaTarget = nil
-		kaHighlight.Adornee = nil 
-		return 
+		swingRequested = false
+		if kaHighlight then kaHighlight.Adornee = nil end
+		if boxVisualizer then boxVisualizer.Adornee = nil end
+		return
 	end
+
 	task.spawn(function()
-		while loops["kaidaka"] == true do
-			hitDelay = KaidaKa.Values["Hit Delay"]
+		while loops["kaidaka"] do
+			hitDelay = tonumber(KaidaKa.Values["Hit Delay"]) or 0.55
 			task.wait(hitDelay)
+
+			if not loops["kaidaka"] then break end
 
 			if not (KaidaKa.Values["Target Players"] or KaidaKa.Values["Target NPCs/Dummies"]) then
 				currentKaTarget = nil
 				kaHighlight.Adornee = nil
+				boxVisualizer.Adornee = nil
+				swingRequested = false
 				continue
 			end
 
@@ -7896,76 +8420,85 @@ KaidaKa.Callbacks.OnToggle = function(state)
 			if not char or not char:FindFirstChild("HumanoidRootPart") then
 				currentKaTarget = nil
 				kaHighlight.Adornee = nil
+				boxVisualizer.Adornee = nil
+				swingRequested = false
 				continue
 			end
 			rootPart = char.HumanoidRootPart
 
 			if KaidaKa.Values["Check If Sophia Frozen"] then
-				if Player:GetAttribute("StunnedUntilTime") then
-					if Player:GetAttribute("StunnedUntilTime") ~= -1 then
-						currentKaTarget = nil
-						kaHighlight.Adornee = nil
-						continue
-					end
+				stunTime = Player:GetAttribute("StunnedUntilTime")
+				if stunTime and stunTime ~= -1 then
+					currentKaTarget = nil
+					kaHighlight.Adornee = nil
+					boxVisualizer.Adornee = nil
+					swingRequested = false
+					continue
 				end
 			end
 
-			handItem = char:WaitForChild("HandInvItem", 1) 
-			if not handItem then
+			if not handleClawRequirement() then
 				currentKaTarget = nil
 				kaHighlight.Adornee = nil
+				boxVisualizer.Adornee = nil
+				swingRequested = false
 				continue
 			end
 
-			clawName = tostring(handItem.Value)
-
-			if KaidaKa.Values["Require Claw Equipped"] == true then
-				if not table.find(claws, clawName) then
-					currentKaTarget = nil
-					kaHighlight.Adornee = nil
-					continue
-				end
-			end 
-
 			playertarget = nil
-			playerdistance = findTargetStuds 
+			playerdistance = 1000
 			npcdummytarget = nil
-			npcdummydistance = findTargetStuds 
-			besttarget = nil
+			npcdummydistance = 1000
+
+			reach = tonumber(KaidaKa.Values["Reach"]) or 20
+			angleCheck = tonumber(KaidaKa.Values["Angle Check"]) or 90
 
 			if KaidaKa.Values["Target Players"] then
-				for _, v in pairs(Players:GetChildren()) do
-					local targetPlayer = Players:GetPlayerFromCharacter(v.Character)
-					if v ~= Player and targetPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and targetPlayer.Team ~= Player.Team then
-						local distance = (rootPart.Position - v.Character.HumanoidRootPart.Position).Magnitude
-						if distance <= playerdistance then
-							playertarget = v.Character
-							playerdistance = distance
-						end
+				for _, v in ipairs(Players:GetPlayers()) do
+					isSpectator = false
+					if v.Team and v.Team.Name and string.find(string.lower(v.Team.Name), "spectator") then
+						isSpectator = true
 					end
-				end
-			end
 
-			if KaidaKa.Values["Target NPCs/Dummies"] then
-				for _, npc in pairs(workspace:GetChildren()) do
-					if npc and npc:IsA("Model") and npc:FindFirstChild("Humanoid") and npc.PrimaryPart then
-						if not Players:GetPlayerFromCharacter(npc) then
-							local distance = (rootPart.Position - npc.PrimaryPart.Position).Magnitude
-							if distance <= npcdummydistance then
-								npcdummytarget = npc
-								npcdummydistance = distance
+					if not isSpectator and v ~= Player and v.Character and v.Team ~= Player.Team then
+						targetHRP = v.Character:FindFirstChild("HumanoidRootPart")
+						hum = v.Character:FindFirstChild("Humanoid")
+						if targetHRP and hum and hum.Health > 0 then
+							dist = (rootPart.Position - targetHRP.Position).Magnitude
+							if dist <= reach and dist < playerdistance then
+								if isInFOV(rootPart, targetHRP, angleCheck) then
+									playertarget = v.Character
+									playerdistance = dist
+								end
 							end
 						end
 					end
 				end
 			end
 
-			local priority = KaidaKa.Values["Priority"]
+			if KaidaKa.Values["Target NPCs/Dummies"] then
+				for _, npc in ipairs(workspace:GetChildren()) do
+					if npc:IsA("Model") and npc:FindFirstChild("Humanoid") and npc.PrimaryPart then
+						if not Players:GetPlayerFromCharacter(npc) then
+							dist = (rootPart.Position - npc.PrimaryPart.Position).Magnitude
+							if dist <= reach and dist < npcdummydistance then
+								if isInFOV(rootPart, npc.PrimaryPart, angleCheck) then
+									npcdummytarget = npc
+									npcdummydistance = dist
+								end
+							end
+						end
+					end
+				end
+			end
+
+			priority = KaidaKa.Values["Priority"] or "Nearest"
+			besttarget = nil
 			if priority == "Player" then
 				besttarget = playertarget or npcdummytarget
 			elseif priority == "NPC/Dummy" then
 				besttarget = npcdummytarget or playertarget
-			elseif priority == "Nearest" then
+			else 
 				if playertarget and npcdummytarget then
 					besttarget = (playerdistance <= npcdummydistance) and playertarget or npcdummytarget
 				else
@@ -7973,142 +8506,94 @@ KaidaKa.Callbacks.OnToggle = function(state)
 				end
 			end
 
-			if not besttarget then
-				currentKaTarget = nil
-				kaHighlight.Adornee = nil
-				continue
-			end
+			hasTarget = false
+			targetDir = nil
 
-			HRP = rootPart 
-			targetHRP = besttarget:FindFirstChild("HumanoidRootPart") or besttarget.PrimaryPart
+			if besttarget then
+				targetHRP = besttarget:FindFirstChild("HumanoidRootPart") or besttarget.PrimaryPart
+				if targetHRP then
+					distToTarget = (rootPart.Position - targetHRP.Position).Magnitude
 
-			if not targetHRP then
-				continue
-			end
+					if distToTarget <= 40 then
+						if KaidaKa.Values["Highlight Target"] then
+							kaHighlight.Adornee = besttarget
+						else
+							kaHighlight.Adornee = nil
+						end
 
-			dir = (targetHRP.Position - HRP.Position).Unit
+						if KaidaKa.Values["3D Box"] then
+							boxVisualizer.Adornee = targetHRP
+						else
+							boxVisualizer.Adornee = nil
+						end
+					else
+						kaHighlight.Adornee = nil
+						boxVisualizer.Adornee = nil
+					end
 
-			if KaidaKa.Values["Wall Check"] == true then
-				local raycastParams = RaycastParams.new()
-				raycastParams.FilterDescendantsInstances = {HRP.Parent, besttarget}
-				raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-				raycastParams.IgnoreWater = true
+					if distToTarget <= reach and isInFOV(rootPart, targetHRP, angleCheck) then
+						hasTarget = true
+						targetDir = (targetHRP.Position - rootPart.Position).Unit
+						currentKaTarget = besttarget
 
-				local wallRaycast = workspace:Raycast(HRP.Position, targetHRP.Position - HRP.Position, raycastParams)
-				if wallRaycast then
-					currentKaTarget = nil
-					kaHighlight.Adornee = nil
-					continue
-				end
-			end
-
-			angleMet = isInFOV(HRP, targetHRP, KaidaKa.Values["Angle Check"])
-			if not angleMet then
-				currentKaTarget = nil
-				kaHighlight.Adornee = nil
-				continue
-			end
-
-			distance = (HRP.Position - targetHRP.Position).Magnitude
-			reach = tonumber(KaidaKa.Values["Reach"])
-			if distance > reach then
-				currentKaTarget = nil
-				kaHighlight.Adornee = nil
-				continue
-			end
-
-			inventoryClaw = nil
-			chosenClawName = clawName
-
-			if KaidaKa.Values["Require Claw Equipped"] == true then
-				inventoryClaw = game.ReplicatedStorage:FindFirstChild("Inventories"):FindFirstChild(Player.Name):FindFirstChild(chosenClawName)
-				if not inventoryClaw then 
-					currentKaTarget = nil
-					kaHighlight.Adornee = nil
-					continue 
-				end
-			else
-				for i = 4, 1, -1 do
-					local checkClaw = "summoner_claw_" .. tostring(i)
-					if game.ReplicatedStorage:FindFirstChild("Inventories"):FindFirstChild(Player.Name):FindFirstChild(checkClaw) then
-						chosenClawName = checkClaw
-						break
+						if KaidaKa.Values["Face Target"] then
+							char:PivotTo(CFrame.lookAt(rootPart.Position, targetHRP.Position))
+						end
 					end
 				end
-
-				inventoryClaw = game.ReplicatedStorage:FindFirstChild("Inventories"):FindFirstChild(Player.Name):FindFirstChild(chosenClawName)
-				if not inventoryClaw then 
-					currentKaTarget = nil
-					kaHighlight.Adornee = nil
-					continue 
-				end
 			end
 
-			currentKaTarget = besttarget
-			if KaidaKa.Values["Highlight Target"] then
-				kaHighlight.Adornee = besttarget
-			end
-
-			if KaidaKa.Values["Require Claw Equipped"] == false and clawName ~= chosenClawName then
-				local args = {{ hand = inventoryClaw }}
-				game:GetService("ReplicatedStorage"):WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetInvItem"):InvokeServer(unpack(args))
-			end
-
-			offsetPosition = HRP.Position + (dir * reach)
-
-			local clawArgs = {
-				{
-					clientTime = os.clock(),
-					direction = Vector3.new(dir.X, dir.Y, dir.Z),
-					position = Vector3.new(offsetPosition.X, offsetPosition.Y, offsetPosition.Z)
-				}
-			}
-
-			local yCheck = math.abs(targetHRP.Position.Y - HRP.Position.Y)
-			if yCheck > KaidaKa.Values["Reach"] then
-				kaHighlight.Adornee = nil
+			if not hasTarget then
 				currentKaTarget = nil
-				continue
+				kaHighlight.Adornee = nil
+				boxVisualizer.Adornee = nil
 			end
 
-			if KaidaKa.Values["Manual Swing"] == true and clicking == false then
-				continue
-			end
-			local humanoid = Player.Character and Player.Character:FindFirstChild("Humanoid")
-			if humanoid then
-				local animator = humanoid:FindFirstChildOfClass("Animator")
-				if not animator then
-					animator = Instance.new("Animator")
-					animator.Parent = humanoid
+			shouldSwing = false
+			if KaidaKa.Values["Manual Swing"] then
+				if clicking or swingRequested then
+					shouldSwing = true
 				end
-
-				if not kaidaHitTrack or kaidaHitTrack.Length == 0 or kaidaHitTrack.Animation.Parent == nil then
-					kaidaHitTrack = animator:LoadAnimation(swingAnimation)
-					kaidaHitTrack.Priority = Enum.AnimationPriority.Action
-					kaidaHitTrack.Looped = false
-				end
-
-				if not kaidaHitTrack.IsPlaying then
-					kaidaHitTrack:Play()
+				swingRequested = false
+			else
+				if hasTarget then
+					shouldSwing = true
 				end
 			end
 
+			if shouldSwing then
+				if not handleClawRequirement() then
+					continue
+				end
 
-			game:GetService("ReplicatedStorage")
-				:WaitForChild("rbxts_include")
-				:WaitForChild("node_modules")
-				:WaitForChild("@rbxts")
-				:WaitForChild("net")
-				:WaitForChild("out")
-				:WaitForChild("_NetManaged")
-				:WaitForChild("SummonerClawAttackRequest")
-				:FireServer(unpack(clawArgs))
+				camera = workspace.CurrentCamera
+				swingDir = targetDir or (camera and camera.CFrame.LookVector) or rootPart.CFrame.LookVector
+				offsetPosition = rootPart.Position + (swingDir * reach)
 
-			hitting = true
+				playSwingAnim()
+				playHitSound()
+				spawnClawVFX(rootPart.Position, swingDir)
+
+				if hasTarget then
+					remote = getClawRemote()
+					remoteArgs = {
+						{
+							clientTime = workspace:GetServerTimeNow(),
+							direction = Vector3.new(swingDir.X, swingDir.Y, swingDir.Z),
+							position = Vector3.new(offsetPosition.X, offsetPosition.Y, offsetPosition.Z)
+						}
+					}
+
+					if remote then
+						pcall(function()
+							remote:FireServer(unpack(remoteArgs))
+						end)
+					end
+				end
+			end
 		end
 	end)
 end
-
 UserInputService.InputBegan:Connect(function(input, GPE)
 	if GPE then return end
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -8729,7 +9214,7 @@ local function findClosestPlr(radius, rootPart)
 			if character then
 				targetRoot = character:FindFirstChild("HumanoidRootPart")
 
-				if targetRoot then
+				if targetRoot then	
 					distance = (rootPart.Position - targetRoot.Position).Magnitude
 
 					if distance < shortestDistance then
@@ -15446,7 +15931,7 @@ SpinBot.Callbacks.OnToggle = function(state)
 		spin.origAuto = nil
 	end
 end
--- ----- requires -----
+
 paRS = game:GetService("ReplicatedStorage")
 PA_PROJ_META, paGetItemMeta, paNet, paFire, paHit, paItems, paInv, paSetInv = {}, nil, nil, nil, nil, nil, nil, nil
 pcall(function()
@@ -15465,12 +15950,23 @@ pcall(function() paInv = paRS:WaitForChild("Inventories",5):FindFirstChild(Playe
 
 -- ----- button + controls -----
 ProjectileAura = Combat:CreateButton("Projectile Aura", nil, true)
-ProjectileAura:CreateToggle("Target Players", true, nil)
-ProjectileAura:CreateToggle("Target NPCs/Dummies", false, nil)
-ProjectileAura:CreateToggle("Show Projectiles", true, nil)
-ProjectileAura:CreateToggle("Lead Targets", true, nil)
-ProjectileAura:CreateToggle("Wall Check", true, nil)
-ProjectileAura:CreateSlider("Fire Delay", 0.03, 1, 0.15, nil, 0.01)
+TargetPlayers = ProjectileAura:CreateToggle("Target Players", true, nil)
+TargetNPCs = ProjectileAura:CreateToggle("Target NPCs/Dummies", false, nil)
+ShowProjectiles = ProjectileAura:CreateToggle("Show Projectiles", true, nil)
+LeadTargets = ProjectileAura:CreateToggle("Lead Targets", true, nil)
+WallCheck = ProjectileAura:CreateToggle("Wall Check", true, nil)
+FireDelay = ProjectileAura:CreateSlider("Fire Delay", 0.03, 1, 0.15, nil, 0.01)
+
+ProjectileAura:CreateDropdown("Mode", {"Blatant", "Legit"}, "Blatant", function(val)
+	local isBlatant = (val == "Blatant")
+	TargetPlayers:SetVisible(isBlatant)
+	TargetNPCs:SetVisible(isBlatant)
+	ShowProjectiles:SetVisible(isBlatant)
+	LeadTargets:SetVisible(isBlatant)
+	WallCheck:SetVisible(isBlatant)
+	FireDelay:SetVisible(isBlatant)
+end)
+
 -- ----- state -----
 PA_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 PA_VIS, PA_VIS_CONN = {}, nil
@@ -15548,7 +16044,7 @@ end
 function paBuildLoadouts()
 	PA_LOADOUTS = {}
 	if not paInv then return end
-	for _, pab_inst in pairs(paInv:GetChildren()) do       -- inventory order = the rotation order
+	for _, pab_inst in pairs(paInv:GetChildren()) do        -- inventory order = the rotation order
 		pab_L = paResolve(pab_inst.Name, pab_inst)
 		if pab_L then
 			pab_ok = (pab_L.kind == "throw") and paAmount(pab_inst.Name) > 0 or (pab_L.kind ~= "throw") and paAmount(pab_L.ammo) > 0
@@ -15609,7 +16105,7 @@ function paHasLOS(origin, model)
 end
 
 function paConsider(model, h, v)
-	if ProjectileAura.Values["Wall Check"] and not paHasLOS(pap_my, model) then return end   -- behind a wall/floor -> not a candidate
+	if ProjectileAura.Values["Wall Check"] and not paHasLOS(pap_my, model) then return end    -- behind a wall/floor -> not a candidate
 	pap_d = (pap_my - h.Position).Magnitude
 	if not pap_bd or pap_d < pap_bd then pap_best, pap_bd, pap_bh, pap_bv = model, pap_d, h, v end
 end
@@ -15804,7 +16300,7 @@ function paDoShot(pL, pO, pSpawnO, pVel, pT, pTgt, pG, pProj, pPm, pFid, pSid)
 			paf_at = math.max(0, math.min(pT + PA_HIT_TAPS[paf_k], 3))
 			task.delay(paf_at, function() pcall(function() paHit:FireServer(pFid, pTgt) end) end)
 		end
-		if ProjectileAura.Values["Show Projectiles"] then paSpawnVisual(pProj, pPm, pSpawnO, pVel, pG) end   -- visual only when the fire landed
+		if ProjectileAura.Values["Show Projectiles"] then paSpawnVisual(pProj, pPm, pSpawnO, pVel, pG) end    -- visual only when the fire landed
 	end
 end
 
@@ -16002,6 +16498,7 @@ function asResolve(itemType, inst)
 	end
 	return nil
 end
+
 
 ProjectileAssist = Combat:CreateButton("Projectile Assist", nil, true)
 ProjectileAssist:CreateToggle("Target Players", true, nil)
@@ -21952,274 +22449,7 @@ local NightmareEmoteBtn = GameTab:CreateButton("Nightmare Emote", function()
 	NightmareEmoteBtn:SetState(false)
 end, false)
 
--- ============================================================
---  VISUALS: Crosshair Customizer
--- ============================================================
-CrosshairCustomizer = Visuals:CreateButton("Crosshair Customizer", nil, true)
-CrosshairCustomizer:CreateToggle("Enable Custom Crosshair", false, nil)
-CrosshairCustomizer:CreateToggle("Hide Default Crosshair", false, nil)
-CrosshairCustomizer:CreateDropdown("Style", {"Cross", "Dot", "Circle", "T-Shape", "Engineer"}, "Cross", nil, false)
-CrosshairCustomizer:CreateColorPicker("Crosshair Color", Color3.fromRGB(255, 255, 255), nil)
-CrosshairCustomizer:CreateSlider("Opacity", 0, 1, 1, nil, 0.05)
-CrosshairCustomizer:CreateSlider("Size", 1, 50, 15, nil, 1)
-CrosshairCustomizer:CreateSlider("Thickness", 1, 10, 2, nil, 1)
-CrosshairCustomizer:CreateSlider("Gap", 0, 30, 5, nil, 1)
-CrosshairCustomizer:CreateToggle("Show Outline", true, nil)
-CrosshairCustomizer:CreateColorPicker("Outline Color", Color3.fromRGB(0, 0, 0), nil)
-CrosshairCustomizer:CreateSlider("Outline Thickness", 1, 5, 1, nil, 1)
-CrosshairCustomizer:CreateToggle("Center Dot", false, nil)
-CrosshairCustomizer:CreateSlider("Dot Size", 1, 10, 3, nil, 1)
 
-ch_gui = nil
-ch_parts = {}
-ch_renderConn = nil
-ch_defaultCrosshairs = {}
-ch_turretImageId = nil
-
-function chGetCoreGui()
-	success, coreGui = pcall(function() return game:GetService("CoreGui") end)
-	if success then return coreGui end
-	return Player:WaitForChild("PlayerGui")
-end
-
-function chCreatePart(name, parent, isImage)
-	part = nil
-	if isImage then
-		part = Instance.new("ImageLabel")
-		part.BackgroundTransparency = 1
-	else
-		part = Instance.new("Frame")
-		part.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	end
-	part.Name = name
-	part.BorderSizePixel = 0
-	part.AnchorPoint = Vector2.new(0.5, 0.5)
-	part.ZIndex = 10
-	part.Parent = parent
-
-	if not isImage then
-		outline = Instance.new("UIStroke")
-		outline.Name = "Outline"
-		outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		outline.Color = Color3.fromRGB(0, 0, 0)
-		outline.Thickness = 1
-		outline.Parent = part
-	end
-
-	return part
-end
-
-function chInitGUI()
-	if ch_gui then return end
-	coreGui = chGetCoreGui()
-	ch_gui = Instance.new("ScreenGui")
-	ch_gui.Name = "Featherware_CustomCrosshair"
-	ch_gui.ResetOnSpawn = false
-	ch_gui.IgnoreGuiInset = true
-	ch_gui.DisplayOrder = 999
-	ch_gui.Parent = coreGui
-
-	container = Instance.new("Frame")
-	container.Name = "Container"
-	container.Size = UDim2.fromOffset(0, 0)
-	container.Position = UDim2.fromScale(0.5, 0.5)
-	container.AnchorPoint = Vector2.new(0.5, 0.5)
-	container.BackgroundTransparency = 1
-	container.Parent = ch_gui
-
-	ch_parts.Top = chCreatePart("Top", container)
-	ch_parts.Bottom = chCreatePart("Bottom", container)
-	ch_parts.Left = chCreatePart("Left", container)
-	ch_parts.Right = chCreatePart("Right", container)
-	ch_parts.CenterDot = chCreatePart("CenterDot", container)
-	ch_parts.EngineerImg = chCreatePart("EngineerImg", container, true)
-
-	ch_parts.Circle = Instance.new("Frame")
-	ch_parts.Circle.Name = "Circle"
-	ch_parts.Circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	ch_parts.Circle.BackgroundTransparency = 1
-	ch_parts.Circle.BorderSizePixel = 0
-	ch_parts.Circle.AnchorPoint = Vector2.new(0.5, 0.5)
-	ch_parts.Circle.ZIndex = 9
-	ch_parts.Circle.Parent = container
-
-	circleCorner = Instance.new("UICorner")
-	circleCorner.CornerRadius = UDim.new(1, 0)
-	circleCorner.Parent = ch_parts.Circle
-
-	circleOutline = Instance.new("UIStroke")
-	circleOutline.Name = "Outline"
-	circleOutline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	circleOutline.Color = Color3.fromRGB(0, 0, 0)
-	circleOutline.Thickness = 1
-	circleOutline.Parent = ch_parts.Circle
-	ch_parts.CircleOutline = circleOutline
-
-	dotCorner = Instance.new("UICorner")
-	dotCorner.CornerRadius = UDim.new(1, 0)
-	dotCorner.Parent = ch_parts.CenterDot
-end
-
-function chUpdateCrosshair()
-	if not ch_gui then return end
-
-	enabled = CrosshairCustomizer.Values["Enable Custom Crosshair"]
-	hideDefault = CrosshairCustomizer.Values["Hide Default Crosshair"]
-	style = CrosshairCustomizer.Values["Style"]
-	color = CrosshairCustomizer.Values["Crosshair Color"] or Color3.fromRGB(255, 255, 255)
-	opacity = CrosshairCustomizer.Values["Opacity"] or 1
-	size = CrosshairCustomizer.Values["Size"] or 15
-	thickness = CrosshairCustomizer.Values["Thickness"] or 2
-	gap = CrosshairCustomizer.Values["Gap"] or 5
-	showOutline = CrosshairCustomizer.Values["Show Outline"]
-	outlineColor = CrosshairCustomizer.Values["Outline Color"] or Color3.fromRGB(0, 0, 0)
-	outlineThickness = CrosshairCustomizer.Values["Outline Thickness"] or 1
-	centerDot = CrosshairCustomizer.Values["Center Dot"]
-	dotSize = CrosshairCustomizer.Values["Dot Size"] or 3
-
-	ch_gui.Enabled = enabled
-
-	-- ONLY REQUIRE / MODIFY GAME CROSSHAIRS IF canRequire IS TRUE
-	if canRequire then
-		if hideDefault then
-			local playerGui = Player:FindFirstChild("PlayerGui")
-			if playerGui then
-				for _, gui in ipairs(playerGui:GetChildren()) do
-					if gui:IsA("ScreenGui") and (gui.Name:lower():find("crosshair") or gui.Name:lower():find("engineer")) then
-						if not ch_defaultCrosshairs[gui] then
-							ch_defaultCrosshairs[gui] = gui.Enabled
-						end
-						gui.Enabled = false
-					end
-				end
-			end
-		else
-			for gui, originalState in pairs(ch_defaultCrosshairs) do
-				if gui and gui.Parent then
-					gui.Enabled = originalState
-				end
-			end
-			table.clear(ch_defaultCrosshairs)
-		end
-
-		-- Fetch Engineer Turret Image ID if needed
-		if style == "Engineer" and not ch_turretImageId then
-			local success, imgModule = pcall(function()
-				return require(game:GetService("ReplicatedStorage").TS.image["image-id"]).BedwarsImageId
-			end)
-			if success and imgModule and imgModule.TURRET_CROSSHAIR then
-				ch_turretImageId = imgModule.TURRET_CROSSHAIR
-			end
-		end
-	end
-
-	if not enabled then return end
-
-	transp = 1 - opacity
-	outlineTransp = showOutline and 0 or 1
-
-	-- Reset visibility
-	for _, part in pairs(ch_parts) do
-		if typeof(part) == "Instance" then
-			part.Visible = false
-		end
-	end
-
-	if style == "Cross" or style == "T-Shape" then
-		ch_parts.Top.Visible = true
-		ch_parts.Top.Size = UDim2.fromOffset(thickness, size)
-		ch_parts.Top.Position = UDim2.fromOffset(0, -(size/2 + gap))
-		ch_parts.Top.BackgroundColor3 = color
-		ch_parts.Top.BackgroundTransparency = transp
-
-		ch_parts.Bottom.Visible = (style == "Cross")
-		ch_parts.Bottom.Size = UDim2.fromOffset(thickness, size)
-		ch_parts.Bottom.Position = UDim2.fromOffset(0, (size/2 + gap))
-		ch_parts.Bottom.BackgroundColor3 = color
-		ch_parts.Bottom.BackgroundTransparency = transp
-
-		ch_parts.Left.Visible = true
-		ch_parts.Left.Size = UDim2.fromOffset(size, thickness)
-		ch_parts.Left.Position = UDim2.fromOffset(-(size/2 + gap), 0)
-		ch_parts.Left.BackgroundColor3 = color
-		ch_parts.Left.BackgroundTransparency = transp
-
-		ch_parts.Right.Visible = true
-		ch_parts.Right.Size = UDim2.fromOffset(size, thickness)
-		ch_parts.Right.Position = UDim2.fromOffset((size/2 + gap), 0)
-		ch_parts.Right.BackgroundColor3 = color
-		ch_parts.Right.BackgroundTransparency = transp
-
-		for _, part in pairs({ch_parts.Top, ch_parts.Bottom, ch_parts.Left, ch_parts.Right}) do
-			local outline = part:FindFirstChild("Outline")
-			if outline then
-				outline.Color = outlineColor
-				outline.Thickness = outlineThickness
-				outline.Transparency = outlineTransp
-			end
-		end
-	elseif style == "Circle" then
-		ch_parts.Circle.Visible = true
-		ch_parts.Circle.Size = UDim2.fromOffset(size * 2, size * 2)
-		ch_parts.Circle.Position = UDim2.fromOffset(0, 0)
-		if ch_parts.CircleOutline then
-			ch_parts.CircleOutline.Color = color
-			ch_parts.CircleOutline.Thickness = thickness
-			ch_parts.CircleOutline.Transparency = transp
-		end
-	elseif style == "Engineer" then
-		ch_parts.EngineerImg.Visible = true
-		ch_parts.EngineerImg.Size = UDim2.fromOffset(size * 3, size * 3)
-		ch_parts.EngineerImg.Position = UDim2.fromOffset(0, 0)
-		ch_parts.EngineerImg.Image = ch_turretImageId or "rbxassetid://6869295332" -- Fallback
-		ch_parts.EngineerImg.ImageColor3 = color
-		ch_parts.EngineerImg.ImageTransparency = transp
-	end
-
-	-- Center Dot / Dot Style
-	ch_parts.CenterDot.Visible = centerDot or style == "Dot"
-	ch_parts.CenterDot.BackgroundColor3 = color
-	ch_parts.CenterDot.BackgroundTransparency = transp
-	ch_parts.CenterDot.Size = UDim2.fromOffset(dotSize, dotSize)
-	ch_parts.CenterDot.Position = UDim2.fromOffset(0, 0)
-
-	local dotOutline = ch_parts.CenterDot:FindFirstChild("Outline")
-	if dotOutline then
-		dotOutline.Color = outlineColor
-		dotOutline.Thickness = outlineThickness
-		dotOutline.Transparency = outlineTransp
-	end
-end
-
-CrosshairCustomizer.Callbacks.OnToggle = function(state)
-	loops["crosshair customizer"] = state
-	if state then
-		chInitGUI()
-		chUpdateCrosshair()
-		if not ch_renderConn then
-			ch_renderConn = game:GetService("RunService").RenderStepped:Connect(function()
-				if CrosshairCustomizer.Values["Enable Custom Crosshair"] then
-					chUpdateCrosshair()
-				end
-			end)
-		end
-	else
-		if ch_renderConn then
-			ch_renderConn:Disconnect()
-			ch_renderConn = nil
-		end
-		if ch_gui then
-			ch_gui.Enabled = false
-		end
-		-- Restore default crosshairs
-		for gui, originalState in pairs(ch_defaultCrosshairs) do
-			if gui and gui.Parent then
-				gui.Enabled = originalState
-			end
-		end
-		table.clear(ch_defaultCrosshairs)
-	end
-end
 
 FreeLobbyGadget = Visuals:CreateButton("Free Lobby Gadget", nil, true)
 
@@ -22382,16 +22612,120 @@ mainScreenUI.Destroying:Connect(function()
 	UninjectFW()	
 end)
 
+FPSBooster = GameTab:CreateButton("FPS Booster", function(state)
+	if state then
+		-- Disable Global Shadows
+		if FPSBooster.Values["Disable Global Shadows"] then
+			fpsCache.GlobalShadows = game.Lighting.GlobalShadows
+			game.Lighting.GlobalShadows = false
+		end
 
--- ==========================================
--- FPS BOOSTER (Place in Game category)
--- ==========================================
-FPSBooster = GameTab:CreateButton("FPS Booster", nil, true)
-FPSBooster:CreateToggle("Smooth Materials", true, nil)
-FPSBooster:CreateToggle("Remove Textures & Decals", true, nil)
-FPSBooster:CreateToggle("Disable Part Shadows", true, nil)
-FPSBooster:CreateToggle("Disable Particles & Beams", true, nil)
-FPSBooster:CreateToggle("Disable Global Shadows", true, nil)
+		-- Disable Lighting PostProcessing Effects & Atmosphere
+		if FPSBooster.Values["Disable PostProcessing"] then
+			for _, effect in pairs(game.Lighting:GetChildren()) do
+				if effect:IsA("PostEffect") or effect:IsA("Atmosphere") or effect:IsA("Sky") then
+					if effect.Enabled then
+						fpsCache.PostEffects[effect] = true
+						effect.Enabled = false
+					end
+				end
+			end
+		end
+
+		-- Disable Terrain Grass & Foliage
+		if FPSBooster.Values["Disable Terrain Grass"] then
+			pcall(function()
+				fpsCache.TerrainDeco = workspace.Terrain.Decoration
+				workspace.Terrain.Decoration = false
+			end)
+		end
+
+		-- Simplify Water (Waves & Transparency)
+		if FPSBooster.Values["Simplify Water"] then
+			pcall(function()
+				fpsCache.WaterProps.WaterWaveSize = workspace.Terrain.WaterWaveSize
+				fpsCache.WaterProps.WaterWaveSpeed = workspace.Terrain.WaterWaveSpeed
+				fpsCache.WaterProps.WaterTransparency = workspace.Terrain.WaterTransparency
+				workspace.Terrain.WaterWaveSize = 0
+				workspace.Terrain.WaterWaveSpeed = 0
+				workspace.Terrain.WaterTransparency = 1
+			end)
+		end
+
+		-- Optimize everything currently in the workspace
+		for _, v in pairs(workspace:GetDescendants()) do
+			optimizeObj(v)
+		end
+
+		-- Automatically optimize new things (projectiles, placed blocks, player spawns)
+		fpsConnection = workspace.DescendantAdded:Connect(optimizeObj)
+	else
+		-- Disconnect the auto-optimizer
+		if fpsConnection then fpsConnection:Disconnect(); fpsConnection = nil end
+
+		-- Restore global shadow
+		if fpsCache.GlobalShadows ~= nil then
+			game.Lighting.GlobalShadows = fpsCache.GlobalShadows
+			fpsCache.GlobalShadows = nil
+		end
+
+		-- Restore PostProcessing Effects
+		for effect, _ in pairs(fpsCache.PostEffects) do
+			if effect and effect.Parent then
+				effect.Enabled = true
+			end
+		end
+		fpsCache.PostEffects = {}
+
+		-- Restore Terrain Grass
+		if fpsCache.TerrainDeco ~= nil then
+			pcall(function()
+				workspace.Terrain.Decoration = fpsCache.TerrainDeco
+				fpsCache.TerrainDeco = nil
+			end)
+		end
+
+		-- Restore Water Properties
+		if fpsCache.WaterProps.WaterWaveSize ~= nil then
+			pcall(function()
+				workspace.Terrain.WaterWaveSize = fpsCache.WaterProps.WaterWaveSize
+				workspace.Terrain.WaterWaveSpeed = fpsCache.WaterProps.WaterWaveSpeed
+				workspace.Terrain.WaterTransparency = fpsCache.WaterProps.WaterTransparency
+				fpsCache.WaterProps = {}
+			end)
+		end
+
+		-- Restore all cached properties precisely back to their original states
+		for part, mat in pairs(fpsCache.PartsMat) do if part and part.Parent then part.Material = mat end end
+		for part, shad in pairs(fpsCache.PartsShad) do if part and part.Parent then part.CastShadow = shad end end
+		for tex, trans in pairs(fpsCache.Textures) do if tex and tex.Parent then tex.Transparency = trans end end
+		for p, en in pairs(fpsCache.Particles) do if p and p.Parent then p.Enabled = en end end
+
+		-- Clear caches
+		fpsCache.PartsMat = setmetatable({}, {__mode = "k"})
+		fpsCache.PartsShad = setmetatable({}, {__mode = "k"})
+		fpsCache.Textures = setmetatable({}, {__mode = "k"})
+		fpsCache.Particles = setmetatable({}, {__mode = "k"})
+	end
+end, true)
+
+FPSBooster.Values = {
+	["Smooth Materials"] = true,
+	["Remove Textures & Decals"] = false,
+	["Disable Part Shadows"] = true,
+	["Disable Particles & Beams"] = true,
+	["Disable Global Shadows"] = true,
+	["Disable Terrain Grass"] = true,
+	["Simplify Water"] = true
+}
+
+FPSBooster:CreateToggle("Smooth Materials", true, function(val) FPSBooster.Values["Smooth Materials"] = val end)
+FPSBooster:CreateToggle("Remove Textures & Decals", false, function(val) FPSBooster.Values["Remove Textures & Decals"] = val end)
+FPSBooster:CreateToggle("Disable Part Shadows", true, function(val) FPSBooster.Values["Disable Part Shadows"] = val end)
+FPSBooster:CreateToggle("Disable Particles & Beams", true, function(val) FPSBooster.Values["Disable Particles & Beams"] = val end)
+FPSBooster:CreateToggle("Disable Global Shadows", true, function(val) FPSBooster.Values["Disable Global Shadows"] = val end)
+FPSBooster:CreateToggle("Disable Terrain Grass", true, function(val) FPSBooster.Values["Disable Terrain Grass"] = val end)
+FPSBooster:CreateToggle("Simplify Water", true, function(val) FPSBooster.Values["Simplify Water"] = val end)
 
 -- Using weak keys (__mode = "k") so we don't cause memory leaks when the game deletes parts
 fpsCache = {
@@ -22399,7 +22733,10 @@ fpsCache = {
 	PartsShad = setmetatable({}, {__mode = "k"}),
 	Textures = setmetatable({}, {__mode = "k"}),
 	Particles = setmetatable({}, {__mode = "k"}),
-	GlobalShadows = nil
+	GlobalShadows = nil,
+	PostEffects = {},
+	TerrainDeco = nil,
+	WaterProps = {}
 }
 fpsConnection = nil
 
@@ -22425,45 +22762,6 @@ function optimizeObj(v)
 		end
 	end
 end
-
-FPSBooster.Callbacks.OnToggle = function(state)
-	if state then
-		if FPSBooster.Values["Disable Global Shadows"] then
-			fpsCache.GlobalShadows = game.Lighting.GlobalShadows
-			game.Lighting.GlobalShadows = false
-		end
-
-		-- Optimize everything currently in the workspace
-		for _, v in pairs(workspace:GetDescendants()) do
-			optimizeObj(v)
-		end
-
-		-- Automatically optimize new things (projectiles, placed blocks, player spawns)
-		fpsConnection = workspace.DescendantAdded:Connect(optimizeObj)
-	else
-		-- Disconnect the auto-optimizer
-		if fpsConnection then fpsConnection:Disconnect(); fpsConnection = nil end
-
-		-- Restore lighting shadow
-		if fpsCache.GlobalShadows ~= nil then
-			game.Lighting.GlobalShadows = fpsCache.GlobalShadows
-			fpsCache.GlobalShadows = nil
-		end
-
-		-- Restore all cached properties precisely back to their original states
-		for part, mat in pairs(fpsCache.PartsMat) do if part and part.Parent then part.Material = mat end end
-		for part, shad in pairs(fpsCache.PartsShad) do if part and part.Parent then part.CastShadow = shad end end
-		for tex, trans in pairs(fpsCache.Textures) do if tex and tex.Parent then tex.Transparency = trans end end
-		for p, en in pairs(fpsCache.Particles) do if p and p.Parent then p.Enabled = en end end
-
-		-- Clear caches
-		fpsCache.PartsMat = setmetatable({}, {__mode = "k"})
-		fpsCache.PartsShad = setmetatable({}, {__mode = "k"})
-		fpsCache.Textures = setmetatable({}, {__mode = "k"})
-		fpsCache.Particles = setmetatable({}, {__mode = "k"})
-	end
-end
-
 
 -- ==========================================
 -- FULLBRIGHT (Place in Visuals category)
@@ -26252,3 +26550,1027 @@ Player.OnTeleport:Connect(function(teleportState)
 		end 
 	end
 end)
+
+lumenSettings = {
+	instakillMode = "On Hit"
+}
+
+lumenData = {
+	fireRemote = nil,
+	hookActive = false,
+	oldNamecall = nil,
+	fallbackConn = nil,
+	lastFire = 0
+}
+
+PlayersService = game:GetService("Players")
+ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+LUMEN_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+lumenMakeId = function()
+	out = ""
+	for i = 1, 8 do
+		out = out .. string.sub(LUMEN_CHARS, math.random(1, #LUMEN_CHARS), 1)
+	end
+	return out
+end
+
+lumenLoadRemote = function()
+	if lumenData.fireRemote then return true end
+	pcall(function()
+		netManaged = ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@rbxts", 5):WaitForChild("net", 5):WaitForChild("out", 5):WaitForChild("_NetManaged", 5)
+		lumenData.fireRemote = netManaged:WaitForChild("ProjectileFire", 5)
+	end)
+	return lumenData.fireRemote ~= nil
+end
+
+-- Fires 3 sword_wave1 projectiles directly at the target entity
+lumenFireWavesAtTarget = function(targetEntity)
+	if not loops["auto lumen"] then return end
+	if lumenSettings.instakillMode ~= "On Hit" then return end
+
+	now = os.clock()
+	if now - lumenData.lastFire < 0.1 then return end -- Anti-spam throttle
+	lumenData.lastFire = now
+
+	if not lumenLoadRemote() then return end
+
+	math.randomseed(os.time() + math.floor(os.clock() * 1000000) + math.floor(tick() * 1000000))
+
+	myChar = PlayersService.LocalPlayer.Character
+	myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return end
+
+	targetRoot = targetEntity:FindFirstChild("HumanoidRootPart") or targetEntity.PrimaryPart
+	if not targetRoot then return end
+
+	invFolder = ReplicatedStorage:WaitForChild("Inventories", 1):WaitForChild(PlayersService.LocalPlayer.Name, 1)
+	lightSwordInv = invFolder and invFolder:FindFirstChild("light_sword")
+	if not lightSwordInv then return end
+
+	-- Calculate exact direction to the entity we just hit
+	dir = (targetRoot.Position - myRoot.Position)
+	if dir.Magnitude < 0.001 then
+		dir = myRoot.CFrame.LookVector
+	else
+		dir = dir.Unit
+	end
+
+	vel = dir * 80
+	origin = vector.create(myRoot.Position.X, myRoot.Position.Y, myRoot.Position.Z)
+	velocity = vector.create(vel.X, vel.Y, vel.Z)
+
+	-- Fire 3 times per hit using task.spawn for instant execution
+	for i = 1, 3 do
+		task.spawn(function()
+			pcall(function()
+				lumenData.fireRemote:InvokeServer(unpack({
+					lightSwordInv,
+					"light_sword",
+					"sword_wave1",
+					origin,
+					origin,
+					velocity,
+					lumenMakeId(),
+					{ shotId = lumenMakeId(), drawDurationSec = 0 },
+					workspace:GetServerTimeNow()
+				}))
+			end)
+		end)
+	end
+end
+
+-- Method 1: __namecall Hook (Instant On Hit detection)
+lumenSetupHook = function()
+	if lumenData.hookActive then return end
+	if not hookmetamethod or not getnamecallmethod or not checkcaller then return end
+
+	lumenData.hookActive = true
+	print("[Auto Lumen] Executor supports hooks. Using safe __namecall SwordHit/ProjectileHit detection.")
+
+	lumenData.oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+		local args = {...}
+		local result = lumenData.oldNamecall(self, unpack(args))
+
+		if not checkcaller() then
+			pcall(function()
+				method = getnamecallmethod()
+				if method == "FireServer" or method == "InvokeServer" then
+					remoteName = tostring(self)
+					if remoteName == "SwordHit" or remoteName == "ProjectileHit" then
+						if loops["auto lumen"] and lumenSettings.instakillMode == "On Hit" then
+							-- Try to extract the entity hit from the args
+							hitData = args[1]
+							targetEntity = nil
+							if typeof(hitData) == "table" then
+								targetEntity = hitData.entityInstance or hitData.target or hitData.victim
+							end
+
+							-- Fallback: if we can't parse the exact entity, find the closest enemy
+							if not targetEntity then
+								myRoot = PlayersService.LocalPlayer.Character and PlayersService.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+								if myRoot then
+									bestDist = 15
+									for _, plr in ipairs(PlayersService:GetPlayers()) do
+										if plr ~= PlayersService.LocalPlayer and (not plr.Team or not PlayersService.LocalPlayer.Team or plr.Team ~= PlayersService.LocalPlayer.Team) then
+											eChar = plr.Character
+											if eChar then
+												eRoot = eChar:FindFirstChild("HumanoidRootPart")
+												if eRoot then
+													dist = (myRoot.Position - eRoot.Position).Magnitude
+													if dist < bestDist then
+														bestDist = dist
+														targetEntity = eChar
+													end
+												end
+											end
+										end
+									end
+									-- Also check NPCs
+									for _, npc in ipairs(workspace:GetChildren()) do
+										if npc:IsA("Model") and npc:FindFirstChildOfClass("Humanoid") and not PlayersService:GetPlayerFromCharacter(npc) then
+											npcRoot = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+											if npcRoot then
+												dist = (myRoot.Position - npcRoot.Position).Magnitude
+												if dist < bestDist then
+													bestDist = dist
+													targetEntity = npc
+												end
+											end
+										end
+									end
+								end
+							end
+
+							if targetEntity then
+								task.wait(0.1)
+								lumenFireWavesAtTarget(targetEntity)
+							end
+						end
+					end
+				end
+			end)
+		end
+		return result
+	end)
+end
+
+-- Method 2: EntityDamageEvent Fallback (For non-hook executors)
+lumenSetupFallback = function()
+	if lumenData.fallbackConn then return end
+	pcall(function()
+		netManaged = ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@rbxts", 5):WaitForChild("net", 5):WaitForChild("out", 5):WaitForChild("_NetManaged", 5)
+		entityDamaged = netManaged:WaitForChild("EntityDamageEvent", 5)
+		lumenData.fallbackConn = entityDamaged.OnClientEvent:Connect(function(data)
+			if not loops["auto lumen"] or lumenSettings.instakillMode ~= "On Hit" then return end
+
+			if typeof(data) == "table" then
+				-- If we dealt the damage
+				if data.fromEntity == PlayersService.LocalPlayer.Character then
+					targetEntity = data.entityInstance
+					if targetEntity then
+						task.wait(0.1)
+						lumenFireWavesAtTarget(targetEntity)
+					end
+				end
+			end
+		end)
+	end)
+end
+
+AutoLumen = Kits:CreateButton("Auto Lumen", function(state)
+	loops["auto lumen"] = state
+	if state then
+		lumenData.lastFire = 0
+		lumenSetupHook()
+		lumenSetupFallback()
+	else
+		if lumenData.fallbackConn then
+			pcall(function() lumenData.fallbackConn:Disconnect() end)
+			lumenData.fallbackConn = nil
+		end
+	end
+end, true)
+
+AutoLumen:CreateDropdown("Instakill Mode", {"On Hit"}, "On Hit", function(val)
+	lumenSettings.instakillMode = val or "On Hit"
+end)
+
+marinaSettings = {
+	range = 20,
+	delay = 0.5
+}
+
+marinaData = {
+	abilityRemote = nil,
+	lastFire = 0,
+	loopConn = nil,
+	notified = false
+}
+
+PlayersService = game:GetService("Players")
+ReplicatedStorage = game:GetService("ReplicatedStorage")
+RunService = game:GetService("RunService")
+CollectionService = game:GetService("CollectionService")
+StarterGui = game:GetService("StarterGui")
+
+ELECTRIFY_COOLDOWN = 1.0 -- Safety cooldown to prevent spam
+
+marinaLoadRemote = function()
+	if marinaData.abilityRemote then return true end
+	pcall(function()
+		eventsFolder = ReplicatedStorage:WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events", 5)
+		marinaData.abilityRemote = eventsFolder:WaitForChild("useAbility", 5)
+	end)
+	return marinaData.abilityRemote ~= nil
+end
+
+marinaSendNotification = function(title, text)
+	if NotificationSystem and NotificationSystem.Notify then
+		NotificationSystem.Notify(title, text, 5)
+	else
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {Title = title, Text = text, Duration = 5})
+		end)
+	end
+end
+
+marinaIsEnemy = function(entity)
+	if not entity or not entity.Parent then return false end
+	-- Check if it's a player
+	plr = PlayersService:GetPlayerFromCharacter(entity)
+	if plr then
+		if plr == PlayersService.LocalPlayer then return false end
+		if plr.Team and PlayersService.LocalPlayer.Team and plr.Team == PlayersService.LocalPlayer.Team then return false end
+		if plr:GetAttribute("Spectating") or plr:GetAttribute("IsSpectator") then return false end
+		return true
+	end
+	-- Check if it's an NPC/Dummy
+	hum = entity:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then return true end
+	return false
+end
+
+marinaCheckAndFire = function()
+	if not loops["auto marina"] then return end
+
+	-- 1. Check if Jellyfish Kit is equipped
+	kitAttr = PlayersService.LocalPlayer:GetAttribute("PlayingAsKits")
+	if kitAttr ~= "jellyfish" then
+		if not marinaData.notified then
+			marinaSendNotification("Auto Marina", "Jellyfish kit is not equipped! Module disabled.")
+			marinaData.notified = true
+		end
+		return
+	end
+
+	-- Reset notification flag if kit is equipped
+	marinaData.notified = false
+
+	now = os.clock()
+	if now - marinaData.lastFire < ELECTRIFY_COOLDOWN then return end
+
+	myChar = PlayersService.LocalPlayer.Character
+	if not myChar then return end
+	myRoot = myChar:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return end
+
+	maxRange = AutoMarina.Values["Range"] or 20
+	targetFound = false
+
+	-- 2. Check for enemies/NPCs near any of your jellyfish
+	for _, jelly in ipairs(CollectionService:GetTagged("jellyfish")) do
+		-- Only check jellyfish placed by you
+		if jelly:GetAttribute("PlacedByUserId") == PlayersService.LocalPlayer.UserId then
+			jellyPos = jelly:GetPivot().Position
+
+			-- Check Players
+			for _, plr in ipairs(PlayersService:GetPlayers()) do
+				if marinaIsEnemy(plr.Character) then
+					eRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+					if eRoot then
+						dist = (eRoot.Position - jellyPos).Magnitude
+						if dist <= maxRange then
+							targetFound = true
+							break
+						end
+					end
+				end
+			end
+
+			if targetFound then break end
+
+			-- Check NPCs/Dummies
+			for _, obj in ipairs(workspace:GetChildren()) do
+				if obj:IsA("Model") and not PlayersService:GetPlayerFromCharacter(obj) then
+					hum = obj:FindFirstChildOfClass("Humanoid")
+					eRoot = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+					if hum and hum.Health > 0 and eRoot then
+						dist = (eRoot.Position - jellyPos).Magnitude
+						if dist <= maxRange then
+							targetFound = true
+							break
+						end
+					end
+				end
+			end
+
+			if targetFound then break end
+		end
+	end
+
+	-- 3. Fire Ability if target found
+	if targetFound then
+		if not marinaLoadRemote() then return end
+
+		marinaData.lastFire = now
+		print("[Auto Marina] Enemy near jellyfish! Firing electrify_jellyfish!")
+
+		pcall(function()
+			marinaData.abilityRemote:FireServer("electrify_jellyfish")
+		end)
+	end
+end
+
+marinaStart = function()
+	if not marinaData.loopConn then
+		marinaData.loopConn = RunService.Heartbeat:Connect(function()
+			now = os.clock()
+			if now - (marinaData.lastLoop or 0) < 0.2 then return end -- 5 checks per sec
+			marinaData.lastLoop = now
+			marinaCheckAndFire()
+		end)
+	end
+end
+
+marinaStop = function()
+	if marinaData.loopConn then pcall(function() marinaData.loopConn:Disconnect() end) marinaData.loopConn = nil end
+	marinaData.notified = false
+end
+
+AutoMarina = Kits:CreateButton("Auto Marina", function(state)
+	loops["auto marina"] = state
+	if state then
+		marinaData.lastFire = 0
+		marinaData.notified = false
+		marinaStart()
+	else
+		marinaStop()
+	end
+end, true)
+
+AutoMarina:CreateSlider("Range", 5, 50, 20, function(val)
+	marinaSettings.range = val
+end, 1)
+
+AutoMarina:CreateSlider("Delay", 0, 2, 0.5, function(val)
+	marinaSettings.delay = val
+end, 0.1)
+
+lianSettings = {
+	mode = "Sword",
+	ultPlayerCount = 3,
+	range = 30,
+	includeNPCs = false
+}
+
+lianData = {
+	fireRemote = nil,
+	ultRemote = nil,
+	loopConn = nil,
+	lastFire = 0,
+	lastUlt = 0,
+	notified = false,
+	animsLoaded = false,
+	GameAnimationUtil = nil,
+	AnimationType = nil,
+	SoundManager = nil,
+	GameSound = nil
+}
+
+PlayersService = game:GetService("Players")
+ReplicatedStorage = game:GetService("ReplicatedStorage")
+RunService = game:GetService("RunService")
+StarterGui = game:GetService("StarterGui")
+
+FIRE_COOLDOWN = 2.0
+ULT_COOLDOWN = 15.0
+
+lianLoadRemotes = function()
+	if lianData.fireRemote and lianData.ultRemote then return true end
+	pcall(function()
+		eventsFolder = ReplicatedStorage:WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events", 5)
+		lianData.fireRemote = eventsFolder:WaitForChild("useAbility", 5)
+
+		netManaged = ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@rbxts", 5):WaitForChild("net", 5):WaitForChild("out", 5):WaitForChild("_NetManaged", 5)
+		lianData.ultRemote = netManaged:WaitForChild("DragonSwordUlt", 5)
+	end)
+	return lianData.fireRemote ~= nil and lianData.ultRemote ~= nil
+end
+
+lianLoadAnims = function()
+	if lianData.animsLoaded then return true end
+	if not canRequire then return false end
+	pcall(function()
+		lianData.GameAnimationUtil = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("animation", 5):WaitForChild("animation-util", 5)).GameAnimationUtil
+		lianData.AnimationType = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("animation", 5):WaitForChild("animation-type", 5)).AnimationType
+		lianData.SoundManager = require(ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@easy-games", 5):WaitForChild("game-core", 5):WaitForChild("out", 5)).SoundManager
+		lianData.GameSound = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("sound", 5):WaitForChild("game-sound", 5)).GameSound
+		lianData.animsLoaded = true
+	end)
+	return lianData.animsLoaded
+end
+
+lianSendNotification = function(title, text)
+	if NotificationSystem and NotificationSystem.Notify then
+		NotificationSystem.Notify(title, text, 5)
+	else
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {Title = title, Text = text, Duration = 5})
+		end)
+	end
+end
+
+lianIsEnemy = function(entity)
+	if not entity then return false end
+	plr = PlayersService:GetPlayerFromCharacter(entity)
+	if plr then
+		if plr == PlayersService.LocalPlayer then return false end
+		if plr.Team and PlayersService.LocalPlayer.Team and plr.Team == PlayersService.LocalPlayer.Team then return false end
+		if plr:GetAttribute("Spectating") or plr:GetAttribute("IsSpectator") then return false end
+		return true
+	end
+	hum = entity:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then return true end
+	return false
+end
+
+lianGetTargetsInRange = function(maxDist)
+	myChar = PlayersService.LocalPlayer.Character
+	if not myChar then return {}, 0 end
+	myRoot = myChar:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return {}, 0 end
+
+	targets = {}
+	count = 0
+
+	for _, plr in ipairs(PlayersService:GetPlayers()) do
+		if lianIsEnemy(plr.Character) then
+			eRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+			if eRoot then
+				dist = (myRoot.Position - eRoot.Position).Magnitude
+				if dist <= maxDist then
+					table.insert(targets, plr.Character)
+					count = count + 1
+				end
+			end
+		end
+	end
+
+	if lianSettings.includeNPCs then
+		for _, obj in ipairs(workspace:GetChildren()) do
+			if obj:IsA("Model") and not PlayersService:GetPlayerFromCharacter(obj) then
+				hum = obj:FindFirstChildOfClass("Humanoid")
+				eRoot = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+				if hum and hum.Health > 0 and eRoot then
+					dist = (myRoot.Position - eRoot.Position).Magnitude
+					if dist <= maxDist then
+						table.insert(targets, obj)
+						count = count + 1
+					end
+				end
+			end
+		end
+	end
+
+	return targets, count
+end
+
+lianGetNearestTarget = function(maxDist)
+	myChar = PlayersService.LocalPlayer.Character
+	if not myChar then return nil end
+	myRoot = myChar:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return nil end
+
+	bestTarget = nil
+	bestDist = maxDist
+
+	for _, plr in ipairs(PlayersService:GetPlayers()) do
+		if lianIsEnemy(plr.Character) then
+			eRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+			if eRoot then
+				dist = (myRoot.Position - eRoot.Position).Magnitude
+				if dist < bestDist then
+					bestDist = dist
+					bestTarget = plr.Character
+				end
+			end
+		end
+	end
+
+	if lianSettings.includeNPCs then
+		for _, obj in ipairs(workspace:GetChildren()) do
+			if obj:IsA("Model") and not PlayersService:GetPlayerFromCharacter(obj) then
+				hum = obj:FindFirstChildOfClass("Humanoid")
+				eRoot = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+				if hum and hum.Health > 0 and eRoot then
+					dist = (myRoot.Position - eRoot.Position).Magnitude
+					if dist < bestDist then
+						bestDist = dist
+						bestTarget = obj
+					end
+				end
+			end
+		end
+	end
+
+	return bestTarget
+end
+
+lianPlayEffects = function(isUlt)
+	if lianLoadAnims() then
+		pcall(function()
+			if isUlt then
+				lianData.GameAnimationUtil:playAnimation(PlayersService.LocalPlayer, lianData.AnimationType.DRAGON_SWORD_ULT)
+				lianData.SoundManager:playSound(lianData.GameSound.DRAGON_SWORD_ULT_CAST)
+			else
+				lianData.GameAnimationUtil:playAnimation(PlayersService.LocalPlayer, lianData.AnimationType.DRAGON_SWORD_FIRE)
+				lianData.SoundManager:playSound(lianData.GameSound.DRAGON_SWORD_SHOOT_1)
+			end
+		end)
+	end
+end
+
+lianLoop = function()
+	if not loops["auto lian"] then return end
+
+	localPlayer = PlayersService.LocalPlayer
+
+	-- 1. Check if Dragon Sword Kit is equipped
+	kitAttr = localPlayer:GetAttribute("PlayingAsKits")
+	if kitAttr ~= "dragon_sword" then
+		if not lianData.notified then
+			lianSendNotification("Auto Lian", "Dragon Sword kit is not equipped! Module disabled.")
+			lianData.notified = true
+		end
+		return
+	end
+	lianData.notified = false
+
+	-- 2. Check SwordCount Attribute
+	swordCount = localPlayer:GetAttribute("SwordCount") or 0
+	if swordCount < 1 then return end -- Need at least 1 stack to fire anything
+
+	now = os.clock()
+	maxRange = AutoLian.Values["Range"] or 30
+
+	-- 3. Mode Logic
+	if lianSettings.mode == "Sword Ult" then
+		if now - lianData.lastUlt < ULT_COOLDOWN then return end
+
+		targets, count = lianGetTargetsInRange(maxRange)
+		reqCount = AutoLian.Values["Ult Player Count"] or 3
+
+		if count >= reqCount then
+			if not lianLoadRemotes() then return end
+
+			lianData.lastUlt = now
+			print("[Auto Lian] " .. count .. " enemies in range (>= " .. reqCount .. "). Firing Dragon Sword Ult!")
+
+			lianPlayEffects(true)
+
+			pcall(function()
+				lianData.ultRemote:FireServer()
+			end)
+		end
+
+	elseif lianSettings.mode == "Sword" then
+		if now - lianData.lastFire < FIRE_COOLDOWN then return end
+
+		nearest = lianGetNearestTarget(maxRange)
+		if nearest then
+			if not lianLoadRemotes() then return end
+
+			lianData.lastFire = now
+			print("[Auto Lian] Enemy in range. Firing Dragon Sword!")
+
+			lianPlayEffects(false)
+
+			pcall(function()
+				lianData.fireRemote:FireServer("dragon_sword")
+			end)
+		end
+	end
+end
+
+AutoLian = Kits:CreateButton("Auto Lian", function(state)
+	loops["auto lian"] = state
+	if state then
+		lianData.lastFire = 0
+		lianData.lastUlt = 0
+		lianData.notified = false
+		lianLoadAnims()
+
+		if not lianData.loopConn then
+			lianData.loopConn = RunService.Heartbeat:Connect(function()
+				now = os.clock()
+				if now - (lianData.lastLoop or 0) < 0.2 then return end -- 5 checks per sec
+				lianData.lastLoop = now
+				lianLoop()
+			end)
+		end
+	else
+		if lianData.loopConn then
+			lianData.loopConn:Disconnect()
+			lianData.loopConn = nil
+		end
+	end
+end, true)
+
+AutoLian:CreateDropdown("Mode", {"Sword", "Sword Ult"}, "Sword", function(val)
+	lianSettings.mode = val or "Sword"
+end)
+
+AutoLian:CreateSlider("Ult Player Count", 1, 30, 3, function(val)
+	lianSettings.ultPlayerCount = val
+end, 1)
+
+AutoLian:CreateSlider("Range", 1, 50, 30, function(val)
+	lianSettings.range = val
+end, 1)
+
+AutoLian:CreateToggle("Include NPCs/Dummies", false, function(state)
+	lianSettings.includeNPCs = state
+end)
+eldricSettings = {
+	healthPercent = 50,
+	range = 30,
+	includeNPCs = false
+}
+
+eldricData = {
+	setInvItemRemote = nil,
+	useAbilityRemote = nil,
+	linkTargetRemote = nil,
+	loopConn = nil,
+	lastTick = 0,
+	lastFire = 0,
+	animsLoaded = false,
+	GameAnimationUtil = nil,
+	AnimationType = nil,
+	SoundManager = nil,
+	GameSound = nil,
+	notified = false
+}
+
+PlayersService = game:GetService("Players")
+ReplicatedStorage = game:GetService("ReplicatedStorage")
+RunService = game:GetService("RunService")
+StarterGui = game:GetService("StarterGui")
+
+ELDRIC_COOLDOWN = 1.5
+
+eldricLoadRemotes = function()
+	if eldricData.setInvItemRemote and eldricData.useAbilityRemote and eldricData.linkTargetRemote then return true end
+	pcall(function()
+		netManaged = ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@rbxts", 5):WaitForChild("net", 5):WaitForChild("out", 5):WaitForChild("_NetManaged", 5)
+		eventsFolder = ReplicatedStorage:WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events", 5)
+
+		eldricData.setInvItemRemote = netManaged:WaitForChild("SetInvItem", 5)
+		eldricData.linkTargetRemote = netManaged:WaitForChild("WarlockLinkTarget", 5)
+		eldricData.useAbilityRemote = eventsFolder:WaitForChild("useAbility", 5)
+	end)
+	return eldricData.setInvItemRemote ~= nil and eldricData.useAbilityRemote ~= nil and eldricData.linkTargetRemote ~= nil
+end
+
+eldricLoadModules = function()
+	if eldricData.animsLoaded then return true end
+	if not canRequire then return false end
+	pcall(function()
+		eldricData.GameAnimationUtil = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("animation", 5):WaitForChild("animation-util", 5)).GameAnimationUtil
+		eldricData.AnimationType = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("animation", 5):WaitForChild("animation-type", 5)).AnimationType
+		eldricData.SoundManager = require(ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@easy-games", 5):WaitForChild("game-core", 5):WaitForChild("out", 5)).SoundManager
+		eldricData.GameSound = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("sound", 5):WaitForChild("game-sound", 5)).GameSound
+		eldricData.animsLoaded = true
+	end)
+	return eldricData.animsLoaded
+end
+
+eldricSendNotification = function(title, text)
+	if NotificationSystem and NotificationSystem.Notify then
+		NotificationSystem.Notify(title, text, 5)
+	else
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {Title = title, Text = text, Duration = 5})
+		end)
+	end
+end
+
+eldricIsEnemy = function(entity)
+	if not entity then return false end
+	plr = PlayersService:GetPlayerFromCharacter(entity)
+	if plr then
+		if plr == PlayersService.LocalPlayer then return false end
+		if plr.Team and PlayersService.LocalPlayer.Team and plr.Team == PlayersService.LocalPlayer.Team then return false end
+		if plr:GetAttribute("Spectating") or plr:GetAttribute("IsSpectator") then return false end
+		return true
+	end
+	hum = entity:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then return true end
+	return false
+end
+
+eldricIsStaffEquipped = function()
+	myChar = PlayersService.LocalPlayer.Character
+	if not myChar then return false end
+	handInvItem = myChar:FindFirstChild("HandInvItem")
+	if handInvItem and handInvItem:IsA("ObjectValue") and handInvItem.Value then
+		if handInvItem.Value.Name == "warlock_staff" then
+			return true
+		end
+	end
+	return false
+end
+
+eldricHasActiveTarget = function()
+	myChar = PlayersService.LocalPlayer.Character
+	if not myChar then return false end
+	for _, obj in ipairs(myChar:GetDescendants()) do
+		if obj:IsA("Beam") then
+			return true
+		end
+	end
+	return false
+end
+
+eldricGetValidTarget = function(maxDist, maxHealthPct)
+	myChar = PlayersService.LocalPlayer.Character
+	if not myChar then return nil end
+	myRoot = myChar:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return nil end
+
+	bestTarget = nil
+	bestDist = maxDist
+
+	for _, plr in ipairs(PlayersService:GetPlayers()) do
+		if eldricIsEnemy(plr.Character) then
+			hum = plr.Character:FindFirstChild("Humanoid")
+			eRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+			if hum and eRoot and hum.Health > 0 then
+				hpPct = (hum.Health / hum.MaxHealth) * 100
+				if hpPct <= maxHealthPct then
+					dist = (myRoot.Position - eRoot.Position).Magnitude
+					if dist < bestDist then
+						bestDist = dist
+						bestTarget = plr.Character
+					end
+				end
+			end
+		end
+	end
+
+	if eldricSettings.includeNPCs then
+		for _, obj in ipairs(workspace:GetChildren()) do
+			if obj:IsA("Model") and not PlayersService:GetPlayerFromCharacter(obj) then
+				hum = obj:FindFirstChildOfClass("Humanoid")
+				eRoot = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+				if hum and eRoot and hum.Health > 0 then
+					hpPct = (hum.Health / hum.MaxHealth) * 100
+					if hpPct <= maxHealthPct then
+						dist = (myRoot.Position - eRoot.Position).Magnitude
+						if dist < bestDist then
+							bestDist = dist
+							bestTarget = obj
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return bestTarget
+end
+
+eldricPlayEffects = function()
+	if eldricLoadModules() then
+		pcall(function()
+			eldricData.GameAnimationUtil:playAnimation(PlayersService.LocalPlayer, eldricData.AnimationType.HALLOWEEN_BOSS_CAST)
+			eldricData.SoundManager:playSound(eldricData.GameSound.WARLOCK_SIPHON_START)
+		end)
+	end
+end
+
+eldricLoop = function()
+	if not loops["auto eldric"] then return end
+
+	localPlayer = PlayersService.LocalPlayer
+	now = os.clock()
+
+	if now - eldricData.lastFire < ELDRIC_COOLDOWN then return end
+
+	if eldricHasActiveTarget() then return end
+
+	invFolder = ReplicatedStorage:FindFirstChild("Inventories")
+	if not invFolder then return end
+	myInv = invFolder:FindFirstChild(localPlayer.Name)
+	if not myInv then return end
+
+	warlockStaff = myInv:FindFirstChild("warlock_staff")
+	if not warlockStaff then
+		if not eldricData.notified then
+			eldricSendNotification("Auto Eldric", "Warlock Staff not found in inventory! Module paused.")
+			eldricData.notified = true
+		end
+		return
+	end
+	eldricData.notified = false
+
+	target = eldricGetValidTarget(eldricSettings.range, eldricSettings.healthPercent)
+	if target then
+		if not eldricLoadRemotes() then return end
+
+		eldricData.lastFire = now
+
+		pcall(function()
+			if not eldricIsStaffEquipped() then
+				args = {
+					{
+						hand = warlockStaff
+					}
+				}
+				eldricData.setInvItemRemote:InvokeServer(unpack(args))
+			end
+
+			abilityArgs = {
+				"WARLOCK_LINK"
+			}
+			eldricData.useAbilityRemote:FireServer(unpack(abilityArgs))
+
+			targetArgs = {
+				{
+					target = target
+				}
+			}
+			eldricData.linkTargetRemote:InvokeServer(unpack(targetArgs))
+		end)
+
+		eldricPlayEffects()
+	end
+end
+
+AutoEldric = Kits:CreateButton("Auto Eldric", function(state)
+	loops["auto eldric"] = state
+	if state then
+		eldricData.lastTick = 0
+		eldricData.lastFire = 0
+		eldricData.notified = false
+		eldricLoadModules()
+
+		if not eldricData.loopConn then
+			eldricData.loopConn = RunService.Heartbeat:Connect(function()
+				now = os.clock()
+				if now - (eldricData.lastTick or 0) < 0.2 then return end 
+				eldricData.lastTick = now
+				eldricLoop()
+			end)
+		end
+	else
+		if eldricData.loopConn then
+			eldricData.loopConn:Disconnect()
+			eldricData.loopConn = nil
+		end
+	end
+end, true)
+
+AutoEldric:CreateSlider("Health Percent", 1, 100, 50, function(val)
+	eldricSettings.healthPercent = val
+end, 1)
+
+AutoEldric:CreateSlider("Range", 1, 30, 30, function(val)
+	eldricSettings.range = val
+end, 1)
+
+AutoEldric:CreateToggle("Include NPCs/Dummies", false, function(state)
+	eldricSettings.includeNPCs = state
+end)
+
+nazarData = {
+	hookActive = false,
+	oldNamecall = nil,
+	lastHealth = 100,
+	lastFire = 0
+}
+
+nazarFireAbility = function()
+	player = Players.LocalPlayer
+	lifeForce = player:GetAttribute("LifeForce")
+	if lifeForce ~= nil and lifeForce <= 0 then return end
+
+	now = os.clock()
+	if now - nazarData.lastFire < 3 then return end
+
+	nazarData.lastFire = now
+	pcall(function()
+		if useAbility then
+			useAbility:FireServer("consume_life_foce")
+		else
+			args = {
+				"consume_life_foce"
+			}
+			game:GetService("ReplicatedStorage"):WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events"):WaitForChild("useAbility"):FireServer(unpack(args))
+		end
+	end)
+end
+
+nazarSetupHook = function()
+	if nazarData.hookActive then return end
+	if not canRequire then return end
+	if not hookmetamethod or not getnamecallmethod or not checkcaller then return end
+
+	nazarData.hookActive = true
+	pcall(function()
+		nazarData.oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+			args = {...}
+			result = nazarData.oldNamecall(self, unpack(args))
+
+			if not checkcaller() then
+				pcall(function()
+					method = getnamecallmethod()
+					if method == "FireServer" or method == "InvokeServer" then
+						remoteName = tostring(self)
+						if remoteName == "SwordHit" or remoteName == "ProjectileHit" then
+							if loops["auto nazar"] and (AutoNazar.Values["Mode"] == "On Hit") then
+								char = Players.LocalPlayer.Character
+								hum = char and char:FindFirstChildOfClass("Humanoid")
+								if hum then
+									hpPct = (hum.Health / hum.MaxHealth) * 100
+									targetPct = AutoNazar.Values["Health Percent"] or 50
+									if hpPct <= targetPct then
+										nazarFireAbility()
+									end
+								end
+							end
+						end
+					end
+				end)
+			end
+			return result
+		end)
+	end)
+end
+
+AutoNazar = Kits:CreateButton("Auto Nazar", function(state)
+	loops["auto nazar"] = state
+	if state then
+		nazarSetupHook()
+		nazarData.lastFire = 0
+		char = Players.LocalPlayer.Character
+		hum = char and char:FindFirstChildOfClass("Humanoid")
+		nazarData.lastHealth = hum and hum.Health or 100
+
+		if not nazarConn then
+			nazarConn = RunService.Heartbeat:Connect(function()
+				if not loops["auto nazar"] then return end
+
+				char = Players.LocalPlayer.Character
+				hum = char and char:FindFirstChildOfClass("Humanoid")
+
+				mode = AutoNazar.Values["Mode"] or "Health"
+				targetPct = AutoNazar.Values["Health Percent"] or 50
+
+				if hum then
+					hpPct = (hum.Health / hum.MaxHealth) * 100
+
+					if mode == "Health" then
+						if hpPct <= targetPct then
+							nazarFireAbility()
+						end
+					end
+
+					if mode == "On Hit" and not nazarData.hookActive then
+						if hum.Health < nazarData.lastHealth then
+							if hpPct <= targetPct then
+								nazarFireAbility()
+							end
+						end
+						nazarData.lastHealth = hum.Health
+					else
+						if hum then
+							nazarData.lastHealth = hum.Health
+						end
+					end
+				end
+			end)
+		end
+	else
+		if nazarConn then
+			nazarConn:Disconnect()
+			nazarConn = nil
+		end
+	end
+end, true)
+
+AutoNazar:CreateDropdown("Mode", {"On Hit", "Health"}, "Health", nil)
+
+AutoNazar:CreateSlider("Health Percent", 1, 100, 50, nil, 1)
