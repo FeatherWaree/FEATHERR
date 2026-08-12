@@ -7824,15 +7824,16 @@ Killaura.Callbacks.OnToggle = function(state)
 					end
 				end
 			end
-			local reach = tonumber(Killaura.Values["Reach"])
-			if distance > reach then
-				currentKaTarget = nil
-				cachedBestTarget = nil 
-				kaHighlight.Adornee = nil
-				ka3DBox.Parent = game.Lighting
-				kaRingFolder.Parent = game.Lighting
-				continue
-			end
+			pcall(function()
+				if distance > reach then
+					currentKaTarget = nil
+					cachedBestTarget = nil
+					kaHighlight.Adornee = nil
+					ka3DBox.Parent = game.Lighting
+					kaRingFolder.Parent = game.Lighting
+					continue
+				end
+			end)
 
 			if not targetHRP  then
 				currentKaTarget = nil
