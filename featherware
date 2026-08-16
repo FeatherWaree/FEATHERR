@@ -1,5 +1,6 @@
 
 
+
 	repeat
 		task.wait()
 	until game.Players.LocalPlayer.PlayerGui and game.Players.LocalPlayer.Character
@@ -991,7 +992,8 @@
 		["player display"] = false,
 		["hit reg adjuster"] = false,
 		["hitbox expander"] = false,
-		["transparency"] = false
+		["transparency"] = false,
+		["player attach"] = false
 	}
 
 	--REMOTE EVENTS/FUNCTIONS--
@@ -7282,11 +7284,9 @@ end
 Killaura = Combat:CreateButton("Killaura", nil, true, true)
 Killaura:CreateToggle("Manual Swing", false, nil)
 Killaura:CreateDropdown("Priority", {"Player", "NPC/Dummy", "Nearest", "Bounty Hunter"}, "Player", nil)
-Killaura:CreateDropdown("Hit Reg Mode", {"35", "34.5", "34", "33.5", "33"}, "35", nil)
-
+Killaura:CreateSlider("Hits per 10s", 1, 35.2, 35, nil, 0.05)
 Killaura:CreateSlider("Reach", 0, 18, 12.4, nil)
 Killaura:CreateSlider("Angle Check", 0, 360, 180, nil, 1)
-Killaura:CreateToggle("TP Aura", false, nil)
 Killaura:CreateToggle("Wall Check", true, nil)
 Killaura:CreateToggle("Target Players", true, nil)
 Killaura:CreateToggle("Target NPCs/Dummies", false, nil)
@@ -7299,7 +7299,7 @@ Killaura:CreateColorPicker("Range Visualiser Color", Color3.new(0, 255, 163))
 Killaura:CreateToggle("Require Sword Equipped", true, nil)
 Killaura:CreateToggle("Multi Target Hit", false, nil)
 Killaura:CreateToggle("Check If Sophia Frozen", true, nil)
-Killaura:CreateToggle("Swing Animation", true, nil)	
+Killaura:CreateToggle("Swing Animation", true, nil)
 Killaura:CreateSlider("Swing Range", 18, 50, 20, nil, 1)
 Killaura:CreateSlider("Swing Speed", 0, 0.5, 0.111, nil, 0.001)
 Killaura:CreateToggle("Calculate Swing Speed", false, nil)
@@ -7487,6 +7487,8 @@ function hide3DBox()
 	end
 end
 
+kaHeartbeatConn = nil
+
 Killaura.Callbacks.OnToggle = function(state)
 	loops["killaura"] = state
 	if not state then
@@ -7496,6 +7498,10 @@ Killaura.Callbacks.OnToggle = function(state)
 		hide3DBox()
 		if loadedSwingTrack and loadedSwingTrack.Parent then
 			loadedSwingTrack:Stop()
+		end
+		if kaHeartbeatConn then
+			kaHeartbeatConn:Disconnect()
+			kaHeartbeatConn = nil
 		end
 		return 
 	end
@@ -7515,308 +7521,297 @@ Killaura.Callbacks.OnToggle = function(state)
 		loadedSwingTrack.Looped = false
 	end
 
-	task.spawn(function()
-		lastTargetSearch = 0
-		lastHitTime = 0
-		cachedBestTarget = nil
-		currentVisualTarget = nil
-		lastEquipTime = 0
-		lastVisualSwing = 0
+	lastTargetSearch = 0
+	lastHitTime = 0
+	cachedBestTarget = nil
+	currentVisualTarget = nil
+	lastEquipTime = 0
+	lastVisualSwing = 0
 
-		while loops["killaura"] do
-			task.wait() 
+	-- Start accumulator at hitDelay so the very first hit is instant
+	hitsPer10Init = tonumber(Killaura.Values["Hits per 10s"]) or 35
+	hitAccumulator = 10 / math.max(hitsPer10Init, 0.1)
 
-			hitMode = tostring(Killaura.Values["Hit Reg Mode"] or "35")
-			if hitMode == "35" then
-				hitDelay = 0.2857
-			elseif hitMode == "34.5" then
-				hitDelay = 10 / 34.65
-			elseif hitMode == "34" then
-				hitDelay = 10 / 34.15
-			elseif hitMode == "33.5" then
-				hitDelay = 10 / 33.65
-			elseif hitMode == "33" then
-				hitDelay = 10 / 33.15
-			else
-				hitDelay = 0.2857
-			end
+	if kaHeartbeatConn then kaHeartbeatConn:Disconnect() end
+	kaHeartbeatConn = RunService.Heartbeat:Connect(function(deltaTime)
+		if not loops["killaura"] then
+			kaHeartbeatConn:Disconnect()
+			kaHeartbeatConn = nil
+			return
+		end
 
-			if not (Killaura.Values["Target Players"] or Killaura.Values["Target NPCs/Dummies"]) then continue end
+		hitsPer10 = tonumber(Killaura.Values["Hits per 10s"]) or 35
+		calculatedDelay = 10 / math.max(hitsPer10, 0.1)
 
-			char = Player.Character
-			rootPart = char and char:FindFirstChild("HumanoidRootPart")
-			humanoid = char and char:FindFirstChild("Humanoid")
+		-- CRITICAL SERVER HARDCAP FIX:
+		-- The Bedwars server strictly rejects any hit faster than 0.2857s (3.5 CPS / 35 hits per 10s).
+		-- We MUST clamp to 0.285714 to match the server's anti-cheat perfectly and prevent packet dropping.
+		hitDelay = math.max(calculatedDelay, 0.2857142857)
 
-			if not rootPart or not humanoid or humanoid.Health <= 0 then continue end
+		if not (Killaura.Values["Target Players"] or Killaura.Values["Target NPCs/Dummies"]) then return end
 
-			if Killaura.Values["Check If Sophia Frozen"] then
-				stunTime = Player:GetAttribute("StunnedUntilTime")
-				if stunTime and stunTime ~= -1 and stunTime > 0 then continue end
-			end
+		char = Player.Character
+		rootPart = char and char:FindFirstChild("HumanoidRootPart")
+		humanoid = char and char:FindFirstChild("Humanoid")
 
-			handItem = char:FindFirstChild("HandInvItem")
-			if not handItem then continue end 
+		if not rootPart or not humanoid or humanoid.Health <= 0 then return end
 
-			reach = tonumber(Killaura.Values["Reach"]) or 12.4
-			selectionRange = reach
-			if Killaura.Values["Swing Animation"] then
-				selectionRange = tonumber(Killaura.Values["Swing Range"]) or 50
-			end
+		if Killaura.Values["Check If Sophia Frozen"] then
+			stunTime = Player:GetAttribute("StunnedUntilTime")
+			if stunTime and stunTime ~= -1 and stunTime > 0 then return end
+		end
 
-			currentTime = os.clock()
+		handItem = char:FindFirstChild("HandInvItem")
+		if not handItem then return end
 
-			if currentTime - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
-				lastTargetSearch = currentTime
-				playertarget, playerdistance = nil, selectionRange
-				npcdummytarget, npcdummydistance = nil, selectionRange
+		reach = tonumber(Killaura.Values["Reach"]) or 12.4
+		selectionRange = reach
+		if Killaura.Values["Swing Animation"] then
+			selectionRange = tonumber(Killaura.Values["Swing Range"]) or 50
+		end
 
-				if Killaura.Values["Target Players"] then
-					for _, v in ipairs(Players:GetPlayers()) do
-						if v ~= Player and v.Character and v.Team ~= Player.Team then
-							tHRP = v.Character:FindFirstChild("HumanoidRootPart")
-							tHum = v.Character:FindFirstChild("Humanoid")
-							if tHRP and tHum and tHum.Health > 0 then
-								dist = (rootPart.Position - tHRP.Position).Magnitude
-								if dist < playerdistance then
-									playertarget = v.Character
-									playerdistance = dist
-								end
-							end
-						end
-					end
-				end
+		currentTime = os.clock()
 
-				if Killaura.Values["Target NPCs/Dummies"] then
-					npcs = (typeof(EntityCache) == "table" and EntityCache.npcs) or {}
-					if #npcs == 0 then
-						for _, obj in ipairs(workspace:GetChildren()) do
-							if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and not Players:GetPlayerFromCharacter(obj) then
-								table.insert(npcs, obj)
-							end
-						end
-					end
-					for _, npc in ipairs(npcs) do
-						tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-						tHum = npc:FindFirstChild("Humanoid")
+		-- PERFECT TIMING ACCUMULATOR:
+		-- Replaces the broken nextHitTime logic. Prevents FPS drift and the "34 becomes 35" bug.
+		hitAccumulator = hitAccumulator + deltaTime
+		if hitAccumulator > hitDelay then
+			hitAccumulator = hitDelay -- Caps to prevent burst-firing when walking back into range
+		end
+		readyToHit = hitAccumulator >= hitDelay
+
+		if currentTime - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
+			lastTargetSearch = currentTime
+			playertarget, playerdistance = nil, selectionRange
+			npcdummytarget, npcdummydistance = nil, selectionRange
+
+			if Killaura.Values["Target Players"] then
+				for _, v in ipairs(Players:GetPlayers()) do
+					if v ~= Player and v.Character and v.Team ~= Player.Team then
+						tHRP = v.Character:FindFirstChild("HumanoidRootPart")
+						tHum = v.Character:FindFirstChild("Humanoid")
 						if tHRP and tHum and tHum.Health > 0 then
 							dist = (rootPart.Position - tHRP.Position).Magnitude
-							if dist < npcdummydistance then
-								npcdummytarget = npc
-								npcdummydistance = dist
+							if dist < playerdistance then
+								playertarget = v.Character
+								playerdistance = dist
 							end
 						end
 					end
 				end
+			end
 
-				priority = Killaura.Values["Priority"]
-				bountyTarget = nil
-				if priority == "Bounty Hunter" and ClientStore then
-					pcall(function()
-						storeState = ClientStore:getState()
-						if storeState and storeState.Kit then
-							bTarget = storeState.Kit.bountyHunterTarget
-							if bTarget and typeof(bTarget) == "Instance" then
-								bChar = bTarget:IsA("Player") and bTarget.Character or (bTarget:IsA("Model") and bTarget or nil)
-								if bChar and bChar.Parent then
-									bHRP = bChar:FindFirstChild("HumanoidRootPart") or bChar.PrimaryPart
-									bHum = bChar:FindFirstChild("Humanoid")
-									if bHRP and bHum and bHum.Health > 0 then
-										bDist = (rootPart.Position - bHRP.Position).Magnitude
-										if bDist <= selectionRange then
-											bountyTarget = bChar
-										end
+			if Killaura.Values["Target NPCs/Dummies"] then
+				npcs = (typeof(EntityCache) == "table" and EntityCache.npcs) or {}
+				if #npcs == 0 then
+					for _, obj in ipairs(workspace:GetChildren()) do
+						if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and not Players:GetPlayerFromCharacter(obj) then
+							table.insert(npcs, obj)
+						end
+					end
+				end
+				for _, npc in ipairs(npcs) do
+					tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+					tHum = npc:FindFirstChild("Humanoid")
+					if tHRP and tHum and tHum.Health > 0 then
+						dist = (rootPart.Position - tHRP.Position).Magnitude
+						if dist < npcdummydistance then
+							npcdummytarget = npc
+							npcdummydistance = dist
+						end
+					end
+				end
+			end
+
+			priority = Killaura.Values["Priority"]
+			bountyTarget = nil
+			if priority == "Bounty Hunter" and ClientStore then
+				pcall(function()
+					storeState = ClientStore:getState()
+					if storeState and storeState.Kit then
+						bTarget = storeState.Kit.bountyHunterTarget
+						if bTarget and typeof(bTarget) == "Instance" then
+							bChar = bTarget:IsA("Player") and bTarget.Character or (bTarget:IsA("Model") and bTarget or nil)
+							if bChar and bChar.Parent then
+								bHRP = bChar:FindFirstChild("HumanoidRootPart") or bChar.PrimaryPart
+								bHum = bChar:FindFirstChild("Humanoid")
+								if bHRP and bHum and bHum.Health > 0 then
+									bDist = (rootPart.Position - bHRP.Position).Magnitude
+									if bDist <= selectionRange then
+										bountyTarget = bChar
 									end
 								end
 							end
 						end
-					end)
-				end
-
-				if priority == "Bounty Hunter" then
-					cachedBestTarget = bountyTarget or playertarget or npcdummytarget
-				elseif priority == "Player" then 
-					cachedBestTarget = playertarget or npcdummytarget
-				elseif priority == "NPC/Dummy" then 
-					cachedBestTarget = npcdummytarget or playertarget
-				else 
-					cachedBestTarget = (playerdistance <= npcdummydistance and playertarget) or npcdummytarget or playertarget 
-				end
-			end
-
-			besttarget = cachedBestTarget
-			if not besttarget or not besttarget.Parent then 
-				cachedBestTarget = nil 
-				if currentVisualTarget ~= nil then
-					currentVisualTarget = nil
-					if kaHighlight then kaHighlight.Adornee = nil end
-					hide3DBox()
-				end
-				continue 
-			end
-
-			targetHRP = besttarget:FindFirstChild("HumanoidRootPart") or besttarget.PrimaryPart
-			if not targetHRP then 
-				cachedBestTarget = nil 
-				continue 
-			end
-
-			distance = (rootPart.Position - targetHRP.Position).Magnitude
-
-			if distance <= selectionRange then
-				if Killaura.Values["Highlight Target"] then
-					kaHighlight.FillColor = Killaura.Values["Highlight Color"]
-					kaHighlight.Adornee = besttarget
-				else
-					kaHighlight.Adornee = nil
-				end
-
-				if Killaura.Values["3D Box Target"] then
-					if currentVisualTarget ~= besttarget then
-						currentVisualTarget = besttarget
-						ka3DBox.Anchored = false
-						ka3DBox.Parent = workspace 
-						ka3DBox.CFrame = targetHRP.CFrame
-						ka3DBox.Size = Vector3.new(0.1, 0.1, 0.1)
-						if ka3DBoxWeld then ka3DBoxWeld:Destroy() end
-						ka3DBoxWeld = Instance.new("WeldConstraint")
-						ka3DBoxWeld.Part0 = ka3DBox
-						ka3DBoxWeld.Part1 = targetHRP
-						ka3DBoxWeld.Parent = ka3DBox
-						TweenService:Create(ka3DBox, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = Vector3.new(4, 5, 2)}):Play()
 					end
-					ka3DBox.Color = Killaura.Values["3D Box Color"]
-				else
-					if currentVisualTarget ~= nil then
-						currentVisualTarget = nil
-						hide3DBox()
-					end
+				end)
+			end
+
+			if priority == "Bounty Hunter" then
+				cachedBestTarget = bountyTarget or playertarget or npcdummytarget
+			elseif priority == "Player" then
+				cachedBestTarget = playertarget or npcdummytarget
+			elseif priority == "NPC/Dummy" then
+				cachedBestTarget = npcdummytarget or playertarget
+			else
+				cachedBestTarget = (playerdistance <= npcdummydistance and playertarget) or npcdummytarget or playertarget
+			end
+		end
+
+		besttarget = cachedBestTarget
+		if not besttarget or not besttarget.Parent then
+			cachedBestTarget = nil
+			if currentVisualTarget ~= nil then
+				currentVisualTarget = nil
+				if kaHighlight then kaHighlight.Adornee = nil end
+				hide3DBox()
+			end
+			return
+		end
+
+		targetHRP = besttarget:FindFirstChild("HumanoidRootPart") or besttarget.PrimaryPart
+		if not targetHRP then
+			cachedBestTarget = nil
+			return
+		end
+
+		distance = (rootPart.Position - targetHRP.Position).Magnitude
+
+		if distance <= selectionRange then
+			if Killaura.Values["Highlight Target"] then
+				kaHighlight.FillColor = Killaura.Values["Highlight Color"]
+				kaHighlight.Adornee = besttarget
+			else
+				kaHighlight.Adornee = nil
+			end
+
+			if Killaura.Values["3D Box Target"] then
+				if currentVisualTarget ~= besttarget then
+					currentVisualTarget = besttarget
+					ka3DBox.Anchored = false
+					ka3DBox.Parent = workspace
+					ka3DBox.CFrame = targetHRP.CFrame
+					ka3DBox.Size = Vector3.new(0.1, 0.1, 0.1)
+					if ka3DBoxWeld then ka3DBoxWeld:Destroy() end
+					ka3DBoxWeld = Instance.new("WeldConstraint")
+					ka3DBoxWeld.Part0 = ka3DBox
+					ka3DBoxWeld.Part1 = targetHRP
+					ka3DBoxWeld.Parent = ka3DBox
+					TweenService:Create(ka3DBox, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = Vector3.new(4, 5, 2)}):Play()
 				end
+				ka3DBox.Color = Killaura.Values["3D Box Color"]
 			else
 				if currentVisualTarget ~= nil then
 					currentVisualTarget = nil
-					if kaHighlight then kaHighlight.Adornee = nil end
 					hide3DBox()
 				end
 			end
-
-			if Killaura.Values["Swing Animation"] and not Killaura.Values["Manual Swing"] then
-				if distance <= selectionRange then
-					if Killaura.Values["Calculate Swing Speed"] then
-						visualCooldown = math.max(1 / 9, hitDelay)
-					else
-						visualCooldown = tonumber(Killaura.Values["Swing Speed"]) or 0.111
-					end			
-					if currentTime - lastVisualSwing >= visualCooldown then
-						lastVisualSwing = currentTime
-						if canRequire and kaSwordController then
-							kaSwordController:playSwordEffect({sword = {}}, false, {playAnimation = true, playSound = true})
-						else
-							if loadedSwingTrack then
-								if loadedSwingTrack.IsPlaying then
-									loadedSwingTrack:Stop()
-								end
-								loadedSwingTrack:Play()
-							end
-						end
-					end
-				end
-			end
-
-			if distance > reach then continue end
-			if math.abs(targetHRP.Position.Y - rootPart.Position.Y) > reach + 2 then continue end
-			if Killaura.Values["Wall Check"] and not kaCanSee(besttarget) then continue end
-			if not isInFOV(rootPart, targetHRP, tonumber(Killaura.Values["Angle Check"]) or 180) then continue end
-
-			isClicking = (typeof(clicking) == "boolean" and clicking) or (typeof(mouse1down) == "boolean" and mouse1down) or false
-			if Killaura.Values["Manual Swing"] and not isClicking then continue end
-
-			invFolder = game.ReplicatedStorage:FindFirstChild("Inventories") and game.ReplicatedStorage.Inventories:FindFirstChild(Player.Name)
-			heldName = handItem.Value and (typeof(handItem.Value) == "Instance" and handItem.Value.Name or tostring(handItem.Value)) or ""
-			isSword = swords and table.find(swords, heldName)
-
-			if not isSword then
-				if Killaura.Values["Require Sword Equipped"] then
-					continue
-				else
-					if currentTime - lastEquipTime > 0.25 then
-						lastEquipTime = currentTime
-						bestSwordName = getBestEquippedSword(Player.Name)
-						if bestSwordName then
-							swordInstance = invFolder and invFolder:FindFirstChild(bestSwordName)
-							if swordInstance then
-								inventoryWeapon = swordInstance -- Assign instantly so the hit logic below works
-
-								-- Wrap in task.spawn so the InvokeServer yield doesn't pause the loop and delay the hit
-								task.spawn(function()
-									pcall(function()
-										SetInvItemRemote:InvokeServer({ hand = swordInstance })
-									end)
-								end)
-							end
-						end
-					end
-
-					-- Only skip the frame if we completely failed to find a sword
-					if not inventoryWeapon then
-						continue
-					end
-				end
-			end
-
-			if not inventoryWeapon then
-				inventoryWeapon = invFolder and invFolder:FindFirstChild(heldName)
-				if not inventoryWeapon then
-					bestSwordName = getBestEquippedSword(Player.Name)
-					if bestSwordName and invFolder then
-						inventoryWeapon = invFolder:FindFirstChild(bestSwordName)
-					end
-				end
-			end
-
-			if not inventoryWeapon then continue end
-
-			if not loops["killaura"] then return end
-
-			if os.clock() - lastHitTime >= hitDelay then
-				currentKaTarget = besttarget
-				dir = (targetHRP.Position - rootPart.Position).Unit
-				spoofedTargetPosition = targetHRP.Position
-				if distance > 14 then
-					spoofedTargetPosition = targetHRP.Position + ((rootPart.Position - targetHRP.Position).Unit * (distance - 13.5))
-				end
-
-				kaArgs = {{
-					chargedAttack = { chargeRatio = 0 },
-					entityInstance = besttarget,
-					validate = {
-						selfPosition = { value = rootPart.Position + dir * 5.5 },
-						targetPosition = { value = spoofedTargetPosition },
-						raycast = {
-							cameraPosition = { value = workspace.CurrentCamera.CFrame.Position },
-							cursorDirection = { value = dir }
-						}
-					},
-					weapon = inventoryWeapon,
-					timeSinceSwingStart = 0
-				}}
-
-				OrginalPosition = rootPart.CFrame
-				if Killaura.Values["TP Aura"] then
-					char:PivotTo(targetHRP.CFrame)
-					humanoid.PlatformStand = true
-				end
-
-				SwordHitRemote:FireServer(unpack(kaArgs))
-				lastHitTime = os.clock()
-
-				if Killaura.Values["TP Aura"] then
-					char:PivotTo(OrginalPosition)
-					humanoid.PlatformStand = false
-				end
-
-				if Killaura.Values["Face Target"] then faceTarget(char, besttarget) end
+		else
+			if currentVisualTarget ~= nil then
+				currentVisualTarget = nil
+				if kaHighlight then kaHighlight.Adornee = nil end
+				hide3DBox()
 			end
 		end
+
+		if Killaura.Values["Swing Animation"] and not Killaura.Values["Manual Swing"] then
+			if distance <= selectionRange then
+				if Killaura.Values["Calculate Swing Speed"] then
+					visualCooldown = math.max(1 / 9, hitDelay)
+				else
+					visualCooldown = tonumber(Killaura.Values["Swing Speed"]) or 0.111
+				end
+				if currentTime - lastVisualSwing >= visualCooldown then
+					lastVisualSwing = currentTime
+					if canRequire and kaSwordController then
+						kaSwordController:playSwordEffect({sword = {}}, false, {playAnimation = true, playSound = true})
+					else
+						if loadedSwingTrack then
+							if loadedSwingTrack.IsPlaying then
+								loadedSwingTrack:Stop()
+							end
+							loadedSwingTrack:Play()
+						end
+					end
+				end
+			end
+		end
+
+		if distance <= reach and Killaura.Values["Face Target"] then
+			faceTarget(char, besttarget)
+		end
+
+		if distance > reach then return end
+		if math.abs(targetHRP.Position.Y - rootPart.Position.Y) > reach + 2 then return end
+		if Killaura.Values["Wall Check"] and not kaCanSee(besttarget) then return end
+		if not isInFOV(rootPart, targetHRP, tonumber(Killaura.Values["Angle Check"]) or 180) then return end
+
+		isClicking = (typeof(clicking) == "boolean" and clicking) or (typeof(mouse1down) == "boolean" and mouse1down) or false
+		if Killaura.Values["Manual Swing"] and not isClicking then return end
+
+		invFolder = game.ReplicatedStorage:FindFirstChild("Inventories") and game.ReplicatedStorage.Inventories:FindFirstChild(Player.Name)
+		heldName = handItem.Value and (typeof(handItem.Value) == "Instance" and handItem.Value.Name or tostring(handItem.Value)) or ""
+		isSword = swords and table.find(swords, heldName)
+
+		if not isSword then
+			if Killaura.Values["Require Sword Equipped"] then
+				return
+			else
+					lastEquipTime = currentTime
+					task.spawn(function()
+						bestSword = getBestEquippedSword(Player.Name)
+						if bestSword then
+							swordInstance = typeof(bestSword) == "Instance" and bestSword or nil
+							if not swordInstance then
+								swapInv = game:GetService("ReplicatedStorage"):FindFirstChild("Inventories")
+								playerInv = swapInv and swapInv:FindFirstChild(Player.Name)
+								swordInstance = playerInv and playerInv:FindFirstChild(tostring(bestSword))
+							end
+							if swordInstance then
+								SetInvItemRemote:InvokeServer({ hand = swordInstance })
+							end
+						end
+					end)
+				return
+			end
+		end
+
+		inventoryWeapon = invFolder and invFolder:FindFirstChild(heldName)
+		if not inventoryWeapon then
+			inventoryWeapon = getBestEquippedSword(Player.Name)
+		end
+
+		if not loops["killaura"] then return end
+
+		if not readyToHit then return end
+
+		-- Consume the accumulated time
+		hitAccumulator = 0
+
+		currentKaTarget = besttarget
+		dir = (targetHRP.Position - rootPart.Position).Unit
+		spoofedTargetPosition = targetHRP.Position
+		if distance > 14 then
+			spoofedTargetPosition = targetHRP.Position + ((rootPart.Position - targetHRP.Position).Unit * (distance - 13.5))
+		end
+
+		kaArgs = {{
+			chargedAttack = { chargeRatio = 0 },
+			entityInstance = besttarget,
+			validate = {
+				selfPosition = { value = rootPart.Position + dir * 5.5 },
+				targetPosition = { value = spoofedTargetPosition },
+				raycast = {
+					cameraPosition = { value = workspace.CurrentCamera.CFrame.Position },
+					cursorDirection = { value = dir }
+				}
+			},
+			weapon = inventoryWeapon,
+			timeSinceSwingStart = 0
+		}}
+
+		SwordHitRemote:FireServer(unpack(kaArgs))
+		lastHitTime = currentTime
 	end)
 end
 	Player = Player or game:GetService("Players").LocalPlayer
@@ -9403,7 +9398,7 @@ end
 					end
 				end
 
-				task.wait(0.5) 
+				task.wait(0.02) 
 			end
 			chestStealerThread = nil
 		end)
@@ -15583,46 +15578,47 @@ end
 		end
 	end
 
-	AnimationSwitch.Callbacks.OnToggle = function(state)
-		loops["animation disabler"] = state
-		animSwitchChar = Player.Character
-		if animSwitchChar and animSwitchChar:FindFirstChild("Animate") then
-			animSwitchChar.Animate.Disabled = state
+local animDisablerConn = nil
+
+AnimationSwitch.Callbacks.OnToggle = function(state)
+	loops["animation disabler"] = state
+	local char = Player.Character
+
+	if char then
+		local animateScript = char:FindFirstChild("Animate")
+
+		if animateScript then
+			if state then
+				animateScript.Disabled = true
+
+				if animDisablerConn then animDisablerConn:Disconnect() end
+				animDisablerConn = animateScript:GetPropertyChangedSignal("Disabled"):Connect(function()
+					if loops["animation disabler"] and animateScript.Disabled == false then
+						animateScript.Disabled = true
+					end
+				end)
+
+				task.spawn(function()
+					task.wait(0.05)
+					local humanoid = char:FindFirstChildOfClass("Humanoid")
+					if humanoid then
+						local animator = humanoid:FindFirstChildOfClass("Animator")
+						local tracks = animator and animator:GetPlayingAnimationTracks() or humanoid:GetPlayingAnimationTracks()
+						for _, track in ipairs(tracks) do
+							track:Stop()
+						end
+					end
+				end)
+			else
+				if animDisablerConn then
+					animDisablerConn:Disconnect()
+					animDisablerConn = nil
+				end
+				animateScript.Disabled = false
+			end
 		end
 	end
-
-	if animGuardConn then pcall(function() animGuardConn:Disconnect() end) end
-	animGuardAcc = 0
-	animGuardConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
-		animGuardChar = Player.Character
-		if not animGuardChar then return end
-		animGuardAnimate = animGuardChar:FindFirstChild("Animate")
-		if not animGuardAnimate then return end
-		animGuardHum = animGuardChar:FindFirstChildOfClass("Humanoid")
-
-		if loops["animation disabler"] then
-			-- ON: always keep animations killed (even after respawn/reinject)
-			if not animGuardAnimate.Disabled then
-				animGuardAnimate.Disabled = true
-			end
-		else
-			-- OFF: always keep animations alive
-			if animGuardAnimate.Disabled then
-				animGuardAnimate.Disabled = false
-			end
-			-- every ~1s, if no animation tracks are playing at all, force-restart the Animate script
-			animGuardAcc = animGuardAcc + (dt or 0.016)
-			if animGuardAcc >= 1 then
-				animGuardAcc = 0
-				animGuardAnimator = animGuardHum and animGuardHum:FindFirstChildOfClass("Animator")
-				if animGuardHum and animGuardHum.Health > 0 and animGuardAnimator and #animGuardAnimator:GetPlayingAnimationTracks() == 0 then
-					animGuardAnimate.Disabled = true
-					animGuardAnimate.Disabled = false
-				end
-			end
-		end
-	end)
-
+end
 
 	Fov.Callbacks.OnToggle = function(state)
 		loops["fov"] = state
@@ -28892,6 +28888,14 @@ function removeCape()
 	capePart = nil
 	capeDecal = nil
 	capeWeld = nil
+
+	-- [FIX ADDED]: Re-apply transparency after removing cape
+	task.delay(0.05, function()
+		if loops and loops["transparency"] then
+			local char = Player.Character
+			if char then transpApplyAll(char) end
+		end
+	end)
 end
 
 function applyCapeSkin()
@@ -28914,6 +28918,11 @@ function applyCapeSkin()
 		capePart.Color = Color3.fromRGB(0, 0, 0)
 		capePart.Transparency = 0
 		capePart.Material = Enum.Material.Fabric
+	end
+
+	-- [FIX ADDED]: Make sure the cape gets transparent if you change its texture while invisible
+	if loops and loops["transparency"] then
+		capePart.LocalTransparencyModifier = Transparency.Values["Amount"] or 0.5
 	end
 end
 
@@ -28945,6 +28954,13 @@ function buildCape()
 	capeWeld.Parent = capePart
 
 	applyCapeSkin()
+
+	-- [FIX ADDED]: Wait for Roblox's engine to finish updating the character, then re-apply transparency
+	task.delay(0.05, function()
+		if loops and loops["transparency"] and char then
+			transpApplyAll(char)
+		end
+	end)
 end
 
 function capeOnCharacterAdded(char)
@@ -28971,3 +28987,105 @@ Cape.Callbacks.OnToggle = function(state)
 		end
 	end
 end
+
+PlayerAttach = Combat:CreateButton("Player Attach", nil, true)
+PlayerAttach:CreateToggle("Target Players", true, nil)
+PlayerAttach:CreateToggle("Target NPCs/Dummies", false, nil)
+PlayerAttach:CreateSlider("Angle Check", 0, 360, 360, nil, 1)
+PlayerAttach:CreateSlider("Range", 1, 30, 18, nil, 1)
+
+pa_raycastParams = RaycastParams.new()
+pa_raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+pa_raycastParams.IgnoreWater = true
+
+PlayerAttach.Callbacks.OnToggle = function(state)
+	loops["player attach"] = state
+	if state then
+		startEntityCache()
+		pa_raycastParams.FilterDescendantsInstances = {Player.Character}
+	end
+end
+
+RunService.Heartbeat:Connect(function()
+	if not loops["player attach"] then return end
+
+	char = Player.Character
+	if not char then return end
+	hrp = char:FindFirstChild("HumanoidRootPart")
+	hum = char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum or hum.Health <= 0 then return end
+
+	pa_raycastParams.FilterDescendantsInstances = {char}
+
+	bestTarget = nil
+	bestDist = tonumber(PlayerAttach.Values["Range"]) or 18
+	maxAngle = tonumber(PlayerAttach.Values["Angle Check"]) or 360
+
+	if PlayerAttach.Values["Target Players"] then
+		for _, plr in ipairs(EntityCache.players or {}) do
+			tChar = plr.Character
+			tHRP = tChar and tChar:FindFirstChild("HumanoidRootPart")
+			if tHRP then
+				dist = (hrp.Position - tHRP.Position).Magnitude
+				if dist <= bestDist then
+					valid = true
+					if maxAngle < 360 then
+						lookVec = hrp.CFrame.LookVector
+						dir = (tHRP.Position - hrp.Position).Unit
+						dot = lookVec:Dot(dir)
+						angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+						if angle > maxAngle then valid = false end
+					end
+					if valid then
+						bestDist = dist
+						bestTarget = tHRP
+					end
+				end
+			end
+		end
+	end
+
+	if not bestTarget and PlayerAttach.Values["Target NPCs/Dummies"] then
+		for _, npc in ipairs(EntityCache.npcs or {}) do
+			tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+			if tHRP then
+				dist = (hrp.Position - tHRP.Position).Magnitude
+				if dist <= bestDist then
+					valid = true
+					if maxAngle < 360 then
+						lookVec = hrp.CFrame.LookVector
+						dir = (tHRP.Position - hrp.Position).Unit
+						dot = lookVec:Dot(dir)
+						angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+						if angle > maxAngle then valid = false end
+					end
+					if valid then
+						bestDist = dist
+						bestTarget = tHRP
+					end
+				end
+			end
+		end
+	end
+
+	if bestTarget then
+		ray = workspace:Raycast(hrp.Position + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), pa_raycastParams)
+		if ray then
+			groundY = ray.Position.Y
+			desiredY = groundY + 2 + (hrp.Size.Y / 2)
+
+			if hrp.Position.Y < desiredY - 0.2 then
+				hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, -35, hrp.AssemblyLinearVelocity.Z)
+			elseif hrp.Position.Y > desiredY + 0.2 then
+				hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 35, hrp.AssemblyLinearVelocity.Z)
+			else
+				hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
+			end
+		end
+
+		-- Facing the target normally, with a slight downward tilt (-15 degrees)
+		lookCFrame = CFrame.lookAt(hrp.Position, bestTarget.Position)
+		finalCFrame = lookCFrame * CFrame.Angles(math.rad(-15), 0, 0)
+		hrp.CFrame = CFrame.new(hrp.Position) * (finalCFrame - finalCFrame.Position)
+	end
+end)
