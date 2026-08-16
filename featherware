@@ -1117,6 +1117,8 @@
 	originalAccessories = {}
 	isAvatarSpoofed = false
 
+
+
 	local function manualEquipAccessory(char, accessory)
 		local handle = accessory:FindFirstChild("Handle")
 		if not handle then return end
@@ -1732,33 +1734,6 @@
 	NPCs = {}
 	PlayersTable = {}
 	GameSounds = game.Lighting:WaitForChild("GameAudioPlayers")
-
-	local function findNearestNPCs()
-		table.clear(NPCs)
-		for _, npc in pairs(workspace:GetChildren()) do
-			if npc and npc:IsA("Model") and npc:FindFirstChild("Humanoid") and npc.PrimaryPart then
-				if not Players:GetPlayerFromCharacter(npc) then
-					table.insert(NPCs, npc)
-				end
-			end
-		end
-
-		return NPCs
-	end
-	local function findNearestPlayers()
-		for _, v in pairs(Players:GetChildren()) do
-			table.clear(PlayersTable)
-			local targetPlayer = Players:GetPlayerFromCharacter(v.Character)
-			if v ~= Player and targetPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and targetPlayer.Team ~= Player.Team then
-				table.insert(PlayersTable, v)
-			end
-		end
-
-		return PlayersTable
-	end
-
-	local NearestDummiesNPCs = findNearestNPCs()
-	local NearestPlayers = findNearestPlayers()
 	kaidaHitTrack = nil
 	autoClickerThread = nil 
 
@@ -2482,21 +2457,17 @@
 					label.TextColor3 = color
 				end
 			end
-			local function rainbowLoop(deltaTime)
-				-- Safety check: If GUI is deleted or hidden, kill the loop to save FPS
-				if not moduleListFrame.Parent or not moduleListFrame.Visible then
-					if rainbowConnection then
-						rainbowConnection:Disconnect()
-						rainbowConnection = nil
-					end
-					return
+		local function rainbowLoop(deltaTime)
+			if not _G.RainbowEnabled or not moduleListFrame.Parent or not moduleListFrame.Visible then
+				if rainbowConnection then
+					rainbowConnection:Disconnect()
+					rainbowConnection = nil
 				end
-
-				hue = (hue + 0.2 * deltaTime) % 1 
-				local targetColor = Color3.fromHSV(hue, 0.55, 1) 
-				applyColor(targetColor)
+				return
 			end
-
+			hue = (hue + 0.2 * deltaTime) % 1 
+			applyColor(Color3.fromHSV(hue, 0.55, 1))
+		end
 			local function updateRainbowState()
 				local shouldBeRunning = moduleListFrame.Parent and moduleListFrame.Visible and _G.RainbowEnabled
 
@@ -2598,9 +2569,10 @@
 				end
 			end
 
-			_G.__FW_REFRESH_MODULE_LIST = refreshModuleListVisuals
-
-			refreshModuleListVisuals()
+		_G.__FW_REFRESH_MODULE_LIST = function()
+			task.defer(refreshModuleListVisuals)
+		end
+		task.defer(refreshModuleListVisuals)
 		end -- <--- THIS CLOSES CreateMainWindow
 
 		function mod:CreateButton(btnName, callback, toggleable)
@@ -7407,9 +7379,8 @@ function kaCanSee(targetModel)
 	local kaChar = Player.Character
 	local kaHrp = kaChar and kaChar.PrimaryPart
 	if not kaHrp or not targetModel or not targetModel.PrimaryPart then return false end
-	wallRayParams.FilterDescendantsInstances = {kaChar, targetModel}
-	return workspace:Raycast(kaHrp.Position, targetModel.PrimaryPart.Position - kaHrp.Position, wallRayParams) == nil
-end
+	SharedRayParams.FilterDescendantsInstances = {kaChar, targetModel}
+	return workspace:Raycast(kaHrp.Position, targetModel.PrimaryPart.Position - kaHrp.Position, SharedRayParams) == nilend
 
 local kaRingFolder = Instance.new("Folder")
 kaRingFolder.Name = "KA_RANGE_RING"
@@ -8593,12 +8564,10 @@ end
 
 	-- Radar for Bridges
 	local function IsOnVoidOrBridge(hrp)
-		local params = RaycastParams.new()
-		params.FilterDescendantsInstances = {hrp.Parent}
-		params.FilterType = Enum.RaycastFilterType.Exclude
+		SharedRayParams.FilterDescendantsInstances = {hrp.Parent}
 		pos = hrp.Position
 		down = Vector3.new(0, -20, 0)
-		if not workspace:Raycast(pos, down, params) then return true end
+		if not workspace:Raycast(pos, down, SharedRayParams) then return true end
 		right = hrp.CFrame.RightVector * 4
 		forward = hrp.CFrame.LookVector * 4
 		if not workspace:Raycast(pos + right, down, params) or not workspace:Raycast(pos - right, down, params) or
@@ -24664,7 +24633,6 @@ end
 
 			-- Catches both melee swings connecting and projectiles landing
 			if remoteName == "SwordHit" or remoteName == "ProjectileHit" then
-				print("hello")
 
 				-- If you eventually need to access the entity you hit:
 				-- local args = {...}
@@ -29089,3 +29057,286 @@ RunService.Heartbeat:Connect(function()
 		hrp.CFrame = CFrame.new(hrp.Position) * (finalCFrame - finalCFrame.Position)
 	end
 end)
+
+	-- ============================================================
+	-- UNIFIED VISUALS CORE (Replaces ALL individual ESP/Nametag loops)
+	-- ============================================================
+	VisualsCore = {
+		Objects = {},       -- [Model] = {Type, Data}
+		Connections = {},   -- Centralized event storage
+		LastUpdate = 0,
+		UPDATE_INTERVAL = 0.033, -- ~30 FPS update cap for visuals
+	}
+
+	-- Single entry point for creating visual objects
+	function VisualsCore:Register(model, visualType, data)
+		if self.Objects[model] then return end
+		self.Objects[model] = {Type = visualType, Data = data or {}}
+	end
+
+	-- Single entry point for removing visual objects
+	function VisualsCore:Unregister(model)
+		local obj = self.Objects[model]
+		if not obj then return end
+
+		-- Cleanup based on type
+		if obj.Type == "ESP" then
+			if obj.Data.Frame2D then pcall(function() obj.Data.Frame2D:Destroy() end) end
+			if obj.Data.Box3D then pcall(function() obj.Data.Box3D:Destroy() end) end
+			for _, line in pairs(obj.Data.SkeletonLines or {}) do pcall(function() line:Destroy() end) end
+		elseif obj.Type == "Nametag" then
+			if obj.Data.Billboard then pcall(function() obj.Data.Billboard:Destroy() end) end
+		elseif obj.Type == "ItemESP" or obj.Type == "MetalESP" or obj.Type == "StarESP" 
+			or obj.Type == "BeeESP" or obj.Type == "ElderESP" or obj.Type == "GompyESP" 
+			or obj.Type == "SheepESP" or obj.Type == "GeneratorESP" then
+			if obj.Data.Billboard then pcall(function() obj.Data.Billboard:Destroy() end) end
+			if obj.Data.Glow then pcall(function() obj.Data.Glow:Destroy() end) end
+			if obj.Data.Line then pcall(function() obj.Data.Line:Destroy() end) end
+			if obj.Data.Highlight then pcall(function() obj.Data.Highlight:Destroy() end) end
+			if obj.Data.OrigParts then -- Restore original part properties
+				for _, info in ipairs(obj.Data.OrigParts) do
+					pcall(function()
+						info.Part.Transparency = info.Transparency
+						info.Part.Color = info.Color
+						info.Part.Material = info.Material
+					end)
+				end
+			end
+		end
+
+		self.Objects[model] = nil
+	end
+
+	-- Unified Render Loop (Single RenderStepped for ALL visuals)
+	RunService.RenderStepped:Connect(function(dt)
+		if not loops then return end
+
+		local now = os.clock()
+		if now - VisualsCore.LastUpdate < VisualsCore.UPDATE_INTERVAL then return end
+		VisualsCore.LastUpdate = now
+
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+
+		local myChar = Player.Character
+		local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+		for model, obj in pairs(VisualsCore.Objects) do
+			if not model or not model.Parent then
+				VisualsCore:Unregister(model)
+				continue
+			end
+
+			-- === ESP RENDERING ===
+			if obj.Type == "ESP" and loops["esp"] then
+				local data = obj.Data
+				local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+				local head = model:FindFirstChild("Head")
+				if not hrp or not head then continue end
+
+				local mode = ESP and ESP.Values and ESP.Values["ESP Mode"] or "2D"
+
+				if mode == "2D" and data.Frame2D then
+					local topPos = head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.2, 0)
+					local botPos = hrp.Position - Vector3.new(0, hrp.Size.Y * 1.5, 0)
+					local topScreen, topVis = cam:WorldToViewportPoint(topPos)
+					local botScreen, botVis = cam:WorldToViewportPoint(botPos)
+
+					if topVis or botVis then
+						local height = math.abs(topScreen.Y - botScreen.Y)
+						local width = height * 0.55
+						data.Frame2D.Position = UDim2.fromOffset(topScreen.X - (width / 2), topScreen.Y)
+						data.Frame2D.Size = UDim2.fromOffset(width, height)
+						data.Frame2D.Visible = true
+					else
+						data.Frame2D.Visible = false
+					end
+				elseif mode == "3D" and data.Selection3D then
+					data.Selection3D.Visible = true
+				elseif mode == "Skeleton" then
+					for idx, pair in ipairs(data.CachedJoints or {}) do
+						local v1, vis1 = cam:WorldToViewportPoint(pair[1].Position)
+						local v2, vis2 = cam:WorldToViewportPoint(pair[2].Position)
+						local line = data.SkeletonLines[idx]
+						if vis1 and vis2 and line then
+							local ptA = Vector2.new(v1.X, v1.Y)
+							local ptB = Vector2.new(v2.X, v2.Y)
+							local dist = (ptB - ptA).Magnitude
+							local center = (ptA + ptB) * 0.5
+							local ang = math.deg(math.atan2(ptB.Y - ptA.Y, ptB.X - ptA.X))
+							line.Position = UDim2.fromOffset(center.X, center.Y)
+							line.Size = UDim2.fromOffset(dist, 3)
+							line.Rotation = ang
+							line.Visible = true
+						elseif line then
+							line.Visible = false
+						end
+					end
+				end
+
+				-- === NAMETAG RENDERING ===
+			elseif obj.Type == "Nametag" and loops["nametags"] then
+				local data = obj.Data
+				local plr = data.Player
+				if not plr or not plr.Parent then continue end
+
+				local char = plr.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if not char or not hum or hum.Health <= 0 then
+					if data.Billboard then data.Billboard.Enabled = false end
+					continue
+				end
+
+				if data.Billboard then
+					data.Billboard.Enabled = true
+					data.Billboard.Adornee = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+
+					-- Update HP bar
+					if data.Fill then
+						local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+						data.Fill.Size = UDim2.fromScale(pct, 1)
+					end
+					if data.HPLabel then
+						data.HPLabel.Text = tostring(math.round(hum.Health))
+					end
+
+					-- Update distance text
+					if data.NameLabel and myRoot and Nametags and Nametags.Values and Nametags.Values["Show Distance"] then
+						local root = char:FindFirstChild("HumanoidRootPart")
+						if root then
+							local dist = math.floor((root.Position - myRoot.Position).Magnitude)
+							data.NameLabel.Text = (plr.DisplayName or plr.Name) .. "  •  " .. dist .. "m"
+						end
+					end
+				end
+
+				-- === ITEM/METAL/STAR/BEE/ELDER/GOMPY/SHEEP/GENERATOR ESP RENDERING ===
+			elseif (obj.Type == "ItemESP" and loops["item esp"])
+				or (obj.Type == "MetalESP" and loops["metal esp"])
+				or (obj.Type == "StarESP" and loops["star esp"])
+				or (obj.Type == "BeeESP" and loops["bee esp"])
+				or (obj.Type == "ElderESP" and loops["elder esp"])
+				or (obj.Type == "GompyESP" and loops["gompy esp"])
+				or (obj.Type == "SheepESP" and loops["sheep esp"])
+				or (obj.Type == "GeneratorESP" and loops["generator esp"]) then
+
+				local data = obj.Data
+				if data.Billboard and myRoot then
+					local pos = model:GetPivot().Position
+					local dist = (pos - myRoot.Position).Magnitude
+					local maxDist = data.MaxDistance or 300
+
+					if dist <= maxDist then
+						data.Billboard.Enabled = true
+						-- Update distance label dynamically
+						if data.DistanceLabel then
+							local baseText = data.BaseText or ""
+							data.DistanceLabel.Text = baseText .. "\n" .. math.floor(dist) .. "m"
+						end
+					else
+						data.Billboard.Enabled = false
+					end
+				end
+			end
+		end
+	end)
+
+	-- ============================================================
+	-- CENTRALIZED ENTITY TRACKING (Single PlayerAdded/Removing/CharacterAdded)
+	-- ============================================================
+	function VisualsCore:InitTracking()
+		-- Clean up old connections if re-initializing
+		for _, conn in pairs(self.Connections) do
+			pcall(function() conn:Disconnect() end)
+		end
+		self.Connections = {}
+
+		-- Track existing players
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= Player then
+				if plr.Character then
+					self:Register(plr.Character, "ESP", {Player = plr})
+					self:Register(plr.Character, "Nametag", {Player = plr})
+				end
+			end
+		end
+
+		-- SINGLE PlayerAdded handler
+		self.Connections.PlayerAdded = Players.PlayerAdded:Connect(function(plr)
+			if plr == Player then return end
+
+			self.Connections[plr.UserId .. "_charAdded"] = plr.CharacterAdded:Connect(function(char)
+				char:WaitForChild("HumanoidRootPart", 5)
+				VisualsCore:Register(char, "ESP", {Player = plr})
+				VisualsCore:Register(char, "Nametag", {Player = plr})
+			end)
+
+			self.Connections[plr.UserId .. "_charRemoving"] = plr.CharacterRemoving:Connect(function(char)
+				VisualsCore:Unregister(char)
+			end)
+
+			if plr.Character then
+				VisualsCore:Register(plr.Character, "ESP", {Player = plr})
+				VisualsCore:Register(plr.Character, "Nametag", {Player = plr})
+			end
+		end)
+
+		-- SINGLE PlayerRemoving handler
+		self.Connections.PlayerRemoving = Players.PlayerRemoving:Connect(function(plr)
+			if plr.Character then VisualsCore:Unregister(plr.Character) end
+			if self.Connections[plr.UserId .. "_charAdded"] then 
+				self.Connections[plr.UserId .. "_charAdded"]:Disconnect() 
+			end
+			if self.Connections[plr.UserId .. "_charRemoving"] then 
+				self.Connections[plr.UserId .. "_charRemoving"]:Disconnect() 
+			end
+			self.Connections[plr.UserId .. "_charAdded"] = nil
+			self.Connections[plr.UserId .. "_charRemoving"] = nil
+		end)
+
+		-- SINGLE Workspace ChildAdded for item/metal/star/etc ESP
+		self.Connections.WorkspaceChildAdded = workspace.DescendantAdded:Connect(function(child)
+			-- Item Drops
+			if child:IsA("BasePart") and child:HasTag("ItemDrop") and loops["item esp"] then
+				VisualsCore:Register(child, "ItemESP", {MaxDistance = 200})
+			end
+			-- Metal
+			if child:IsA("Model") and child:HasTag("hidden-metal") and loops["metal esp"] then
+				VisualsCore:Register(child, "MetalESP", {MaxDistance = 300})
+			end
+			-- Stars
+			if child:IsA("Model") and (child.Name == "CritStar" or child.Name == "VitalityStar") and loops["star esp"] then
+				VisualsCore:Register(child, "StarESP", {MaxDistance = 300})
+			end
+			-- Bees
+			if child:IsA("Model") and child:HasTag("bee") and loops["bee esp"] then
+				VisualsCore:Register(child, "BeeESP", {MaxDistance = 300})
+			end
+			-- Elder Orbs
+			if child:IsA("Model") and child:HasTag("treeOrb") and loops["elder esp"] then
+				VisualsCore:Register(child, "ElderESP", {MaxDistance = 300})
+			end
+			-- Gompy Ghosts
+			if (child:IsA("Model") or child:IsA("BasePart")) and child:HasTag("ghost") and loops["gompy esp"] then
+				VisualsCore:Register(child, "GompyESP", {MaxDistance = 300})
+			end
+			-- Sheep
+			if (child:IsA("Model") or child:IsA("BasePart")) and child:HasTag("SheepModel") and loops["sheep esp"] then
+				VisualsCore:Register(child, "SheepESP", {MaxDistance = 300})
+			end
+			-- Generators
+			if child:HasTag("Generator") or child:HasTag("TeamOreGeneratorVisualizer") then
+				if loops["generator esp"] then
+					VisualsCore:Register(child, "GeneratorESP", {MaxDistance = 300})
+				end
+			end
+		end)
+
+		-- SINGLE Workspace ChildRemoving cleanup
+		self.Connections.WorkspaceChildRemoved = workspace.DescendantRemoving:Connect(function(child)
+			VisualsCore:Unregister(child)
+		end)
+	end
+
+	-- Initialize on injection
+	VisualsCore:InitTracking()
