@@ -7380,7 +7380,7 @@ function kaCanSee(targetModel)
 	local kaHrp = kaChar and kaChar.PrimaryPart
 	if not kaHrp or not targetModel or not targetModel.PrimaryPart then return false end
 	SharedRayParams.FilterDescendantsInstances = {kaChar, targetModel}
-	return workspace:Raycast(kaHrp.Position, targetModel.PrimaryPart.Position - kaHrp.Position, SharedRayParams) == nilend
+	return workspace:Raycast(kaHrp.Position, targetModel.PrimaryPart.Position - kaHrp.Position, SharedRayParams) == nil end
 
 local kaRingFolder = Instance.new("Folder")
 kaRingFolder.Name = "KA_RANGE_RING"
