@@ -5617,7 +5617,7 @@ AutoWarden = Kits:CreateButton("Auto Warden", function(state)
 			wardenData.descendantConn = nil 
 		end
 		wardenStop()
-		
+
 	end
 end, true)
 
@@ -7535,17 +7535,17 @@ Killaura.Callbacks.OnToggle = function(state)
 	end
 
 	lastTargetSearch = 0
-	lastHitTime = 0
 	cachedBestTarget = nil
 	currentVisualTarget = nil
 	lastEquipTime = 0
 	lastVisualSwing = 0
 
-	-- Start accumulator at hitDelay so the very first hit is instant
-	hitsPer10Init = tonumber(Killaura.Values["Hits per 10s"]) or 35
-	hitAccumulator = 10 / math.max(hitsPer10Init, 0.1)
+	-- ACCUMULATOR VARIABLES (Fixes Slider Inaccuracy)
+	accumulatedTime = 0
+	lastFrameTime = os.clock()
 
 	if kaHeartbeatConn then kaHeartbeatConn:Disconnect() end
+
 	kaHeartbeatConn = G.Services.RunService.Heartbeat:Connect(function(deltaTime)
 		if not loops["killaura"] then
 			kaHeartbeatConn:Disconnect()
@@ -7553,13 +7553,19 @@ Killaura.Callbacks.OnToggle = function(state)
 			return
 		end
 
-		hitsPer10 = tonumber(Killaura.Values["Hits per 10s"]) or 35
-		calculatedDelay = 10 / math.max(hitsPer10, 0.1)
+		-- 1. PERFECT TIMING ACCUMULATOR
+		-- We use real deltaTime passed by Heartbeat instead of task.wait()
+		now = os.clock()
+		realDelta = now - lastFrameTime
+		lastFrameTime = now
 
-		-- CRITICAL SERVER HARDCAP FIX:
-		-- The Bedwars server strictly rejects any hit faster than 0.2857s (3.5 CPS / 35 hits per 10s).
-		-- We MUST clamp to 0.285714 to match the server's anti-cheat perfectly and prevent packet dropping.
-		hitDelay = math.max(calculatedDelay, 0.2857142857)
+		-- Cap delta to prevent stockpiling if the game freezes/lags heavily
+		if realDelta > 0.25 then realDelta = 0.016 end
+		accumulatedTime = accumulatedTime + realDelta
+
+		hitsPer10 = tonumber(Killaura.Values["Hits per 10s"]) or 35
+		calculatedDelay = 10 / math.max(hitsPer10, 0.025)
+		hitDelay = math.max(calculatedDelay, 0.025) -- Allow up to ~40 CPS max internally
 
 		if not (Killaura.Values["Target Players"] or Killaura.Values["Target NPCs/Dummies"]) then return end
 
@@ -7583,18 +7589,9 @@ Killaura.Callbacks.OnToggle = function(state)
 			selectionRange = tonumber(Killaura.Values["Swing Range"]) or 50
 		end
 
-		currentTime = os.clock()
-
-		-- PERFECT TIMING ACCUMULATOR:
-		-- Replaces the broken nextHitTime logic. Prevents FPS drift and the "34 becomes 35" bug.
-		hitAccumulator = hitAccumulator + deltaTime
-		if hitAccumulator > hitDelay then
-			hitAccumulator = hitDelay -- Caps to prevent burst-firing when walking back into range
-		end
-		readyToHit = hitAccumulator >= hitDelay
-
-		if currentTime - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
-			lastTargetSearch = currentTime
+		-- 2. TARGET FINDING (Throttled to 150ms to save CPU)
+		if now - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
+			lastTargetSearch = now
 			playertarget, playerdistance = nil, selectionRange
 			npcdummytarget, npcdummydistance = nil, selectionRange
 
@@ -7690,6 +7687,7 @@ Killaura.Callbacks.OnToggle = function(state)
 
 		distance = (rootPart.Position - targetHRP.Position).Magnitude
 
+		-- 3. VISUALS (Highlight & 3D Box)
 		if distance <= selectionRange then
 			if Killaura.Values["Highlight Target"] then
 				kaHighlight.FillColor = Killaura.Values["Highlight Color"]
@@ -7727,6 +7725,7 @@ Killaura.Callbacks.OnToggle = function(state)
 			end
 		end
 
+		-- 4. SWING ANIMATION
 		if Killaura.Values["Swing Animation"] and not Killaura.Values["Manual Swing"] then
 			if distance <= selectionRange then
 				if Killaura.Values["Calculate Swing Speed"] then
@@ -7734,8 +7733,8 @@ Killaura.Callbacks.OnToggle = function(state)
 				else
 					visualCooldown = tonumber(Killaura.Values["Swing Speed"]) or 0.111
 				end
-				if currentTime - lastVisualSwing >= visualCooldown then
-					lastVisualSwing = currentTime
+				if now - lastVisualSwing >= visualCooldown then
+					lastVisualSwing = now
 					if canRequire and kaSwordController then
 						kaSwordController:playSwordEffect({sword = {}}, false, {playAnimation = true, playSound = true})
 					else
@@ -7754,6 +7753,7 @@ Killaura.Callbacks.OnToggle = function(state)
 			faceTarget(char, besttarget)
 		end
 
+		-- 5. VALIDATION CHECKS
 		if distance > reach then return end
 		if math.abs(targetHRP.Position.Y - rootPart.Position.Y) > reach + 2 then return end
 		if Killaura.Values["Wall Check"] and not kaCanSee(besttarget) then return end
@@ -7770,21 +7770,23 @@ Killaura.Callbacks.OnToggle = function(state)
 			if Killaura.Values["Require Sword Equipped"] then
 				return
 			else
-				lastEquipTime = currentTime
-				task.spawn(function()
-					bestSword = getBestEquippedSword(Player.Name)
-					if bestSword then
-						swordInstance = typeof(bestSword) == "Instance" and bestSword or nil
-						if not swordInstance then
-							swapInv = G.Services.RS:FindFirstChild("Inventories")
-							playerInv = swapInv and swapInv:FindFirstChild(Player.Name)
-							swordInstance = playerInv and playerInv:FindFirstChild(tostring(bestSword))
+				if now - lastEquipTime > 0.25 then
+					lastEquipTime = now
+					task.spawn(function()
+						bestSword = getBestEquippedSword(Player.Name)
+						if bestSword then
+							swordInstance = typeof(bestSword) == "Instance" and bestSword or nil
+							if not swordInstance then
+								swapInv = G.Services.RS:FindFirstChild("Inventories")
+								playerInv = swapInv and swapInv:FindFirstChild(Player.Name)
+								swordInstance = playerInv and playerInv:FindFirstChild(tostring(bestSword))
+							end
+							if swordInstance then
+								SetInvItemRemote:InvokeServer({ hand = swordInstance })
+							end
 						end
-						if swordInstance then
-							SetInvItemRemote:InvokeServer({ hand = swordInstance })
-						end
-					end
-				end)
+					end)
+				end
 				return
 			end
 		end
@@ -7796,35 +7798,59 @@ Killaura.Callbacks.OnToggle = function(state)
 
 		if not loops["killaura"] then return end
 
-		if not readyToHit then return end
+		-- 6. THE ACCUMULATOR TRIGGER & ANTI-STUTTER CHECK
+		if accumulatedTime >= hitDelay then
+			-- Prevent accumulator from stockpiling if frame drops occur
+			accumulatedTime = accumulatedTime - hitDelay
+			if accumulatedTime > hitDelay then 
+				accumulatedTime = 0 
+			end
 
-		-- Consume the accumulated time
-		hitAccumulator = 0
+			-- ANTI-STUTTER: Check the game's internal SwordController cooldown
+			-- This prevents the script from firing while the game is buffering an attack, eliminating the 0.3s-0.5s dead zone.
+			canFire = true
+			if canRequire and kaSwordController then
+				serverTime = G.Services.Workspace:GetServerTimeNow()
+				-- Get the weapon's actual attack speed dynamically
+				weaponSpeed = 0.15 -- Default fallback
+				if ItemMetaTable and ItemMetaTable[heldName] and ItemMetaTable[heldName].sword then
+					weaponSpeed = ItemMetaTable[heldName].sword.attackSpeed or 0.15
+				end
 
-		currentKaTarget = besttarget
-		dir = (targetHRP.Position - rootPart.Position).Unit
-		spoofedTargetPosition = targetHRP.Position
-		if distance > 14 then
-			spoofedTargetPosition = targetHRP.Position + ((rootPart.Position - targetHRP.Position).Unit * (distance - 13.5))
+				-- If the game is still on cooldown, DO NOT FIRE. Wait for the next frame.
+				if (serverTime - (kaSwordController.lastAttack or 0)) < weaponSpeed then
+					canFire = false
+					-- Refund the time so we try again immediately on the next frame
+					accumulatedTime = accumulatedTime + hitDelay 
+				end
+			end
+
+			if canFire then
+				currentKaTarget = besttarget
+				dir = (targetHRP.Position - rootPart.Position).Unit
+				spoofedTargetPosition = targetHRP.Position
+				if distance > 14 then
+					spoofedTargetPosition = targetHRP.Position + ((rootPart.Position - targetHRP.Position).Unit * (distance - 13.5))
+				end
+
+				kaArgs = {{
+					chargedAttack = { chargeRatio = 0 },
+					entityInstance = besttarget,
+					validate = {
+						selfPosition = { value = rootPart.Position + dir * 5.5 },
+						targetPosition = { value = spoofedTargetPosition },
+						raycast = {
+							cameraPosition = { value = G.Services.Workspace.CurrentCamera.CFrame.Position },
+							cursorDirection = { value = dir }
+						}
+					},
+					weapon = inventoryWeapon,
+					timeSinceSwingStart = 0
+				}}
+
+				SwordHitRemote:FireServer(unpack(kaArgs))
+			end
 		end
-
-		kaArgs = {{
-			chargedAttack = { chargeRatio = 0 },
-			entityInstance = besttarget,
-			validate = {
-				selfPosition = { value = rootPart.Position + dir * 5.5 },
-				targetPosition = { value = spoofedTargetPosition },
-				raycast = {
-					cameraPosition = { value = G.Services.Workspace.CurrentCamera.CFrame.Position },
-					cursorDirection = { value = dir }
-				}
-			},
-			weapon = inventoryWeapon,
-			timeSinceSwingStart = 0
-		}}
-
-		SwordHitRemote:FireServer(unpack(kaArgs))
-		lastHitTime = currentTime
 	end)
 end
 Player = Player or G.Services.Players.LocalPlayer
@@ -16206,6 +16232,51 @@ uis = G.Services.UIS
 originalWalkSpeed = 16
 PA_BLATANT_COOLDOWNS = {}
 PA_MAX_VIS = 8
+PA_LEGIT_TRACER_COLOR = Color3.fromRGB(0, 255, 163)
+PA_LEGIT_TRACER_ATTACH = nil
+PA_LEGIT_TRACER_BEAM = nil
+
+function paUpdateLegitTracer(origin, aimVt, active)
+	if not active or not aimVt then
+		if PA_LEGIT_TRACER_BEAM then PA_LEGIT_TRACER_BEAM.Enabled = false end
+		return
+	end
+
+	pa_cam = G.Services.Workspace.CurrentCamera
+	if not pa_cam then return end
+
+	if not PA_LEGIT_TRACER_ATTACH or not PA_LEGIT_TRACER_ATTACH.Parent then
+		PA_LEGIT_TRACER_ATTACH = Instance.new("Attachment")
+		PA_LEGIT_TRACER_ATTACH.Name = "PA_LegitTracerA0"
+		PA_LEGIT_TRACER_ATTACH.Parent = pa_cam
+
+		PA_LEGIT_TRACER_A1 = Instance.new("Attachment")
+		PA_LEGIT_TRACER_A1.Name = "PA_LegitTracerA1"
+		PA_LEGIT_TRACER_A1.Parent = pa_cam
+
+		PA_LEGIT_TRACER_BEAM = Instance.new("Beam")
+		PA_LEGIT_TRACER_BEAM.Name = "PA_LegitTracerBeam"
+		PA_LEGIT_TRACER_BEAM.Attachment0 = PA_LEGIT_TRACER_ATTACH
+		PA_LEGIT_TRACER_BEAM.Attachment1 = PA_LEGIT_TRACER_A1
+		PA_LEGIT_TRACER_BEAM.Width0 = 0.25
+		PA_LEGIT_TRACER_BEAM.Width1 = 0.15
+		PA_LEGIT_TRACER_BEAM.FaceCamera = true
+		PA_LEGIT_TRACER_BEAM.LightEmission = 1
+		PA_LEGIT_TRACER_BEAM.Transparency = NumberSequence.new(0)
+		PA_LEGIT_TRACER_BEAM.Color = ColorSequence.new(PA_LEGIT_TRACER_COLOR)
+		PA_LEGIT_TRACER_BEAM.Segments = 10
+		PA_LEGIT_TRACER_BEAM.CurveSize0 = 0
+		PA_LEGIT_TRACER_BEAM.CurveSize1 = 0
+		PA_LEGIT_TRACER_BEAM.Parent = pa_cam
+	end
+
+	pa_endPoint = origin + aimVt.Unit * 200
+	pa_camCf = pa_cam.CFrame
+	PA_LEGIT_TRACER_ATTACH.Position = pa_camCf:PointToObjectSpace(origin)
+	PA_LEGIT_TRACER_A1.Position = pa_camCf:PointToObjectSpace(pa_endPoint)
+	PA_LEGIT_TRACER_BEAM.Color = ColorSequence.new(PA_LEGIT_TRACER_COLOR)
+	PA_LEGIT_TRACER_BEAM.Enabled = true
+end
 
 function paScanFolder(parent, depth)
 	for _, ch in ipairs(parent:GetChildren()) do
@@ -16681,6 +16752,10 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 		char = Players.LocalPlayer.Character
 		hum = char and char:FindFirstChildOfClass("Humanoid")
 		if hum and originalWalkSpeed then hum.WalkSpeed = originalWalkSpeed end
+		paUpdateLegitTracer(nil, nil, false)
+		if PA_LEGIT_TRACER_BEAM then pcall(function() PA_LEGIT_TRACER_BEAM:Destroy() end); PA_LEGIT_TRACER_BEAM = nil end
+		if PA_LEGIT_TRACER_ATTACH then pcall(function() PA_LEGIT_TRACER_ATTACH:Destroy() end); PA_LEGIT_TRACER_ATTACH = nil end
+		if PA_LEGIT_TRACER_A1 then pcall(function() PA_LEGIT_TRACER_A1:Destroy() end); PA_LEGIT_TRACER_A1 = nil end
 		return
 	end
 
@@ -16716,6 +16791,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 				if isCharging then
 					isCharging = false
 					if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+					paUpdateLegitTracer(nil, nil, false)
 					if hum then hum.WalkSpeed = originalWalkSpeed end
 				end
 				task.wait(0.25)
@@ -16741,6 +16817,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 					if isCharging then
 						isCharging = false
 						if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+						paUpdateLegitTracer(nil, nil, false)
 						if hum then hum.WalkSpeed = originalWalkSpeed end
 					end
 					task.wait(0.1)
@@ -16753,6 +16830,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 						if isCharging then
 							isCharging = false
 							if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+							paUpdateLegitTracer(nil, nil, false)
 							if hum then hum.WalkSpeed = originalWalkSpeed end
 						end
 						task.wait(0.05)
@@ -16780,6 +16858,8 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 								if isCharging then
 									isCharging = false
 									if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+									paUpdateLegitTracer(nil, nil, false)
+									
 									if hum then hum.WalkSpeed = originalWalkSpeed end
 								end
 							end
@@ -16788,6 +16868,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 								if isCharging then
 									isCharging = false
 									if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+									paUpdateLegitTracer(nil, nil, false)
 									if hum then hum.WalkSpeed = originalWalkSpeed end
 								end
 								task.wait(0.05)
@@ -16806,32 +16887,52 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 										paPlaySound(currentLoadout.chargeSnd)
 										drawTrack = paPlayAnim(currentLoadout.drawAnim)
 										if drawTrack and drawTrack.Length then paChargeAnimLen = drawTrack.Length end
+										paUpdateLegitTracer(nil, nil, false)
 										if hum then hum.WalkSpeed = paLockedSpeed end
 									end
 
 									if isCharging and hum then hum.WalkSpeed = paLockedSpeed end
+									if isCharging then
+										pa_chargeSpawnO = pa_myPos - PA_HAND_OFFSET
+										pa_chargeVt, _ = paAim(pa_chargeSpawnO, pa_hrp.Position, pa_lead, lg_launchVel, lg_grav, lg_life, pa_tgtG)
+										if pa_chargeVt then
+											paUpdateLegitTracer(pa_chargeSpawnO, pa_chargeVt, true)
+										else
+											paUpdateLegitTracer(nil, nil, false)
+										end
+									end
+
+									pa_spawnO = pa_myPos - PA_HAND_OFFSET
+									pa_vt, pa_t = paAim(pa_spawnO, pa_hrp.Position, pa_lead, lg_launchVel, lg_grav, lg_life, pa_tgtG)
+
+									if pa_vt then
+										paUpdateLegitTracer(pa_spawnO, pa_vt, true)
+									else
+										paUpdateLegitTracer(nil, nil, false)
+									end
 
 									if now - chargeStartTime >= math.max(currentLoadout.maxCharge or 0, paChargeAnimLen) then
-										pa_spawnO = pa_myPos - PA_HAND_OFFSET
-										pa_vt, pa_t = paAim(pa_spawnO, pa_hrp.Position, pa_lead, lg_launchVel, lg_grav, lg_life, pa_tgtG)
-
 										if pa_vt then
 											verifyHeld = paGetHeldName()
 											if verifyHeld ~= currentLoadout.weapon.Name then
 												if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+												paUpdateLegitTracer(nil, nil, false)
 												isCharging = false
 												paLockedSpeed = nil
 												if hum then hum.WalkSpeed = originalWalkSpeed end
 											else
+												paUpdateLegitTracer(pa_spawnO, pa_vt, true)
 												paFireShot(currentLoadout, pa_myPos, pa_spawnO, pa_vt, pa_t, pa_target, lg_grav, currentLoadout.projectile, pa_pm)
 												lastShotTime = now
 												if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+												paUpdateLegitTracer(nil, nil, false)
 												isCharging = false
 												paLockedSpeed = nil
 												if hum then hum.WalkSpeed = originalWalkSpeed end
 											end
 										elseif now - chargeStartTime > (currentLoadout.maxCharge or 0) + 1.5 then
 											if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+											paUpdateLegitTracer(nil, nil, false)
 											isCharging = false
 											paLockedSpeed = nil
 											chargeStartTime = now
@@ -16842,6 +16943,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 									if isCharging then
 										isCharging = false
 										if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
+										paUpdateLegitTracer(nil, nil, false)
 										if hum then hum.WalkSpeed = originalWalkSpeed end
 									end
 								end
@@ -16898,6 +17000,10 @@ ProjectileAssist:CreateToggle("Ignore Telepearls", true, nil)
 ProjectileAssist:CreateToggle("Ignore Fireballs", true, nil)
 ProjectileAssist:CreateDropdown("Target Part", {"Torso", "Head", "Random"}, "Torso", nil, false)
 ProjectileAssist:CreateSlider("FOV", 1, 1000, 100, nil, 1)
+ProjectileAura:CreateColorPicker("Legit Tracer Color", PA_LEGIT_TRACER_COLOR, function(color)
+	PA_LEGIT_TRACER_COLOR = color
+end)
+
 
 PA_FOV_SCALE = 0.18
 PA_LIMB_NAMES = { "Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso", "LeftUpperArm", "RightUpperArm", "LeftUpperLeg", "RightUpperLeg", "LeftHand", "RightHand", "LeftFoot", "RightFoot" }
@@ -28814,7 +28920,7 @@ transpConn = nil
 transpCharConn = nil
 
 function transpApplyPart(part)
-	if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+	if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Name ~= "FW_Cape" then
 		part.LocalTransparencyModifier = Transparency.Values["Amount"] or 0.5
 	end
 end
@@ -28886,16 +28992,16 @@ function removeCape()
 	capePart = nil
 	capeDecal = nil
 	capeWeld = nil
-
-	-- [FIX ADDED]: Re-apply transparency after removing cape
-	task.delay(0.05, function()
-		if loops and loops["transparency"] then
-			local char = Player.Character
-			if char then transpApplyAll(char) end
+	-- Reset all character parts to visible when cape is removed
+	local char = Player.Character
+	if char then
+		for _, desc in ipairs(char:GetDescendants()) do
+			if desc:IsA("BasePart") and desc.Name ~= "HumanoidRootPart" then
+				desc.LocalTransparencyModifier = 0
+			end
 		end
-	end)
+	end
 end
-
 function applyCapeSkin()
 	if not capePart or not capePart.Parent then return end
 	capeImageId = normalizeAssetId(Cape.Values["Image ID"])
