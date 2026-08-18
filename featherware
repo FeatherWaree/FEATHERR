@@ -845,7 +845,6 @@ local function saveConfigToPC()
 	end
 end
 
-
 EntityCache = {
 	Players = {},
 	NPCs = {}
@@ -854,48 +853,82 @@ EntityCache = {
 EC_CS = game:GetService("CollectionService")
 EC_PlayersService = game:GetService("Players")
 
-EC_SortEntity = function(instance)
+-- 1. Helper to safely add to NPCs without duplicates
+EC_AddNPC = function(instance)
 	if not instance:IsA("Model") then return end
-
-	local owner = EC_PlayersService:GetPlayerFromCharacter(instance)
-
-	if owner then
-		if not table.find(EntityCache.Players, instance) then
-			table.insert(EntityCache.Players, instance)
-		end
-	else
-		if instance:FindFirstChildOfClass("Humanoid") then
-			if not table.find(EntityCache.NPCs, instance) then
-				table.insert(EntityCache.NPCs, instance)
-			end
+	if instance:FindFirstChildOfClass("Humanoid") then
+		if not table.find(EntityCache.NPCs, instance) then
+			table.insert(EntityCache.NPCs, instance)
 		end
 	end
 end
 
-EC_RemoveEntity = function(instance)
-	local pIdx = table.find(EntityCache.Players, instance)
-	if pIdx then
-		table.remove(EntityCache.Players, pIdx)
-		return 
-	end
-
+-- 2. Helper to remove from NPCs
+EC_RemoveNPC = function(instance)
 	local nIdx = table.find(EntityCache.NPCs, instance)
 	if nIdx then
 		table.remove(EntityCache.NPCs, nIdx)
 	end
 end
 
-for _, inst in ipairs(EC_CS:GetTagged("entity")) do
-	EC_SortEntity(inst)
+-- 3. Initial Scan for all target NPC tags
+EC_NpcTags = {"entity", "DiamondGuardian", "CryptBoss", "WarlockBoss", "trainingRoomDummy"}
+for _, tag in ipairs(EC_NpcTags) do
+	for _, inst in ipairs(EC_CS:GetTagged(tag)) do
+		EC_AddNPC(inst)
+	end
 end
 
-EC_AddedConn = EC_CS:GetInstanceAddedSignal("entity"):Connect(EC_SortEntity)
-EC_RemovedConn = EC_CS:GetInstanceRemovedSignal("entity"):Connect(EC_RemoveEntity)
+-- 4. Listen for NPC tags added/removed dynamically
+EC_AddedConns = {}
+EC_RemovedConns = {}
 
+for _, tag in ipairs(EC_NpcTags) do
+	table.insert(EC_AddedConns, EC_CS:GetInstanceAddedSignal(tag):Connect(EC_AddNPC))
+	table.insert(EC_RemovedConns, EC_CS:GetInstanceRemovedSignal(tag):Connect(EC_RemoveNPC))
+end
+
+-- 5. PLAYER TRACKING (No CollectionService, tracks characters directly via Player events)
+EC_AddPlayerChar = function(char)
+	if char and char:IsA("Model") then
+		if not table.find(EntityCache.Players, char) then
+			table.insert(EntityCache.Players, char)
+		end
+	end
+end
+
+EC_RemovePlayerChar = function(char)
+	local pIdx = table.find(EntityCache.Players, char)
+	if pIdx then
+		table.remove(EntityCache.Players, pIdx)
+	end
+end
+
+EC_SetupPlayer = function(plr)
+	if plr.Character then
+		EC_AddPlayerChar(plr.Character)
+	end
+	plr.CharacterAdded:Connect(function(newChar)
+		EC_AddPlayerChar(newChar)
+	end)
+	plr.CharacterRemoving:Connect(function(oldChar)
+		EC_RemovePlayerChar(oldChar)
+	end)
+end
+
+-- Scan players already in the server
+for _, plr in ipairs(EC_PlayersService:GetPlayers()) do
+	EC_SetupPlayer(plr)
+end
+
+EC_PlayerAddedConn = EC_PlayersService.PlayerAdded:Connect(EC_SetupPlayer)
+
+-- 6. Cleanup on UI Destroying
 if mainScreenUI then
 	mainScreenUI.Destroying:Connect(function()
-		if EC_AddedConn then EC_AddedConn:Disconnect() end
-		if EC_RemovedConn then EC_RemovedConn:Disconnect() end
+		if EC_PlayerAddedConn then EC_PlayerAddedConn:Disconnect() end
+		for _, conn in ipairs(EC_AddedConns) do conn:Disconnect() end
+		for _, conn in ipairs(EC_RemovedConns) do conn:Disconnect() end
 		table.clear(EntityCache.Players)
 		table.clear(EntityCache.NPCs)
 	end)
@@ -5493,14 +5526,6 @@ Headless:CreateSlider("Transparency", 0, 1,1, function(state)
 end, 0.05)
 
 Night = GameTab:CreateButton("Night", nil, true)
-Fov = GameTab:CreateButton("Fov", nil, true)
-Fov:CreateSlider("Amount", 1, 120, 90, function(state)
-	if loops["fov"] then
-		if G.Services.Workspace:FindFirstChild("Camera") then
-			G.Services.Workspace.CurrentCamera.FieldOfView = state
-		end
-	end
-end)
 
 
 --Kits
@@ -15691,15 +15716,8 @@ AnimationSwitch.Callbacks.OnToggle = function(state)
 	end
 end
 
-Fov.Callbacks.OnToggle = function(state)
-	loops["fov"] = state
 
-	if loops["fov"] then
-		if G.Services.Workspace:FindFirstChild("Camera") then
-			G.Services.Workspace.CurrentCamera.FieldOfView = math.round(Fov.Values["Amount"])
-		end
-	end
-end
+
 
 AutoClicker.Callbacks.OnToggle = function(state)
 	loops["auto clicker"] = state
@@ -29257,3 +29275,4 @@ PlayerAttach.Callbacks.OnToggle = function(state)
 		end
 	end
 end
+
