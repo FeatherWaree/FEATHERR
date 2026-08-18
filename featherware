@@ -1143,6 +1143,9 @@ orginalTitle = nil
 originalAccessories = {}
 isAvatarSpoofed = false
 
+SharedRayParams = RaycastParams.new()
+SharedRayParams.FilterType = Enum.RaycastFilterType.Exclude
+SharedRayParams.IgnoreWater = true
 
 
 local function manualEquipAccessory(char, accessory)
