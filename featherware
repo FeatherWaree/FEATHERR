@@ -8513,7 +8513,7 @@ AimAssist.Callbacks.OnToggle = function(state)
 	end
 
 
-	aimConnection = G.Services.RunService.RenderStepped:Connect(function()
+	aimConnection = G.Services.HeartBeat.RenderStepped:Connect(function()
 
 		if currentTarget and currentTarget.PrimaryPart then
 			targetPart = currentTarget.PrimaryPart
@@ -29214,14 +29214,12 @@ local function attachLoop()
 		end
 	end
 
-	-- Check NPCs (Only checks if we didn't find a player, mirroring your old logic)
 	if not bestTarget and targetNPCs then
 		for _, npc in ipairs(EntityCache.NPCs) do
 			checkTarget(npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart)
 		end
 	end
 
-	-- Execution
 	if bestTarget then
 		local ray = G.Services.Workspace:Raycast(myPos + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), pa_raycastParams)
 		if ray then
@@ -29237,7 +29235,6 @@ local function attachLoop()
 			end
 		end
 
-		-- Facing the target normally, with a slight downward tilt (-15 degrees)
 		local lookCFrame = CFrame.lookAt(myPos, bestTarget.Position)
 		hrp.CFrame = lookCFrame * CFrame.Angles(math.rad(-15), 0, 0)
 	end
@@ -29250,13 +29247,10 @@ PlayerAttach.Callbacks.OnToggle = function(state)
 		if type(startEntityCache) == "function" then
 			startEntityCache()
 		end
-
-		-- 4. CONNECTION MANAGEMENT: Only run the Heartbeat when the ability is actually ON
 		if not attachConnection then
 			attachConnection = RunService.Heartbeat:Connect(attachLoop)
 		end
 	else
-		-- Turn off the heartbeat instantly to save memory and CPU
 		if attachConnection then
 			attachConnection:Disconnect()
 			attachConnection = nil
