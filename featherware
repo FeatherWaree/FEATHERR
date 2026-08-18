@@ -10696,7 +10696,7 @@ function createESPContainer(model)
 	frame2D.BorderSizePixel = 0
 	frame2D.Size = UDim2.fromOffset(0, 0)
 	frame2D.Visible = false
-	frame2D.Parent = mainScreenUI
+	frame2D.Parent = espScreenGui
 
 	stroke2D = Instance.new("UIStroke")
 	stroke2D.Thickness = 1.5
@@ -10748,7 +10748,7 @@ function createESPContainer(model)
 			line.BorderSizePixel = 0
 			line.BackgroundTransparency = 0
 			line.Visible = false
-			line.Parent = mainScreenUI
+			line.Parent = espScreenGui
 
 			stroke = Instance.new("UIStroke")
 			stroke.Thickness = 1
@@ -17813,16 +17813,27 @@ end
 
 KeepSprint.Callbacks.OnToggle = function(state)
 	loops["keep sprint"] = state
-end
 
-cachedChar:GetAttributeChangedSignal("SpeedBoost"):Connect(function()
-	if cachedChar:GetAttribute("SpeedBoost") == 1.5 then
-		if loops["keep sprint"] and canRequire then
-			SprintController.attemptingSprint = true
-			SprintController:startSprinting()
-		end
+	if keepSprintAttrConn then
+		pcall(function() keepSprintAttrConn:Disconnect() end)
+		keepSprintAttrConn = nil
 	end
-end)
+
+	if state and canRequire and SprintController then
+		cachedChar = Player.Character or Player.CharacterAdded:Wait()
+
+		keepSprintAttrConn = cachedChar:GetAttributeChangedSignal("SpeedBoost"):Connect(function()
+			if not loops["keep sprint"] then return end
+
+			if cachedChar:GetAttribute("SpeedBoost") == 1.5 then
+				if SprintController.isSprinting or SprintController.attemptingSprint then
+					SprintController.attemptingSprint = true
+					SprintController:startSprinting()
+				end
+			end
+		end)
+	end
+end
 
 TS_MAP_RADIUS = 30
 TS_MAP_HALF = 150
