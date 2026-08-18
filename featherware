@@ -7624,23 +7624,21 @@ Killaura.Callbacks.OnToggle = function(state)
 			playertarget, playerdistance = nil, selectionRange
 			npcdummytarget, npcdummydistance = nil, selectionRange
 
-			if Killaura.Values["Target Players"] then
-				for _, charModel in ipairs(EntityCache.Players or {}) do
-					if charModel ~= Player.Character and charModel.Parent then
-						local tHRP = charModel:FindFirstChild("HumanoidRootPart")
-						local tHum = charModel:FindFirstChildOfClass("Humanoid")
+			for _, charModel in ipairs(EntityCache.Players or {}) do
+				if charModel ~= Player.Character and charModel.Parent then
+					tHRP = charModel:FindFirstChild("HumanoidRootPart")
+					tHum = charModel:FindFirstChildOfClass("Humanoid")
 
-						if tHRP and tHum and tHum.Health > 0 then
-							local dist = (rootPart.Position - tHRP.Position).Magnitude
-							if dist < playerdistance then
-								playertarget = charModel
-								playerdistance = dist
-							end
+					if tHRP and tHum and tHum.Health > 0 then
+						dist = (rootPart.Position - tHRP.Position).Magnitude
+						if dist < playerdistance then
+							playertarget = charModel
+							playerdistance = dist
 						end
 					end
 				end
 			end
-
+			
 			if Killaura.Values["Target NPCs/Dummies"] then
 				for _, npc in ipairs(EntityCache.NPCs or {}) do
 					if npc and npc.Parent then
