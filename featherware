@@ -845,33 +845,60 @@ local function saveConfigToPC()
 	end
 end
 
-EntityCache = { players = {}, npcs = {} }
-EC_RUNNING = false
 
-function updateEntityCache()
-	local lp = Players.LocalPlayer
-	local pl, np = {}, {}
-	for _, v in pairs(Players:GetPlayers()) do
-		local c = v.Character
-		local h = c and c:FindFirstChild("HumanoidRootPart")
-		local hum = c and c:FindFirstChildOfClass("Humanoid")
-		if v ~= lp and h and hum and hum.Health > 0 and v.Team ~= lp.Team then
-			table.insert(pl, v)
+EntityCache = {
+	Players = {},
+	NPCs = {}
+}
+
+EC_CS = game:GetService("CollectionService")
+EC_PlayersService = game:GetService("Players")
+
+EC_SortEntity = function(instance)
+	if not instance:IsA("Model") then return end
+
+	local owner = EC_PlayersService:GetPlayerFromCharacter(instance)
+
+	if owner then
+		if not table.find(EntityCache.Players, instance) then
+			table.insert(EntityCache.Players, instance)
+		end
+	else
+		if instance:FindFirstChildOfClass("Humanoid") then
+			if not table.find(EntityCache.NPCs, instance) then
+				table.insert(EntityCache.NPCs, instance)
+			end
 		end
 	end
-	for _, m in pairs(G.Services.Workspace:GetChildren()) do
-		if m:IsA("Model") and m.PrimaryPart and m:FindFirstChildOfClass("Humanoid") and not Players:GetPlayerFromCharacter(m) then
-			local hum = m:FindFirstChildOfClass("Humanoid")
-			if hum.Health > 0 then table.insert(np, m) end
-		end
-	end
-	EntityCache.players, EntityCache.npcs = pl, np
 end
 
-function startEntityCache()
-	if EC_RUNNING then return end
-	EC_RUNNING = true
-	task.spawn(function() while true do pcall(updateEntityCache); task.wait(0.2) end end)
+EC_RemoveEntity = function(instance)
+	local pIdx = table.find(EntityCache.Players, instance)
+	if pIdx then
+		table.remove(EntityCache.Players, pIdx)
+		return 
+	end
+
+	local nIdx = table.find(EntityCache.NPCs, instance)
+	if nIdx then
+		table.remove(EntityCache.NPCs, nIdx)
+	end
+end
+
+for _, inst in ipairs(EC_CS:GetTagged("entity")) do
+	EC_SortEntity(inst)
+end
+
+EC_AddedConn = EC_CS:GetInstanceAddedSignal("entity"):Connect(EC_SortEntity)
+EC_RemovedConn = EC_CS:GetInstanceRemovedSignal("entity"):Connect(EC_RemoveEntity)
+
+if mainScreenUI then
+	mainScreenUI.Destroying:Connect(function()
+		if EC_AddedConn then EC_AddedConn:Disconnect() end
+		if EC_RemovedConn then EC_RemovedConn:Disconnect() end
+		table.clear(EntityCache.Players)
+		table.clear(EntityCache.NPCs)
+	end)
 end
 
 loops = {
@@ -7592,21 +7619,21 @@ Killaura.Callbacks.OnToggle = function(state)
 			selectionRange = tonumber(Killaura.Values["Swing Range"]) or 50
 		end
 
-		-- 2. TARGET FINDING (Throttled to 150ms to save CPU)
 		if now - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
 			lastTargetSearch = now
 			playertarget, playerdistance = nil, selectionRange
 			npcdummytarget, npcdummydistance = nil, selectionRange
 
 			if Killaura.Values["Target Players"] then
-				for _, v in ipairs(G.Services.Players:GetPlayers()) do
-					if v ~= Player and v.Character and v.Team ~= Player.Team then
-						tHRP = v.Character:FindFirstChild("HumanoidRootPart")
-						tHum = v.Character:FindFirstChild("Humanoid")
+				for _, charModel in ipairs(EntityCache.Players or {}) do
+					if charModel ~= Player.Character and charModel.Parent then
+						local tHRP = charModel:FindFirstChild("HumanoidRootPart")
+						local tHum = charModel:FindFirstChildOfClass("Humanoid")
+
 						if tHRP and tHum and tHum.Health > 0 then
-							dist = (rootPart.Position - tHRP.Position).Magnitude
+							local dist = (rootPart.Position - tHRP.Position).Magnitude
 							if dist < playerdistance then
-								playertarget = v.Character
+								playertarget = charModel
 								playerdistance = dist
 							end
 						end
@@ -7615,22 +7642,16 @@ Killaura.Callbacks.OnToggle = function(state)
 			end
 
 			if Killaura.Values["Target NPCs/Dummies"] then
-				npcs = (typeof(EntityCache) == "table" and EntityCache.npcs) or {}
-				if #npcs == 0 then
-					for _, obj in ipairs(G.Services.Workspace:GetChildren()) do
-						if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and not Players:GetPlayerFromCharacter(obj) then
-							table.insert(npcs, obj)
-						end
-					end
-				end
-				for _, npc in ipairs(npcs) do
-					tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-					tHum = npc:FindFirstChild("Humanoid")
-					if tHRP and tHum and tHum.Health > 0 then
-						dist = (rootPart.Position - tHRP.Position).Magnitude
-						if dist < npcdummydistance then
-							npcdummytarget = npc
-							npcdummydistance = dist
+				for _, npc in ipairs(EntityCache.NPCs or {}) do
+					if npc and npc.Parent then
+						tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+						tHum = npc:FindFirstChild("Humanoid")
+						if tHRP and tHum and tHum.Health > 0 then
+							dist = (rootPart.Position - tHRP.Position).Magnitude
+							if dist < npcdummydistance then
+								npcdummytarget = npc
+								npcdummydistance = dist
+							end
 						end
 					end
 				end
@@ -10641,6 +10662,11 @@ function isValidTarget(model)
 	end
 end
 
+-- Weak keys prevent memory leaks if the game destroys a character unexpectedly
+activeESPCache = setmetatable({}, {__mode = "k"})
+espConnections = {}
+CollectionService = game:GetService("CollectionService")
+
 function createESPContainer(model)
 	if activeESPCache[model] then return end
 
@@ -10663,13 +10689,14 @@ function createESPContainer(model)
 		CachedJoints = {}
 	}
 
+	-- Parent 2D elements to mainScreenUI so they hide with the menu
 	frame2D = Instance.new("Frame")
 	frame2D.Name = "2D_ESP_Frame"
 	frame2D.BackgroundTransparency = 1
 	frame2D.BorderSizePixel = 0
 	frame2D.Size = UDim2.fromOffset(0, 0)
 	frame2D.Visible = false
-	frame2D.Parent = espScreenGui
+	frame2D.Parent = mainScreenUI
 
 	stroke2D = Instance.new("UIStroke")
 	stroke2D.Thickness = 1.5
@@ -10708,7 +10735,6 @@ function createESPContainer(model)
 	container.Selection3D = sel3D
 	container.Weld3D = weld3D
 
-	-- Pre-cache skeleton joints for heavy optimization
 	jointList = (hum and hum.RigType == Enum.HumanoidRigType.R15) and R15_JOINTS or R6_JOINTS
 	for _, pair in pairs(jointList) do
 		p1 = model:FindFirstChild(pair[1])
@@ -10722,7 +10748,7 @@ function createESPContainer(model)
 			line.BorderSizePixel = 0
 			line.BackgroundTransparency = 0
 			line.Visible = false
-			line.Parent = espScreenGui
+			line.Parent = mainScreenUI
 
 			stroke = Instance.new("UIStroke")
 			stroke.Thickness = 1
@@ -10753,17 +10779,35 @@ function updateESP()
 	cam = G.Services.Workspace.CurrentCamera
 	if not cam then return end
 
-	-- Cache settings to avoid table lookups every frame
-	local mode = getSetting("ESP Mode", "2D")
-	local color2D = getSetting("2D Box Color", Color3.fromRGB(255, 0, 0))
-	local fill2D = getSetting("Fill 2D Box", false)
-	local color3D = getSetting("3D Box Color", Color3.fromRGB(85, 0, 127))
-	local fill3D = getSetting("Fill 3D Box", true)
-	local colorSkel = getSetting("Skeleton Color", Color3.fromRGB(255, 0, 0))
+	mode = getSetting("ESP Mode", "2D")
+	color2D = getSetting("2D Box Color", Color3.fromRGB(255, 0, 0))
+	fill2D = getSetting("Fill 2D Box", false)
+	color3D = getSetting("3D Box Color", Color3.fromRGB(85, 0, 127))
+	fill3D = getSetting("Fill 3D Box", true)
+	colorSkel = getSetting("Skeleton Color", Color3.fromRGB(255, 0, 0))
 
-	-- Get camera position once
-	camPos = G.Services.Workspace.CurrentCamera.CFrame.Position
+	camPos = cam.CFrame.Position
+
+	-- SYNC: Check EntityCache for any new models that need ESP containers created
+	local function syncWithCache(cacheTable)
+		for _, model in ipairs(cacheTable) do
+			if model and model.Parent and not activeESPCache[model] then
+				createESPContainer(model)
+			end
+		end
+	end
+
+	syncWithCache(EntityCache.Players)
+	syncWithCache(EntityCache.NPCs)
+
+	-- Render Loop
 	for model, data in pairs(activeESPCache) do
+		-- CLEANUP: If the model is no longer in the EntityCache, remove its ESP
+		if not table.find(EntityCache.Players, model) and not table.find(EntityCache.NPCs, model) then
+			removeESPContainer(model)
+			continue
+		end
+
 		if not isValidTarget(model) then
 			if data.Frame2D then data.Frame2D.Visible = false end
 			if data.Box3D then data.Box3D.Transparency = 1 end
@@ -10771,16 +10815,8 @@ function updateESP()
 			for _, line in pairs(data.SkeletonLines) do line.Visible = false end
 			continue
 		end
-		hrpPos = data.HRP.Position
-		if (hrpPos - camPos).Magnitude > 500 then
-			if data.Frame2D then data.Frame2D.Visible = false end
-			if data.Box3D then data.Box3D.Transparency = 1 end
-			continue
-		end
 
-		-- 2. DISTANCE CHECK (HUGE FPS SAVIOR)
-		-- If the model is more than 500 studs away, don't render it.
-		local hrpPos = data.HRP.Position
+		hrpPos = data.HRP.Position
 		if (hrpPos - camPos).Magnitude > 500 then
 			if data.Frame2D then data.Frame2D.Visible = false end
 			if data.Box3D then data.Box3D.Transparency = 1 end
@@ -10846,60 +10882,27 @@ function updateESP()
 	end
 end
 
-function scanAndTrackTargets()
-	for _, p in pairs(Players:GetPlayers()) do
-		if p.Character then createESPContainer(p.Character) end
-	end
-	for _, child in pairs(G.Services.Workspace:GetChildren()) do
-		if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
-			if not Players:GetPlayerFromCharacter(child) then
-				createESPContainer(child)
-			end
-		end
-	end
-end
-
 function cleanAllESP()
 	for name, conn in pairs(espConnections) do
-		if conn then conn:Disconnect() end
+		if conn then pcall(function() conn:Disconnect() end) end
 	end
 	espConnections = {}
 	for model, _ in pairs(activeESPCache) do
 		removeESPContainer(model)
 	end
-	activeESPCache = {}
+	activeESPCache = setmetatable({}, {__mode = "k"})
 end
 
 ESP.Callbacks.OnToggle = function(state)
 	if loops then loops["esp"] = state end
 
 	if state then
-		scanAndTrackTargets()
+		-- Initial load of entities currently in the cache
+		for _, model in ipairs(EntityCache.Players) do createESPContainer(model) end
+		for _, model in ipairs(EntityCache.NPCs) do createESPContainer(model) end
 
+		-- Hook the render loop (it now automatically syncs with the EntityCache arrays)
 		espConnections["RenderStepped"] = G.Services.RunService.RenderStepped:Connect(updateESP)
-
-		function hookPlayerEvents(p)
-			espConnections[p.Name .. "_charAdded"] = p.CharacterAdded:Connect(function(char)
-				char:WaitForChild("HumanoidRootPart", 5)
-				createESPContainer(char)
-			end)
-			espConnections[p.Name .. "_charRemoving"] = p.CharacterRemoving:Connect(function(char)
-				removeESPContainer(char)
-			end)
-		end
-
-		for _, p in pairs(Players:GetPlayers()) do hookPlayerEvents(p) end
-
-		espConnections["G.Services.WorkspaceAdded"] = G.Services.Workspace.ChildAdded:Connect(function(child)
-			task.wait(0.2)
-			if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
-				if not Players:GetPlayerFromCharacter(child) then
-					createESPContainer(child)
-				end
-			end
-		end)
-
-		espConnections["G.Services.WorkspaceRemoved"] = G.Services.Workspace.ChildRemoved:Connect(removeESPContainer)
 	else
 		cleanAllESP()
 	end
@@ -12907,10 +12910,16 @@ task.spawn(function()
 		end
 	end
 end)
-speedThread = nil
 speedConnection = nil
-
+speedRetryConn = nil
 consumingPotion = false 
+
+targetSpeed = 20
+hasLegitBoost = false
+timeInCycle = 0
+extraSpeed = 0
+displacement = Vector3.new()
+hrp = nil
 
 Speed.Callbacks.OnToggle = function(value)
 	loops["speed"] = value
@@ -12919,71 +12928,87 @@ Speed.Callbacks.OnToggle = function(value)
 		speedConnection:Disconnect()
 		speedConnection = nil
 	end
+	if speedRetryConn then
+		speedRetryConn:Disconnect()
+		speedRetryConn = nil
+	end
 
 	if loops["speed"] then
+		if not cachedChar or not cachedHumanoid or cachedHumanoid.Health <= 0 then
+			NotificationSystem.Notify("Speed", "Waiting for character to load...", 3)
+
+			speedRetryConn = Player.CharacterAdded:Connect(function(newChar)
+				if loops["speed"] then
+					Speed.Callbacks.OnToggle(true)
+				end
+			end)
+			return 
+		end
+
+		NotificationSystem.Notify("Speed", "Speed enabled.", 2)
+
 		speedConnection = G.Services.RunService.Heartbeat:Connect(function(deltaTime)
 			if not mainScreenUI or mainScreenUI:GetAttribute("Running") == false then return end
+			if not cachedChar or not cachedHumanoid or cachedHumanoid.Health <= 0 then 
+				Speed.Callbacks.OnToggle(true) -- Triggers the retry logic automatically
+				return 
+			end
 
-			local humanoid = cachedHumanoid
-			local hrp = cachedChar and cachedChar:FindFirstChild("HumanoidRootPart")
+			hrp = cachedChar:FindFirstChild("HumanoidRootPart")
+			if not hrp then return end
 
-			if humanoid and hrp and humanoid.Health > 0 then
-				targetSpeed = nil
-				hasLegitBoost = false 
+			targetSpeed = tonumber(Speed.Values["Speed"]) or 20
+			hasLegitBoost = false 
 
-				if zephyrStacks >= 1 then
-					targetSpeed = 34
-					hasLegitBoost = true
-				elseif cachedChar:GetAttribute("SpeedBoost") == 1.5 then
-					targetSpeed = 33
-					hasLegitBoost = true
-				elseif localInventory and localInventory:FindFirstChild("speed_potion") then
-					targetSpeed = 33
-					hasLegitBoost = true
+			if zephyrStacks >= 1 then
+				targetSpeed = 34
+				hasLegitBoost = true
+			elseif cachedChar:GetAttribute("SpeedBoost") == 1.5 then
+				targetSpeed = 33
+				hasLegitBoost = true
+			elseif localInventory and localInventory:FindFirstChild("speed_potion") then
+				targetSpeed = 33
+				hasLegitBoost = true
 
-					-- Consume the potion safely without pausing the Heartbeat loop
-					if not consumingPotion then
-						consumingPotion = true
-						task.spawn(function()
-							print("Consuming speed potion...")
-							G.Services.RS.rbxts_include.node_modules["@rbxts"].net.out._NetManaged.ConsumeItem:InvokeServer({item = localInventory["speed_potion"]})
-							task.wait(1) 
-							consumingPotion = false
-						end)
-					end
-				else
-					targetSpeed = tonumber(Speed.Values["Speed"]) or 20
+				if not consumingPotion then
+					consumingPotion = true
+					NotificationSystem.Notify("Speed Potion", "Consuming speed potion...", 2)
+
+					task.spawn(function()
+						G.Services.RS.rbxts_include.node_modules["@rbxts"].net.out._NetManaged.ConsumeItem:InvokeServer({item = localInventory["speed_potion"]})
+						task.wait(1) 
+						consumingPotion = false
+					end)
 				end
+			end
 
-				if Speed.Values["Speed Booster"] then
-					local timeInCycle = os.clock() % 1.5 
-					if timeInCycle < 1.25 then
-						targetSpeed = targetSpeed + 1
-					end
+			if Speed.Values["Speed Booster"] then
+				timeInCycle = os.clock() % 1.5 
+				if timeInCycle < 1.25 then
+					targetSpeed = targetSpeed + 1
 				end
+			end
 
-				if hasLegitBoost then
-					humanoid.WalkSpeed = targetSpeed
-				elseif targetSpeed <= 20 then
-					humanoid.WalkSpeed = targetSpeed
-				else
-					humanoid.WalkSpeed = 20 
+			if hasLegitBoost then
+				cachedHumanoid.WalkSpeed = targetSpeed
+			elseif targetSpeed <= 20 then
+				cachedHumanoid.WalkSpeed = targetSpeed
+			else
+				cachedHumanoid.WalkSpeed = 20 
 
-					if humanoid.MoveDirection.Magnitude > 0 then
-						local extraSpeed = targetSpeed - 20 
-						local displacement = humanoid.MoveDirection * (extraSpeed * deltaTime)
-						hrp.CFrame = hrp.CFrame + displacement
-					end
+				if cachedHumanoid.MoveDirection.Magnitude > 0 then
+					extraSpeed = targetSpeed - 20 
+					displacement = cachedHumanoid.MoveDirection * (extraSpeed * deltaTime)
+					hrp.CFrame = hrp.CFrame + displacement
 				end
 			end
 		end)
-	else
 		if cachedHumanoid then
 			cachedHumanoid.WalkSpeed = 20
 		end
+		NotificationSystem.Notify("Speed", "Speed disabled.", 2)
 	end
 end
-
 if Player.Character then
 	onCharacterAdded(Player.Character)
 end
@@ -28928,8 +28953,8 @@ function transpApplyPart(part)
 	end
 end
 
-function transpApplyAll(char)
-	for _, desc in ipairs(char:GetDescendants()) do
+function transpApplyAll(targetChar)
+	for _, desc in ipairs(targetChar:GetDescendants()) do
 		transpApplyPart(desc)
 	end
 end
@@ -28937,27 +28962,33 @@ end
 Transparency.Callbacks.OnToggle = function(state)
 	loops["transparency"] = state
 	if state then
-		char = Player.Character
-		if char then
-			transpApplyAll(char)
+		if game:GetService("Players").LocalPlayer.Character then
+			transpApplyAll(game:GetService("Players").LocalPlayer.Character)
 			if transpConn then transpConn:Disconnect() end
-			transpConn = char.DescendantAdded:Connect(transpApplyPart)
+
+			-- task.defer beats Roblox's internal tool initialization so weapons stay transparent
+			transpConn = game:GetService("Players").LocalPlayer.Character.DescendantAdded:Connect(function(desc)
+				task.defer(transpApplyPart, desc)
+			end)
 		end
+
 		if not transpCharConn then
-			transpCharConn = Player.CharacterAdded:Connect(function(newChar)
+			transpCharConn = game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(newChar)
 				if not loops["transparency"] then return end
-				task.wait(0.5)
+				task.wait(0.05)
 				transpApplyAll(newChar)
 				if transpConn then transpConn:Disconnect() end
-				transpConn = newChar.DescendantAdded:Connect(transpApplyPart)
+				transpConn = newChar.DescendantAdded:Connect(function(desc)
+					task.defer(transpApplyPart, desc)
+				end)
 			end)
 		end
 	else
 		if transpConn then transpConn:Disconnect(); transpConn = nil end
 		if transpCharConn then transpCharConn:Disconnect(); transpCharConn = nil end
-		char = Player.Character
-		if char then
-			for _, desc in ipairs(char:GetDescendants()) do
+
+		if game:GetService("Players").LocalPlayer.Character then
+			for _, desc in ipairs(game:GetService("Players").LocalPlayer.Character:GetDescendants()) do
 				if desc:IsA("BasePart") then
 					desc.LocalTransparencyModifier = 0
 				end
@@ -28983,8 +29014,10 @@ function normalizeAssetId(id)
 	if id == "" then return "" end
 	if id:find("^rbxassetid://") then return id end
 	if id:find("^%d+$") then return "rbxassetid://" .. id end
-	local digits = id:match("(%d+)")
-	if digits then return "rbxassetid://" .. digits end
+
+	-- Replaced 'local digits' with a unique global to prevent allocation limit leaks
+	capeDigitsMatch = id:match("(%d+)")
+	if capeDigitsMatch then return "rbxassetid://" .. capeDigitsMatch end
 	return id
 end
 
@@ -28995,23 +29028,28 @@ function removeCape()
 	capePart = nil
 	capeDecal = nil
 	capeWeld = nil
-	-- Reset all character parts to visible when cape is removed
-	local char = Player.Character
-	if char then
-		for _, desc in ipairs(char:GetDescendants()) do
+
+	if game:GetService("Players").LocalPlayer.Character then
+		for _, desc in ipairs(game:GetService("Players").LocalPlayer.Character:GetDescendants()) do
 			if desc:IsA("BasePart") and desc.Name ~= "HumanoidRootPart" then
-				desc.LocalTransparencyModifier = 0
+				-- BUG FIX: Only reset transparency if the Transparency ability is turned OFF
+				if not loops["transparency"] then
+					desc.LocalTransparencyModifier = 0
+				end
 			end
 		end
 	end
 end
+
 function applyCapeSkin()
 	if not capePart or not capePart.Parent then return end
 	capeImageId = normalizeAssetId(Cape.Values["Image ID"])
+
 	if capeDecal then
 		capeDecal:Destroy()
 		capeDecal = nil
 	end
+
 	if capeImageId ~= "" then
 		capeDecal = Instance.new("Decal")
 		capeDecal.Name = "CapeDecal"
@@ -29027,7 +29065,6 @@ function applyCapeSkin()
 		capePart.Material = Enum.Material.Fabric
 	end
 
-	-- [FIX ADDED]: Make sure the cape gets transparent if you change its texture while invisible
 	if loops and loops["transparency"] then
 		capePart.LocalTransparencyModifier = Transparency.Values["Amount"] or 0.5
 	end
@@ -29035,10 +29072,10 @@ end
 
 function buildCape()
 	removeCape()
-	char = Player.Character
-	if not char then return end
-	torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-	if not torso then return end
+	if not game:GetService("Players").LocalPlayer.Character then return end
+
+	capeTorsoInst = game:GetService("Players").LocalPlayer.Character:FindFirstChild("UpperTorso") or game:GetService("Players").LocalPlayer.Character:FindFirstChild("Torso")
+	if not capeTorsoInst then return end
 
 	capePart = Instance.new("Part")
 	capePart.Name = "FW_Cape"
@@ -29052,25 +29089,24 @@ function buildCape()
 	capePart.TopSurface = Enum.SurfaceType.Smooth
 	capePart.BottomSurface = Enum.SurfaceType.Smooth
 
-	capePart.CFrame = torso.CFrame * CFrame.new(0, 1, 0.55) * CFrame.Angles(math.rad(-40), 0, 0) * CFrame.new(0, -1.75, 0)
-	capePart.Parent = char
+	capePart.CFrame = capeTorsoInst.CFrame * CFrame.new(0, 1, 0.55) * CFrame.Angles(math.rad(-40), 0, 0) * CFrame.new(0, -1.75, 0)
+	capePart.Parent = game:GetService("Players").LocalPlayer.Character
 
 	capeWeld = Instance.new("WeldConstraint")
-	capeWeld.Part0 = torso
+	capeWeld.Part0 = capeTorsoInst
 	capeWeld.Part1 = capePart
 	capeWeld.Parent = capePart
 
 	applyCapeSkin()
 
-	-- [FIX ADDED]: Wait for Roblox's engine to finish updating the character, then re-apply transparency
 	task.delay(0.05, function()
-		if loops and loops["transparency"] and char then
-			transpApplyAll(char)
+		if loops and loops["transparency"] and game:GetService("Players").LocalPlayer.Character then
+			transpApplyAll(game:GetService("Players").LocalPlayer.Character)
 		end
 	end)
 end
 
-function capeOnCharacterAdded(char)
+function capeOnCharacterAdded(newCapeChar)
 	task.spawn(function()
 		task.wait(0.5)
 		if capeActive then
@@ -29084,7 +29120,7 @@ Cape.Callbacks.OnToggle = function(state)
 	if state then
 		buildCape()
 		if not capeRespawnConn then
-			capeRespawnConn = Player.CharacterAdded:Connect(capeOnCharacterAdded)
+			capeRespawnConn = game:GetService("Players").LocalPlayer.CharacterAdded:Connect(capeOnCharacterAdded)
 		end
 	else
 		removeCape()
@@ -29101,98 +29137,120 @@ PlayerAttach:CreateToggle("Target NPCs/Dummies", false, nil)
 PlayerAttach:CreateSlider("Angle Check", 0, 360, 360, nil, 1)
 PlayerAttach:CreateSlider("Range", 1, 30, 18, nil, 1)
 
-pa_raycastParams = RaycastParams.new()
+local pa_raycastParams = RaycastParams.new()
 pa_raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 pa_raycastParams.IgnoreWater = true
 
-PlayerAttach.Callbacks.OnToggle = function(state)
-	loops["player attach"] = state
-	if state then
-		startEntityCache()
-		pa_raycastParams.FilterDescendantsInstances = {Player.Character}
-	end
-end
+local attachConnection = nil
+local lastChar = nil
 
-RunService.Heartbeat:Connect(function()
-	if not loops["player attach"] then return end
-
-	char = Player.Character
+local function attachLoop()
+	-- 1. LOCAL VARIABLES: Adding 'local' prevents Lua from doing heavy global lookups
+	local char = Player.Character
 	if not char then return end
-	hrp = char:FindFirstChild("HumanoidRootPart")
-	hum = char:FindFirstChildOfClass("Humanoid")
+
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	local hum = char:FindFirstChildOfClass("Humanoid")
 	if not hrp or not hum or hum.Health <= 0 then return end
 
-	pa_raycastParams.FilterDescendantsInstances = {char}
+	-- 2. TABLE ALLOCATION FIX: Only update the filter table if you respawn
+	if lastChar ~= char then
+		pa_raycastParams.FilterDescendantsInstances = {char}
+		lastChar = char
+	end
 
-	bestTarget = nil
-	bestDist = tonumber(PlayerAttach.Values["Range"]) or 18
-	maxAngle = tonumber(PlayerAttach.Values["Angle Check"]) or 360
+	-- 3. CACHING: Read UI settings once per frame, not per entity check
+	local maxRange = tonumber(PlayerAttach.Values["Range"]) or 18
+	local maxAngle = tonumber(PlayerAttach.Values["Angle Check"]) or 360
+	local targetPlayers = PlayerAttach.Values["Target Players"]
+	local targetNPCs = PlayerAttach.Values["Target NPCs/Dummies"]
 
-	if PlayerAttach.Values["Target Players"] then
-		for _, plr in ipairs(EntityCache.players or {}) do
-			tChar = plr.Character
-			tHRP = tChar and tChar:FindFirstChild("HumanoidRootPart")
-			if tHRP then
-				dist = (hrp.Position - tHRP.Position).Magnitude
-				if dist <= bestDist then
-					valid = true
-					if maxAngle < 360 then
-						lookVec = hrp.CFrame.LookVector
-						dir = (tHRP.Position - hrp.Position).Unit
-						dot = lookVec:Dot(dir)
-						angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
-						if angle > maxAngle then valid = false end
-					end
-					if valid then
-						bestDist = dist
-						bestTarget = tHRP
-					end
-				end
+	local bestTarget = nil
+	local bestDist = maxRange
+
+	-- Cache your position and look vector so we don't recalculate it 20 times per frame
+	local myPos = hrp.Position
+	local myLookVec = hrp.CFrame.LookVector
+
+	-- Helper function to cleanly calculate math without repeating code
+	local function checkTarget(tHRP)
+		if not tHRP then return end
+
+		local tPos = tHRP.Position
+		local dist = (myPos - tPos).Magnitude
+
+		if dist <= bestDist then
+			local valid = true
+			if maxAngle < 360 then
+				local dir = (tPos - myPos).Unit
+				local dot = myLookVec:Dot(dir)
+				local angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+				if angle > maxAngle then valid = false end
+			end
+
+			if valid then
+				bestDist = dist
+				bestTarget = tHRP
 			end
 		end
 	end
 
-	if not bestTarget and PlayerAttach.Values["Target NPCs/Dummies"] then
-		for _, npc in ipairs(EntityCache.npcs or {}) do
-			tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-			if tHRP then
-				dist = (hrp.Position - tHRP.Position).Magnitude
-				if dist <= bestDist then
-					valid = true
-					if maxAngle < 360 then
-						lookVec = hrp.CFrame.LookVector
-						dir = (tHRP.Position - hrp.Position).Unit
-						dot = lookVec:Dot(dir)
-						angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
-						if angle > maxAngle then valid = false end
-					end
-					if valid then
-						bestDist = dist
-						bestTarget = tHRP
-					end
-				end
+	-- Check Players
+	if targetPlayers then
+		-- Using uppercase 'Players' to match your EntityCache format from the previous script
+		for _, model in ipairs(EntityCache.Players) do
+			if model ~= char then 
+				checkTarget(model:FindFirstChild("HumanoidRootPart"))
 			end
 		end
 	end
 
+	-- Check NPCs (Only checks if we didn't find a player, mirroring your old logic)
+	if not bestTarget and targetNPCs then
+		for _, npc in ipairs(EntityCache.NPCs) do
+			checkTarget(npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart)
+		end
+	end
+
+	-- Execution
 	if bestTarget then
-		ray = G.Services.Workspace:Raycast(hrp.Position + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), pa_raycastParams)
+		local ray = G.Services.Workspace:Raycast(myPos + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), pa_raycastParams)
 		if ray then
-			groundY = ray.Position.Y
-			desiredY = groundY + 2 + (hrp.Size.Y / 2)
+			local desiredY = ray.Position.Y + 2 + (hrp.Size.Y * 0.5)
+			local currentVel = hrp.AssemblyLinearVelocity
 
-			if hrp.Position.Y < desiredY - 0.2 then
-				hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, -35, hrp.AssemblyLinearVelocity.Z)
-			elseif hrp.Position.Y > desiredY + 0.2 then
-				hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 35, hrp.AssemblyLinearVelocity.Z)
+			if myPos.Y < desiredY - 0.2 then
+				hrp.AssemblyLinearVelocity = Vector3.new(currentVel.X, -35, currentVel.Z)
+			elseif myPos.Y > desiredY + 0.2 then
+				hrp.AssemblyLinearVelocity = Vector3.new(currentVel.X, 35, currentVel.Z)
 			else
-				hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
+				hrp.AssemblyLinearVelocity = Vector3.new(currentVel.X, 0, currentVel.Z)
 			end
 		end
 
 		-- Facing the target normally, with a slight downward tilt (-15 degrees)
-		lookCFrame = CFrame.lookAt(hrp.Position, bestTarget.Position)
-		finalCFrame = lookCFrame * CFrame.Angles(math.rad(-15), 0, 0)
-		hrp.CFrame = finalCFrame
+		local lookCFrame = CFrame.lookAt(myPos, bestTarget.Position)
+		hrp.CFrame = lookCFrame * CFrame.Angles(math.rad(-15), 0, 0)
 	end
-end)
+end
+
+PlayerAttach.Callbacks.OnToggle = function(state)
+	loops["player attach"] = state
+
+	if state then
+		if type(startEntityCache) == "function" then
+			startEntityCache()
+		end
+
+		-- 4. CONNECTION MANAGEMENT: Only run the Heartbeat when the ability is actually ON
+		if not attachConnection then
+			attachConnection = RunService.Heartbeat:Connect(attachLoop)
+		end
+	else
+		-- Turn off the heartbeat instantly to save memory and CPU
+		if attachConnection then
+			attachConnection:Disconnect()
+			attachConnection = nil
+		end
+	end
+end
