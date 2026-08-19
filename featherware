@@ -890,7 +890,7 @@ end
 
 -- 5. PLAYER TRACKING (No CollectionService, tracks characters directly via Player events)
 EC_AddPlayerChar = function(char)
-	if char and char:IsA("Model") then
+	if char and char:IsA("Model") and char ~= localPlayer.Character then
 		if not table.find(EntityCache.Players, char) then
 			table.insert(EntityCache.Players, char)
 		end
@@ -1079,7 +1079,8 @@ loops = {
 	["hit reg adjuster"] = false,
 	["hitbox expander"] = false,
 	["transparency"] = false,
-	["player attach"] = false
+	["player attach"] = false,
+	["beehive esp"] = false
 }
 
 --REMOTE EVENTS/FUNCTIONS--
@@ -21533,7 +21534,7 @@ pickup_gen = 0
 qc_spawnTimes = {}
 
 ResourceCollector = Utility:CreateButton("Resource Collector", nil, true)
-ResourceCollector:CreateSlider("Pickup Range", 1, 50, 6, function(val)
+ResourceCollector:CreateSlider("Pickup Range", 1, 10, 6, function(val)
 	if loops["resource collector"] then
 		pcall(function() Player:SetAttribute("ResourcePickupRange", val) end)
 	end
@@ -21586,60 +21587,116 @@ end
 QuickCollect = Utility:CreateButton("QuickCollect", nil, true)
 QuickCollect:CreateSlider("Pickup Delay", 0, 0.3, 0, nil, 0.05)
 
+qc_cs = game:GetService("CollectionService")
+qc_rs = game:GetService("ReplicatedStorage")
+qc_player = game:GetService("Players").LocalPlayer
+
+qc_spawnTimes = {}
+qc_connAdded = nil
+qc_connRemoved = nil
+qc_loopConn = nil
+pickup_gen = (pickup_gen or 0)
+
+qc_netManaged = qc_rs:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged")
+qc_pickupRemote = qc_netManaged:WaitForChild("PickupItemDrop")
+
 QuickCollect.Callbacks.OnToggle = function(state)
 	loops["quickcollect"] = state
+	pickup_gen = pickup_gen + 1
+	qc_myGen = pickup_gen
+
+	-- Clean up any existing connections to prevent memory leaks
+	if qc_connAdded then qc_connAdded:Disconnect(); qc_connAdded = nil end
+	if qc_connRemoved then qc_connRemoved:Disconnect(); qc_connRemoved = nil end
+	if qc_loopConn then qc_loopConn:Disconnect(); qc_loopConn = nil end
+
 	if state then
-		pickup_gen = pickup_gen + 1
-		qc_myGen = pickup_gen
-		qc_conn = pickup_cs:GetInstanceAddedSignal("ItemDrop"):Connect(function(qc_item)
+		-- 1. Track spawn times when item drops appear via CollectionService
+		qc_connAdded = qc_cs:GetInstanceAddedSignal("ItemDrop"):Connect(function(qc_item)
 			qc_spawnTimes[qc_item] = tick()
 		end)
-		task.spawn(function()
-			while loops["quickcollect"] and qc_myGen == pickup_gen do
-				task.wait(0.1)
-				pcall(function()
-					qc_char = Player.Character
-					qc_hrp = qc_char and qc_char:FindFirstChild("HumanoidRootPart")
-					if not qc_hrp then return end
-					qc_delay = QuickCollect.Values["Pickup Delay"] or 0
-					qc_range = 6
-					if loops["resource collector"] and ResourceCollector then
-						qc_range = ResourceCollector.Values["Pickup Range"] or 6
-					end
-					qc_items = pickup_cs:GetTagged("ItemDrop")
-					qc_count = 0
-					for _, qc_item in ipairs(qc_items) do
-						if qc_count >= 5 then break end
-						if qc_item and qc_item.Parent then
-							qc_spawn = qc_spawnTimes[qc_item]
-							if qc_spawn and tick() - qc_spawn >= qc_delay then
-								qc_dist = (qc_hrp.Position - qc_item.Position).Magnitude
+
+		qc_connRemoved = qc_cs:GetInstanceRemovedSignal("ItemDrop"):Connect(function(qc_item)
+			qc_spawnTimes[qc_item] = nil
+			pcall(function() qc_item:SetAttribute("ClientPickupAttemptTime", nil) end)
+		end)
+
+		-- Populate items already existing in the world
+		for _, qc_item in ipairs(qc_cs:GetTagged("ItemDrop")) do
+			if not qc_spawnTimes[qc_item] then
+				qc_spawnTimes[qc_item] = tick()
+			end
+		end
+
+		-- 2. Heartbeat-driven check (Optimized to skip frames if character is missing)
+		qc_lastCheck = 0
+		qc_loopConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
+			if not loops["quickcollect"] or qc_myGen ~= pickup_gen then return end
+
+			-- Throttle check to every 0.05 seconds to save CPU, while respecting the slider smoothly
+			qc_lastCheck = qc_lastCheck + dt
+			if qc_lastCheck < 0.05 then return end
+			qc_lastCheck = 0
+
+			pcall(function()
+				qc_char = qc_player.Character
+				qc_hrp = qc_char and qc_char:FindFirstChild("HumanoidRootPart")
+				if not qc_hrp then return end
+
+				qc_delay = QuickCollect.Values["Pickup Delay"] or 0
+				qc_range = 6
+				if loops["resource collector"] and ResourceCollector then
+					qc_range = ResourceCollector.Values["Pickup Range"] or 6
+				end
+
+				qc_count = 0
+				qc_now = tick()
+
+				for qc_item, qc_spawn in pairs(qc_spawnTimes) do
+					if qc_count >= 5 then break end
+
+					if qc_item and qc_item.Parent then
+						if qc_spawn and (qc_now - qc_spawn >= qc_delay) then
+							-- Get the primary part or position of the item drop
+							qc_itemPart = qc_item:IsA("Model") and (qc_item.PrimaryPart or qc_item:FindFirstChildWhichIsA("BasePart")) or qc_item
+
+							if qc_itemPart and qc_itemPart:IsA("BasePart") then
+								qc_dist = (qc_hrp.Position - qc_itemPart.Position).Magnitude
 								if qc_dist <= qc_range then
-									qc_last = qc_item:GetAttribute("ClientPickupAttemptTime")
-									if qc_last == nil or tick() - qc_last > 0.1 then
-										qc_item:SetAttribute("ClientPickupAttemptTime", tick())
-										if pickup_remote then
-											pcall(function() pickup_remote:CallServer({ itemDrop = qc_item }) end)
+									qc_lastAttempt = qc_item:GetAttribute("ClientPickupAttemptTime")
+									if qc_lastAttempt == nil or (qc_now - qc_lastAttempt > 0.1) then
+										qc_item:SetAttribute("ClientPickupAttemptTime", qc_now)
+
+										-- Invoke the server using your exact specified path structure
+										if qc_pickupRemote then
+											task.spawn(function()
+												pcall(function()
+													qc_pickupRemote:InvokeServer({ itemDrop = qc_item })
+												end)
+											end)
 										end
 										qc_count = qc_count + 1
 									end
 								end
 							end
 						end
+					else
+						-- Clean up dead items from the tracking table
+						qc_spawnTimes[qc_item] = nil
 					end
-					for qc_item in pairs(qc_spawnTimes) do
-						if not qc_item.Parent then qc_spawnTimes[qc_item] = nil end
-					end
-				end)
-			end
+				end
+			end)
 		end)
 	else
-		pickup_gen = pickup_gen + 1
-		if qc_conn then qc_conn:Disconnect(); qc_conn = nil end
-		qc_spawnTimes = {}
-		for _, qc_item in ipairs(pickup_cs:GetTagged("ItemDrop")) do
+		-- Full Cleanup / Zero Memory Leak state
+		if qc_connAdded then qc_connAdded:Disconnect(); qc_connAdded = nil end
+		if qc_connRemoved then qc_connRemoved:Disconnect(); qc_connRemoved = nil end
+		if qc_loopConn then qc_loopConn:Disconnect(); qc_loopConn = nil end
+
+		for _, qc_item in ipairs(qc_cs:GetTagged("ItemDrop")) do
 			pcall(function() qc_item:SetAttribute("ClientPickupAttemptTime", nil) end)
 		end
+		table.clear(qc_spawnTimes)
 	end
 end
 
@@ -22196,19 +22253,15 @@ GeneratorESP.Callbacks.OnToggle = function(state)
 		ge_objects = {}
 	end
 end
-
 Nametags = Visuals:CreateButton("Nametags", nil, true)
 Nametags:CreateToggle("Include Own Player", false, nil)
-Nametags:CreateToggle("Show Distance", false, nil)
+Nametags:CreateToggle("Show Name", true, nil)
 Nametags:CreateToggle("Show Kit", true, nil)
 Nametags:CreateToggle("Show Rank", true, nil)
-Nametags:CreateToggle("Ignore Team", false, nil)
 Nametags:CreateSlider("Text Size", 8, 24, 12, nil, 1)
 
 nt_objects = {}
 nt_conns = {}
-NT_ENEMY = Color3.fromRGB(255, 60, 60)
-NT_TEAM = Color3.fromRGB(60, 255, 60)
 
 ntCanReq = canRequire or canrequire or false
 BedwarsKitMetaModule = nil
@@ -22234,18 +22287,18 @@ if ntCanReq then
 		while task.wait(2) do
 			if not loops["nametags"] then continue end
 			if not ntFetchRanksRemote then continue end
-			local missing = {}
+			ntMissing = {}
 			for _, plr in ipairs(Players:GetPlayers()) do
 				if not ntRankCache[plr.UserId] then
-					table.insert(missing, plr.UserId)
+					table.insert(ntMissing, plr.UserId)
 				end
 			end
-			if #missing > 0 then
-				local ok, result = pcall(function()
-					return ntFetchRanksRemote:InvokeServer(missing)
+			if #ntMissing > 0 then
+				ntOk, ntRes = pcall(function()
+					return ntFetchRanksRemote:InvokeServer(ntMissing)
 				end)
-				if ok and type(result) == "table" then
-					for _, data in ipairs(result) do
+				if ntOk and type(ntRes) == "table" then
+					for _, data in ipairs(ntRes) do
 						if data.userId and data.rankDivision then
 							ntRankCache[data.userId] = data.rankDivision
 						end
@@ -22269,21 +22322,21 @@ end
 
 function ntGetRankImage(plr)
 	if not ntCanReq or not ntRankMeta then return nil end
-	local div = ntRankCache[plr.UserId]
-	if not div then
-		div = plr:GetAttribute("RankDivision") or plr:GetAttribute("rankDivision") or plr:GetAttribute("Rank") or plr:GetAttribute("rank")
+	ntDiv = ntRankCache[plr.UserId]
+	if not ntDiv then
+		ntDiv = plr:GetAttribute("RankDivision") or plr:GetAttribute("rankDivision") or plr:GetAttribute("Rank") or plr:GetAttribute("rank")
 	end
-	if not div then return nil end
+	if not ntDiv then return nil end
 
-	local meta = ntRankMeta[div]
-	if meta and meta.image then
-		return meta.image
+	ntMeta = ntRankMeta[ntDiv]
+	if ntMeta and ntMeta.image then
+		return ntMeta.image
 	end
 
-	local divStr = string.lower(tostring(div))
-	local tiers = {"bronze", "silver", "gold", "platinum", "diamond", "emerald", "nightmare"}
-	for _, t in ipairs(tiers) do
-		if string.find(divStr, t) then
+	ntDivStr = string.lower(tostring(ntDiv))
+	ntTiers = {"bronze", "silver", "gold", "platinum", "diamond", "emerald", "nightmare"}
+	for _, t in ipairs(ntTiers) do
+		if string.find(ntDivStr, t) then
 			for _, m in pairs(ntRankMeta) do
 				if m.tier == t and m.image then
 					return m.image
@@ -22294,68 +22347,219 @@ function ntGetRankImage(plr)
 	return nil
 end
 
+function ntUpdateTagVisuals(plr)
+	nt_d = nt_objects[plr]
+	if not nt_d then return end
+
+	nt_isTeam = (Player.Team ~= nil and plr.Team == Player.Team) or (plr == Player)
+
+	if not Nametags.Values["Include Own Player"] and plr == Player then
+		nt_d.bb.Enabled = false
+		return
+	end
+
+	nt_d.bb.Enabled = true
+
+	if nt_isTeam then
+		nt_d.container.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+		nt_d.container.BackgroundTransparency = 0.4
+		nt_d.containerStroke.Color = Color3.fromRGB(255, 255, 255)
+		nt_d.containerStroke.Transparency = 0.5
+
+		nt_d.name.TextColor3 = Color3.fromRGB(255, 255, 255)
+		nt_d.name.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+		nt_d.barBg.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+		nt_d.barStroke.Color = Color3.fromRGB(255, 255, 255)
+		nt_d.fill.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
+		nt_d.fill.BackgroundTransparency = 0.2
+		nt_d.hp.TextColor3 = Color3.fromRGB(240, 240, 240)
+		nt_d.hp.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	else
+		nt_d.container.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+		nt_d.container.BackgroundTransparency = 0.4
+		nt_d.containerStroke.Color = Color3.fromRGB(255, 255, 255)
+		nt_d.containerStroke.Transparency = 0.3
+
+		nt_d.name.TextColor3 = Color3.fromRGB(15, 15, 15)
+		nt_d.name.TextStrokeColor3 = Color3.fromRGB(255, 255, 255)
+		nt_d.barBg.BackgroundColor3 = Color3.fromRGB(210, 210, 210)
+		nt_d.barStroke.Color = Color3.fromRGB(15, 15, 15)
+		nt_d.fill.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+		nt_d.fill.BackgroundTransparency = 0.2
+		nt_d.hp.TextColor3 = Color3.fromRGB(15, 15, 15)
+		nt_d.hp.TextStrokeColor3 = Color3.fromRGB(255, 255, 255)
+	end
+
+	nt_showName = Nametags.Values["Show Name"]
+	if nt_showName == nil then nt_showName = true end
+
+	nt_d.name.Text = plr.DisplayName or plr.Name
+	nt_d.name.TextSize = Nametags.Values["Text Size"] or 12
+	nt_d.name.Visible = nt_showName
+
+	nt_imgKit = (Nametags.Values["Show Kit"] and ntCanReq) and ntKitImage(plr) or nil
+	nt_imgRank = (Nametags.Values["Show Rank"] and ntCanReq) and ntGetRankImage(plr) or nil
+
+	if nt_imgKit then
+		if nt_d.lastKit ~= nt_imgKit then
+			nt_d.lastKit = nt_imgKit
+			pcall(function() nt_d.kit.Image = nt_imgKit end)
+		end
+		nt_d.kit.Visible = true
+	else
+		nt_d.kit.Visible = false
+	end
+
+	if nt_imgRank then
+		if nt_d.lastRank ~= nt_imgRank then
+			nt_d.lastRank = nt_imgRank
+			pcall(function() nt_d.rank.Image = nt_imgRank end)
+		end
+		nt_d.rank.Visible = true
+	else
+		nt_d.rank.Visible = false
+	end
+
+	if nt_showName then
+		nt_d.name.Size = UDim2.new(1, -64, 0, 16)
+		nt_d.icons.Size = UDim2.new(0, 60, 0, 16)
+		nt_d.icons.Position = UDim2.new(1, -60, 0, 0)
+		nt_d.kit.Size = UDim2.fromOffset(24, 24)
+		nt_d.kit.Position = UDim2.new(0, 0, 0.5, -12)
+		nt_d.rank.Size = UDim2.fromOffset(24, 24)
+		nt_d.rank.Position = nt_imgKit and UDim2.new(0, 28, 0.5, -12) or UDim2.new(0, 0, 0.5, -12)
+	else
+		nt_hasKit = nt_imgKit ~= nil
+		nt_hasRank = nt_imgRank ~= nil
+
+		if nt_hasKit and nt_hasRank then
+			nt_d.icons.Size = UDim2.new(0, 56, 0, 26)
+			nt_d.icons.Position = UDim2.new(0.5, -28, 0, 0)
+			nt_d.kit.Size = UDim2.fromOffset(26, 26)
+			nt_d.kit.Position = UDim2.new(0, 0, 0, 0)
+			nt_d.rank.Size = UDim2.fromOffset(26, 26)
+			nt_d.rank.Position = UDim2.new(0, 30, 0, 0)
+		elseif nt_hasKit then
+			nt_d.icons.Size = UDim2.new(0, 26, 0, 26)
+			nt_d.icons.Position = UDim2.new(0.5, -13, 0, 0)
+			nt_d.kit.Size = UDim2.fromOffset(26, 26)
+			nt_d.kit.Position = UDim2.new(0, 0, 0, 0)
+		elseif nt_hasRank then
+			nt_d.icons.Size = UDim2.new(0, 26, 0, 26)
+			nt_d.icons.Position = UDim2.new(0.5, -13, 0, 0)
+			nt_d.rank.Size = UDim2.fromOffset(26, 26)
+			nt_d.rank.Position = UDim2.new(0, 0, 0, 0)
+		else
+			nt_d.icons.Size = UDim2.new(0, 0, 0, 0)
+		end
+	end
+end
+
+function ntBindCharacter(plr, char)
+	nt_d = nt_objects[plr]
+	if not nt_d then return end
+
+	ntHead = char:WaitForChild("Head", 5) or char:WaitForChild("HumanoidRootPart", 5)
+	if ntHead then
+		nt_d.bb.Adornee = ntHead
+	end
+
+	ntHum = char:WaitForChild("Humanoid", 5)
+	if ntHum then
+		if nt_d.healthConn then nt_d.healthConn:Disconnect() end
+		nt_d.healthConn = ntHum.HealthChanged:Connect(function(health)
+			ntPct = math.clamp(health / math.max(ntHum.MaxHealth, 1), 0, 1)
+			nt_d.fill.Size = UDim2.fromScale(ntPct, 1)
+			nt_d.hp.Text = tostring(math.round(health))
+		end)
+		ntPct = math.clamp(ntHum.Health / math.max(ntHum.MaxHealth, 1), 0, 1)
+		nt_d.fill.Size = UDim2.fromScale(ntPct, 1)
+		nt_d.hp.Text = tostring(math.round(ntHum.Health))
+	end
+
+	ntUpdateTagVisuals(plr)
+end
+
 function ntCreateTag(plr)
 	if nt_objects[plr] then return end
 	nt_bb = Instance.new("BillboardGui")
-	nt_bb.Size = UDim2.fromOffset(160, 36)
+	nt_bb.Size = UDim2.new(0, 160, 0, 40)
 	nt_bb.StudsOffset = Vector3.new(0, 3.5, 0)
 	nt_bb.AlwaysOnTop = true
+	nt_bb.ResetOnSpawn = false
 	nt_bb.Parent = G.Services.Workspace
 
+	nt_container = Instance.new("Frame")
+	nt_container.Size = UDim2.fromScale(1, 1)
+	nt_container.Position = UDim2.fromScale(0, 0)
+	nt_container.BackgroundTransparency = 0.4
+	nt_container.BorderSizePixel = 0
+	Instance.new("UICorner", nt_container).CornerRadius = UDim.new(0, 6)
+	nt_container.Parent = nt_bb
+
+	nt_containerStroke = Instance.new("UIStroke")
+	nt_containerStroke.Thickness = 1.5
+	nt_containerStroke.Transparency = 0.4
+	nt_containerStroke.Parent = nt_container
+
 	nt_main = Instance.new("Frame")
-	nt_main.Size = UDim2.fromScale(1, 1)
+	nt_main.Size = UDim2.new(1, -8, 1, -8)
+	nt_main.Position = UDim2.new(0, 4, 0, 4)
 	nt_main.BackgroundTransparency = 1
-	nt_main.Parent = nt_bb
+	nt_main.Parent = nt_container
 
 	nt_name = Instance.new("TextLabel")
-	nt_name.Size = UDim2.new(1, -64, 0, 18)
+	nt_name.Size = UDim2.new(1, -64, 0, 16)
 	nt_name.Position = UDim2.new(0, 0, 0, 0)
 	nt_name.BackgroundTransparency = 1
 	nt_name.Font = Enum.Font.GothamBlack
 	nt_name.TextSize = Nametags.Values["Text Size"] or 12
-	nt_name.TextStrokeTransparency = 0
-	nt_name.TextStrokeColor3 = Color3.fromRGB(10, 10, 10)
+	nt_name.TextStrokeTransparency = 0.2
 	nt_name.TextXAlignment = Enum.TextXAlignment.Center
 	nt_name.TextYAlignment = Enum.TextYAlignment.Center
 	nt_name.TextTruncate = Enum.TextTruncate.AtEnd
 	nt_name.Parent = nt_main
 
 	nt_icons = Instance.new("Frame")
-	nt_icons.Size = UDim2.new(0, 60, 0, 20)
+	nt_icons.Size = UDim2.new(0, 60, 0, 16)
 	nt_icons.Position = UDim2.new(1, -60, 0, 0)
 	nt_icons.BackgroundTransparency = 1
 	nt_icons.Parent = nt_main
 
 	nt_kitImg = Instance.new("ImageLabel")
-	nt_kitImg.Size = UDim2.fromOffset(28, 28)
-	nt_kitImg.Position = UDim2.new(0, 0, 0.5, -14)
+	nt_kitImg.Size = UDim2.fromOffset(24, 24)
+	nt_kitImg.Position = UDim2.new(0, 0, 0.5, -12)
 	nt_kitImg.BackgroundTransparency = 1
 	nt_kitImg.ScaleType = Enum.ScaleType.Fit
 	nt_kitImg.Visible = false
 	nt_kitImg.Parent = nt_icons
 
 	nt_rankImg = Instance.new("ImageLabel")
-	nt_rankImg.Size = UDim2.fromOffset(28, 28)
-	nt_rankImg.Position = UDim2.new(0, 32, 0.5, -14)
+	nt_rankImg.Size = UDim2.fromOffset(24, 24)
+	nt_rankImg.Position = UDim2.new(0, 28, 0.5, -12)
 	nt_rankImg.BackgroundTransparency = 1
 	nt_rankImg.ScaleType = Enum.ScaleType.Fit
 	nt_rankImg.Visible = false
 	nt_rankImg.Parent = nt_icons
 
 	nt_barBg = Instance.new("Frame")
-	nt_barBg.Size = UDim2.new(1, 0, 0, 10)
+	nt_barBg.Size = UDim2.new(1, 0, 0, 12)
 	nt_barBg.Position = UDim2.new(0, 0, 0, 20)
-	nt_barBg.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
-	nt_barBg.BackgroundTransparency = 0.35
+	nt_barBg.BackgroundTransparency = 0.2
 	nt_barBg.BorderSizePixel = 0
-	Instance.new("UICorner", nt_barBg).CornerRadius = UDim.new(0, 5)
+	Instance.new("UICorner", nt_barBg).CornerRadius = UDim.new(0, 4)
 	nt_barBg.Parent = nt_main
+
+	nt_barStroke = Instance.new("UIStroke")
+	nt_barStroke.Thickness = 1
+	nt_barStroke.Transparency = 0.3
+	nt_barStroke.Parent = nt_barBg
 
 	nt_fill = Instance.new("Frame")
 	nt_fill.Size = UDim2.fromScale(1, 1)
-	nt_fill.BackgroundColor3 = NT_ENEMY
+	nt_fill.BackgroundTransparency = 0.2
 	nt_fill.BorderSizePixel = 0
-	Instance.new("UICorner", nt_fill).CornerRadius = UDim.new(0, 5)
+	Instance.new("UICorner", nt_fill).CornerRadius = UDim.new(0, 4)
 	nt_fill.Parent = nt_barBg
 
 	nt_hp = Instance.new("TextLabel")
@@ -22363,88 +22567,40 @@ function ntCreateTag(plr)
 	nt_hp.BackgroundTransparency = 1
 	nt_hp.Font = Enum.Font.GothamBold
 	nt_hp.TextSize = 9
-	nt_hp.TextColor3 = Color3.fromRGB(255, 255, 255)
 	nt_hp.TextStrokeTransparency = 0.2
-	nt_hp.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
 	nt_hp.TextXAlignment = Enum.TextXAlignment.Center
 	nt_hp.TextYAlignment = Enum.TextYAlignment.Center
 	nt_hp.ZIndex = 2
 	nt_hp.Parent = nt_barBg
 
 	nt_objects[plr] = { 
-		bb = nt_bb, name = nt_name, icons = nt_icons, kit = nt_kitImg, rank = nt_rankImg, 
-		barBg = nt_barBg, fill = nt_fill, hp = nt_hp, lastKit = "__none__", lastRank = "__none__" 
+		bb = nt_bb, container = nt_container, containerStroke = nt_containerStroke, 
+		name = nt_name, icons = nt_icons, kit = nt_kitImg, rank = nt_rankImg, 
+		barBg = nt_barBg, barStroke = nt_barStroke, fill = nt_fill, hp = nt_hp, 
+		lastKit = "__none__", lastRank = "__none__", charConn = nil, healthConn = nil
 	}
+
+	nt_objects[plr].charConn = plr.CharacterAdded:Connect(function(char)
+		ntBindCharacter(plr, char)
+	end)
+
+	if plr.Character then
+		ntBindCharacter(plr, plr.Character)
+	end
 end
 
 function ntRemoveTag(plr)
 	if nt_objects[plr] then
+		if nt_objects[plr].charConn then nt_objects[plr].charConn:Disconnect() end
+		if nt_objects[plr].healthConn then nt_objects[plr].healthConn:Disconnect() end
 		pcall(function() nt_objects[plr].bb:Destroy() end)
 		nt_objects[plr] = nil
 	end
 end
 
-function ntUpdateTags()
-	nt_char = Player.Character
-	nt_hrp = nt_char and nt_char:FindFirstChild("HumanoidRootPart")
-	if not nt_hrp then return end
-	for nt_plr, nt_d in pairs(nt_objects) do
-		if not nt_plr.Parent or not nt_plr.Character then nt_d.bb.Enabled = false continue end
-		if not Nametags.Values["Include Own Player"] and nt_plr == Player then nt_d.bb.Enabled = false continue end
-		if Nametags.Values["Ignore Team"] and Player.Team and nt_plr.Team == Player.Team then nt_d.bb.Enabled = false continue end
-
-		nt_root = nt_plr.Character:FindFirstChild("HumanoidRootPart")
-		nt_head = nt_plr.Character:FindFirstChild("Head")
-		nt_hum = nt_plr.Character:FindFirstChildOfClass("Humanoid")
-		if not nt_root or not nt_hum or nt_hum.Health <= 0 then nt_d.bb.Enabled = false continue end
-
-		nt_dist = (nt_root.Position - nt_hrp.Position).Magnitude
-		nt_isTeam = Player.Team ~= nil and nt_plr.Team == Player.Team
-		nt_col = nt_isTeam and NT_TEAM or NT_ENEMY
-
-		nt_d.bb.Enabled = true
-		nt_d.bb.Adornee = nt_head or nt_root
-
-		nt_txt = nt_plr.DisplayName or nt_plr.Name
-		if Nametags.Values["Show Distance"] then
-			nt_txt = nt_txt .. "  •  " .. math.floor(nt_dist) .. "m"
-		end
-		nt_d.name.Text = nt_txt
-		nt_d.name.TextColor3 = nt_col
-		nt_d.name.TextSize = Nametags.Values["Text Size"] or 12
-
-		local offset = Nametags.Values["Show Distance"] and -74 or -60
-		nt_d.icons.Position = UDim2.new(1, offset, 0, 0)
-		nt_d.name.Size = UDim2.new(1, offset - 4, 0, 18)
-
-		nt_imgKit = (Nametags.Values["Show Kit"] and ntCanReq) and ntKitImage(nt_plr) or nil
-		nt_imgRank = (Nametags.Values["Show Rank"] and ntCanReq) and ntGetRankImage(nt_plr) or nil
-
-		if nt_imgKit then
-			if nt_d.lastKit ~= nt_imgKit then
-				nt_d.lastKit = nt_imgKit
-				pcall(function() nt_d.kit.Image = nt_imgKit end)
-			end
-			nt_d.kit.Visible = true
-		else
-			nt_d.kit.Visible = false
-		end
-
-		if nt_imgRank then
-			if nt_d.lastRank ~= nt_imgRank then
-				nt_d.lastRank = nt_imgRank
-				pcall(function() nt_d.rank.Image = nt_imgRank end)
-			end
-			nt_d.rank.Visible = true
-			nt_d.rank.Position = nt_imgKit and UDim2.new(0, 32, 0.5, -14) or UDim2.new(0, 0, 0.5, -14)
-		else
-			nt_d.rank.Visible = false
-		end
-
-		nt_pct = math.clamp(nt_hum.Health / math.max(nt_hum.MaxHealth, 1), 0, 1)
-		nt_d.fill.Size = UDim2.fromScale(nt_pct, 1)
-		nt_d.fill.BackgroundColor3 = nt_col
-		nt_d.hp.Text = tostring(math.round(nt_hum.Health))
+function ntRefreshAll()
+	for p, _ in pairs(nt_objects) do
+		ntUpdateTagVisuals(p)
 	end
 end
 
@@ -22453,18 +22609,23 @@ Nametags.Callbacks.OnToggle = function(state)
 	if state then
 		nt_objects = {}
 		nt_conns = {}
+
 		for _, nt_plr in ipairs(Players:GetPlayers()) do
-			if nt_plr ~= Player or Nametags.Values["Include Own Player"] then ntCreateTag(nt_plr) end
+			ntCreateTag(nt_plr)
 		end
+
 		table.insert(nt_conns, Players.PlayerAdded:Connect(function(plr) 
-			if loops["nametags"] and (plr ~= Player or Nametags.Values["Include Own Player"]) then ntCreateTag(plr) end 
+			if loops["nametags"] then ntCreateTag(plr) end 
 		end))
 		table.insert(nt_conns, Players.PlayerRemoving:Connect(function(plr) ntRemoveTag(plr) end))
-		nt_updateConn = sm_rs2.Heartbeat:Connect(function()
-			if not loops["nametags"] then return end
-			ntUpdateTags()
-		end)
-		table.insert(nt_conns, nt_updateConn)
+
+		table.insert(nt_conns, Player:GetPropertyChangedSignal("Team"):Connect(ntRefreshAll))
+		for _, plr in ipairs(Players:GetPlayers()) do
+			table.insert(nt_conns, plr:GetPropertyChangedSignal("Team"):Connect(ntRefreshAll))
+		end
+		table.insert(nt_conns, Players.PlayerAdded:Connect(function(plr)
+			table.insert(nt_conns, plr:GetPropertyChangedSignal("Team"):Connect(ntRefreshAll))
+		end))
 	else
 		for _, nt_c in ipairs(nt_conns) do pcall(function() nt_c:Disconnect() end) end
 		nt_conns = {}
@@ -22472,7 +22633,6 @@ Nametags.Callbacks.OnToggle = function(state)
 		nt_objects = {}
 	end
 end
-
 Players = G.Services.Players
 Player = Players.LocalPlayer
 RunService = G.Services.RunService
@@ -29276,3 +29436,155 @@ PlayerAttach.Callbacks.OnToggle = function(state)
 	end
 end
 
+BeehiveESP = Visuals:CreateButton("Beehive ESP", nil, true)
+BeehiveESP:CreateToggle("Include Team Hives", true, nil)
+
+beehiveEspCache = {}
+beehiveConnections = {}
+beehiveTrackedConns = {}
+
+removeBeehiveESP = function(instance)
+	if beehiveEspCache[instance] then
+		if beehiveEspCache[instance].Gui then
+			beehiveEspCache[instance].Gui:Destroy()
+		end
+		for _, conn in ipairs(beehiveEspCache[instance].Conns or {}) do
+			conn:Disconnect()
+		end
+		beehiveEspCache[instance] = nil
+	end
+end
+
+checkBeehiveVisibility = function(instance)
+	beehiveData = beehiveEspCache[instance]
+	if not beehiveData or not beehiveData.Gui then return end
+
+	includeTeam = BeehiveESP.Values and BeehiveESP.Values["Include Team Hives"]
+	if includeTeam == nil then includeTeam = true end
+
+	if includeTeam then
+		beehiveData.Gui.Enabled = true
+	else
+		placedBy = instance:GetAttribute("PlacedByUserId")
+		isTeamHive = false
+
+		if placedBy and placedBy == game:GetService("Players").LocalPlayer.UserId then
+			isTeamHive = true
+		elseif placedBy then
+			targetPlr = game:GetService("Players"):GetPlayerByUserId(placedBy)
+			if targetPlr and targetPlr.Team and game:GetService("Players").LocalPlayer.Team and targetPlr.Team == game:GetService("Players").LocalPlayer.Team then
+				isTeamHive = true
+			end
+		end
+
+		if isTeamHive then
+			beehiveData.Gui.Enabled = false
+		else
+			beehiveData.Gui.Enabled = true
+		end
+	end
+end
+
+updateAllBeehiveVisibility = function()
+	for inst, _ in pairs(beehiveEspCache) do
+		checkBeehiveVisibility(inst)
+	end
+end
+
+createBeehiveESP = function(instance)
+	if beehiveEspCache[instance] then return end
+	if not instance:IsA("Instance") then return end
+
+	beehiveTargetPart = instance:IsA("Model") and (instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart")) or instance
+	if not beehiveTargetPart or not beehiveTargetPart:IsA("BasePart") then return end
+
+	beehiveEspCache[instance] = {
+		Gui = nil,
+		Label = nil,
+		Conns = {}
+	}
+
+	beehiveAttachment = Instance.new("Attachment")
+	beehiveAttachment.Name = "BeehiveESP_Attachment"
+	beehiveAttachment.Position = Vector3.new(0, 3.5, 0)
+	beehiveAttachment.Parent = beehiveTargetPart
+
+	beehiveGui = Instance.new("BillboardGui")
+	beehiveGui.Name = "BeehiveESP_Gui"
+	beehiveGui.Size = UDim2.fromOffset(130, 45)
+	beehiveGui.AlwaysOnTop = true
+	beehiveGui.Adornee = beehiveAttachment
+	beehiveGui.Parent = mainScreenUI
+
+	beehiveLabel = Instance.new("TextLabel")
+	beehiveLabel.Size = UDim2.new(1, 0, 1, 0)
+	beehiveLabel.BackgroundTransparency = 0.35
+	beehiveLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+	beehiveLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+	beehiveLabel.TextStrokeTransparency = 0.4
+	beehiveLabel.TextSize = 13
+	beehiveLabel.Font = Enum.Font.SourceSansBold
+	beehiveLabel.Parent = beehiveGui
+
+	beehiveCorner = Instance.new("UICorner")
+	beehiveCorner.CornerRadius = UDim.new(0, 6)
+	beehiveCorner.Parent = beehiveLabel
+
+	beehiveEspCache[instance].Gui = beehiveGui
+	beehiveEspCache[instance].Label = beehiveLabel
+
+	beehiveAttrConn = instance:GetAttributeChangedSignal("Level"):Connect(function()
+		beehiveData = beehiveEspCache[instance]
+		if beehiveData and beehiveData.Label then
+			beehiveLevel = instance:GetAttribute("Level") or 0
+			beehiveData.Label.Text = string.format("Beehive\nBees: %d", beehiveLevel)
+		end
+	end)
+
+	beehiveOwnerConn = instance:GetAttributeChangedSignal("PlacedByUserId"):Connect(function()
+		checkBeehiveVisibility(instance)
+	end)
+
+	beehiveLevel = instance:GetAttribute("Level") or 0
+	beehiveLabel.Text = string.format("Beehive\nBees: %d", beehiveLevel)
+
+	checkBeehiveVisibility(instance)
+
+	beehiveEspCache[instance].Conns = {beehiveAttrConn, beehiveOwnerConn}
+end
+
+BeehiveESP.Callbacks.OnToggle = function(state)
+	loops["beehive esp"] = state
+
+	for _, conn in pairs(beehiveConnections) do
+		if conn then conn:Disconnect() end
+	end
+	beehiveConnections = {}
+
+	for _, conn in pairs(beehiveTrackedConns) do
+		if conn then conn:Disconnect() end
+	end
+	beehiveTrackedConns = {}
+
+	if state then
+		for _, inst in ipairs(game:GetService("CollectionService"):GetTagged("beehive")) do
+			createBeehiveESP(inst)
+		end
+
+		beehiveConnections["Added"] = game:GetService("CollectionService"):GetInstanceAddedSignal("beehive"):Connect(createBeehiveESP)
+		beehiveConnections["Removed"] = game:GetService("CollectionService"):GetInstanceRemovedSignal("beehive"):Connect(removeBeehiveESP)
+
+		table.insert(beehiveTrackedConns, game:GetService("Players").LocalPlayer:GetPropertyChangedSignal("Team"):Connect(updateAllBeehiveVisibility))
+		for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
+			table.insert(beehiveTrackedConns, plr:GetPropertyChangedSignal("Team"):Connect(updateAllBeehiveVisibility))
+		end
+		table.insert(beehiveTrackedConns, game:GetService("Players").PlayerAdded:Connect(function(plr)
+			table.insert(beehiveTrackedConns, plr:GetPropertyChangedSignal("Team"):Connect(updateAllBeehiveVisibility))
+		end))
+	else
+		for inst, _ in pairs(beehiveEspCache) do
+			removeBeehiveESP(inst)
+		end
+		table.clear(beehiveEspCache)
+	end
+end
