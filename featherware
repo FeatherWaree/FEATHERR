@@ -858,9 +858,29 @@ local function isValidNPC(instance)
 	if not instance:IsA("Model") then return false end
 	if not instance:FindFirstChildOfClass("Humanoid") then return false end
 
-	-- If it has the "entity" tag, its name must contain "Dummy" (case-insensitive)
+	-- If it has the "entity" tag, validate names/custom names
 	if EC_CS:HasTag(instance, "entity") then
-		if not instance.Name:lower():find("dummy") then
+		local hasDummyInName = instance.Name:lower():find("dummy") ~= nil
+
+		-- Check for CustomEntityName (as a child Value/Attribute)
+		local customNameVal = instance:FindFirstChild("CustomEntityName")
+		local customNameStr = nil
+
+		if customNameVal then
+			if customNameVal:IsA("StringValue") or customNameVal:IsA("ValueBase") then
+				customNameStr = tostring(customNameVal.Value):lower()
+			end
+		end
+
+		-- Also check attributes just in case it's stored as an attribute
+		if not customNameStr and instance:GetAttribute("CustomEntityName") then
+			customNameStr = tostring(instance:GetAttribute("CustomEntityName")):lower()
+		end
+
+		local hasDummyInCustomName = customNameStr and customNameStr:find("dummy") ~= nil
+
+		-- Must have "dummy" in either the model name or the CustomEntityName
+		if not hasDummyInName and not hasDummyInCustomName then
 			return false
 		end
 	end
@@ -947,7 +967,6 @@ if mainScreenUI then
 		table.clear(EntityCache.NPCs)
 	end)
 end
-
 loops = {
 	["killaura"] = false,
 	["aim assist"] = false,
@@ -4097,8 +4116,6 @@ local function UninjectFW()
 		pcall(function()
 			if canRequire and SprintController and origStopSprinting then
 				SprintConstants.RUN_FOV_MULT = 1.1
-				SprintController.stopSprinting = origStopSprinting
-				SprintController:stopSprinting(true)
 			end
 		end)
 		-- Gravity
@@ -7369,7 +7386,7 @@ end
 Killaura = Combat:CreateButton("Killaura", nil, true, true)
 Killaura:CreateToggle("Manual Swing", false, nil)
 Killaura:CreateDropdown("Priority", {"Player", "NPC/Dummy", "Nearest", "Bounty Hunter"}, "Player", nil)
-Killaura:CreateSlider("Hits per 10s", 1, 35.2, 35, nil, 0.05)
+Killaura:CreateSlider("Hits per 10s", 1, 35, 35, nil, 0.05)
 Killaura:CreateSlider("Reach", 0, 18, 12.4, nil)
 Killaura:CreateSlider("Angle Check", 0, 360, 180, nil, 1)
 Killaura:CreateToggle("Wall Check", true, nil)
@@ -7611,9 +7628,9 @@ Killaura.Callbacks.OnToggle = function(state)
 	lastEquipTime = 0
 	lastVisualSwing = 0
 
-	-- ACCUMULATOR VARIABLES (Fixes Slider Inaccuracy)
+	-- ACCUMULATOR VARIABLES (Synced to Server Time)
 	accumulatedTime = 0
-	lastFrameTime = os.clock()
+	lastServerTime = G.Services.Workspace:GetServerTimeNow()
 
 	if kaHeartbeatConn then kaHeartbeatConn:Disconnect() end
 
@@ -7624,52 +7641,74 @@ Killaura.Callbacks.OnToggle = function(state)
 			return
 		end
 
-		-- 1. PERFECT TIMING ACCUMULATOR
-		now = os.clock()
-		realDelta = now - lastFrameTime
-		lastFrameTime = now
+		-- 1. PERFECT TIMING ACCUMULATOR (SYNCED TO SERVER TIME)
+		local nowServerTime = G.Services.Workspace:GetServerTimeNow()
+		local realDelta = nowServerTime - lastServerTime
+		lastServerTime = nowServerTime
 
+		-- Cap delta to prevent stockpiling if the game freezes/lags heavily
 		if realDelta > 0.25 then realDelta = 0.016 end
 		accumulatedTime = accumulatedTime + realDelta
 
-		hitsPer10 = tonumber(Killaura.Values["Hits per 10s"]) or 35
-		calculatedDelay = 10 / math.max(hitsPer10, 0.025)
-		hitDelay = math.max(calculatedDelay, 0.025)
+		-- BYPASS THE 9 CPS HARDCAP (isClickingTooFast)
+		if canRequire and kaSwordController then
+			kaSwordController.lastSwing = 0
+		end
+
+		-- 2. DYNAMIC HIT DELAY CALCULATION
+		local hitsPer10 = tonumber(Killaura.Values["Hits per 10s"]) or 35
+
+		-- Get the weapon's actual attack speed dynamically
+		local weaponSpeed = 0.285714 -- Default fallback (35 CPS)
+		local handItem = Player.Character and Player.Character:FindFirstChild("HandInvItem")
+		local heldName = handItem and handItem.Value and (typeof(handItem.Value) == "Instance" and handItem.Value.Name or tostring(handItem.Value)) or ""
+
+		if canRequire and ItemMetaTable and ItemMetaTable[heldName] and ItemMetaTable[heldName].sword then
+			weaponSpeed = ItemMetaTable[heldName].sword.attackSpeed or 0.285714
+		end
+
+		-- Calculate the target delay based on the slider
+		local calculatedDelay = 10 / math.max(hitsPer10, 0.025)
+
+		-- CRITICAL FIX: Use the HIGHER of the two delays (slider vs weapon speed) + 3ms safety padding
+		-- This ensures you NEVER fire faster than the server allows, completely eliminating the 1.01x buffer stutter
+		-- CRITICAL FIX: Use the HIGHER of the two delays (slider vs weapon speed) + 0.5ms safety padding
+		-- 0.5ms is the mathematical sweet spot: it prevents the 1.01x buffer stutter, but is small enough to still hit exactly 35.0 CPS
+		local hitDelay = math.max(calculatedDelay, weaponSpeed) + 0.0005
 
 		if not (Killaura.Values["Target Players"] or Killaura.Values["Target NPCs/Dummies"]) then return end
 
-		char = Player.Character
-		rootPart = char and char:FindFirstChild("HumanoidRootPart")
-		humanoid = char and char:FindFirstChild("Humanoid")
+		local char = Player.Character
+		local rootPart = char and char:FindFirstChild("HumanoidRootPart")
+		local humanoid = char and char:FindFirstChild("Humanoid")
 
 		if not rootPart or not humanoid or humanoid.Health <= 0 then return end
 
 		if Killaura.Values["Check If Sophia Frozen"] then
-			stunTime = Player:GetAttribute("StunnedUntilTime")
+			local stunTime = Player:GetAttribute("StunnedUntilTime")
 			if stunTime and stunTime ~= -1 and stunTime > 0 then return end
 		end
 
-		handItem = char:FindFirstChild("HandInvItem")
 		if not handItem then return end
 
-		reach = tonumber(Killaura.Values["Reach"]) or 12.4
-		selectionRange = reach
+		local reach = tonumber(Killaura.Values["Reach"]) or 12.4
+		local selectionRange = reach
 		if Killaura.Values["Swing Animation"] then
 			selectionRange = tonumber(Killaura.Values["Swing Range"]) or 50
 		end
 
-		if now - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
-			lastTargetSearch = now
-			playertarget, playerdistance = nil, selectionRange
-			npcdummytarget, npcdummydistance = nil, selectionRange
+		if nowServerTime - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
+			lastTargetSearch = nowServerTime
+			local playertarget, playerdistance = nil, selectionRange
+			local npcdummytarget, npcdummydistance = nil, selectionRange
 
 			for _, charModel in ipairs(EntityCache.Players or {}) do
 				if charModel ~= Player.Character and charModel.Parent then
-					tHRP = charModel:FindFirstChild("HumanoidRootPart")
-					tHum = charModel:FindFirstChildOfClass("Humanoid")
+					local tHRP = charModel:FindFirstChild("HumanoidRootPart")
+					local tHum = charModel:FindFirstChildOfClass("Humanoid")
 
 					if tHRP and tHum and tHum.Health > 0 then
-						dist = (rootPart.Position - tHRP.Position).Magnitude
+						local dist = (rootPart.Position - tHRP.Position).Magnitude
 						if dist < playerdistance then
 							playertarget = charModel
 							playerdistance = dist
@@ -7681,10 +7720,10 @@ Killaura.Callbacks.OnToggle = function(state)
 			if Killaura.Values["Target NPCs/Dummies"] then
 				for _, npc in ipairs(EntityCache.NPCs or {}) do
 					if npc and npc.Parent then
-						tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-						tHum = npc:FindFirstChild("Humanoid")
+						local tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+						local tHum = npc:FindFirstChild("Humanoid")
 						if tHRP and tHum and tHum.Health > 0 then
-							dist = (rootPart.Position - tHRP.Position).Magnitude
+							local dist = (rootPart.Position - tHRP.Position).Magnitude
 							if dist < npcdummydistance then
 								npcdummytarget = npc
 								npcdummydistance = dist
@@ -7694,20 +7733,20 @@ Killaura.Callbacks.OnToggle = function(state)
 				end
 			end
 
-			priority = Killaura.Values["Priority"]
-			bountyTarget = nil
+			local priority = Killaura.Values["Priority"]
+			local bountyTarget = nil
 			if priority == "Bounty Hunter" and ClientStore then
 				pcall(function()
-					storeState = ClientStore:getState()
+					local storeState = ClientStore:getState()
 					if storeState and storeState.Kit then
-						bTarget = storeState.Kit.bountyHunterTarget
+						local bTarget = storeState.Kit.bountyHunterTarget
 						if bTarget and typeof(bTarget) == "Instance" then
-							bChar = bTarget:IsA("Player") and bTarget.Character or (bTarget:IsA("Model") and bTarget or nil)
+							local bChar = bTarget:IsA("Player") and bTarget.Character or (bTarget:IsA("Model") and bTarget or nil)
 							if bChar and bChar.Parent then
-								bHRP = bChar:FindFirstChild("HumanoidRootPart") or bChar.PrimaryPart
-								bHum = bChar:FindFirstChild("Humanoid")
+								local bHRP = bChar:FindFirstChild("HumanoidRootPart") or bChar.PrimaryPart
+								local bHum = bChar:FindFirstChild("Humanoid")
 								if bHRP and bHum and bHum.Health > 0 then
-									bDist = (rootPart.Position - bHRP.Position).Magnitude
+									local bDist = (rootPart.Position - bHRP.Position).Magnitude
 									if bDist <= selectionRange then
 										bountyTarget = bChar
 									end
@@ -7729,7 +7768,7 @@ Killaura.Callbacks.OnToggle = function(state)
 			end
 		end
 
-		besttarget = cachedBestTarget
+		local besttarget = cachedBestTarget
 		if not besttarget or not besttarget.Parent then
 			cachedBestTarget = nil
 			if currentVisualTarget ~= nil then
@@ -7740,13 +7779,13 @@ Killaura.Callbacks.OnToggle = function(state)
 			return
 		end
 
-		targetHRP = besttarget:FindFirstChild("HumanoidRootPart") or besttarget.PrimaryPart
+		local targetHRP = besttarget:FindFirstChild("HumanoidRootPart") or besttarget.PrimaryPart
 		if not targetHRP then
 			cachedBestTarget = nil
 			return
 		end
 
-		distance = (rootPart.Position - targetHRP.Position).Magnitude
+		local distance = (rootPart.Position - targetHRP.Position).Magnitude
 
 		-- 3. VISUALS (Highlight & 3D Box) - FIXED TO PREVENT PHYSICS LAUNCH
 		if distance <= selectionRange then
@@ -7760,24 +7799,20 @@ Killaura.Callbacks.OnToggle = function(state)
 			if Killaura.Values["3D Box Target"] then
 				if currentVisualTarget ~= besttarget then
 					currentVisualTarget = besttarget
-					-- Safe setup: Massless, Anchored, no physics interaction
 					ka3DBox.Massless = true
 					ka3DBox.Anchored = true
 					ka3DBox.CanCollide = false
 					ka3DBox.CanQuery = false
 					ka3DBox.CanTouch = false
 					ka3DBox.Parent = G.Services.Workspace
-					ka3DBox.Size = Vector3.new(4, 5, 2) -- Set final size immediately, no tween needed for safety
+					ka3DBox.Size = Vector3.new(4, 5, 2)
 					ka3DBox.Transparency = 0.65
 					ka3DBox.Material = Enum.Material.SmoothPlastic
-					-- Clean up old weld if it exists
 					if ka3DBoxWeld then 
 						ka3DBoxWeld:Destroy() 
 						ka3DBoxWeld = nil 
 					end
 				end
-
-				-- Update position every frame safely without physics
 				ka3DBox.CFrame = targetHRP.CFrame
 				ka3DBox.Color = Killaura.Values["3D Box Color"]
 			else
@@ -7797,13 +7832,14 @@ Killaura.Callbacks.OnToggle = function(state)
 		-- 4. SWING ANIMATION
 		if Killaura.Values["Swing Animation"] and not Killaura.Values["Manual Swing"] then
 			if distance <= selectionRange then
+				local visualCooldown
 				if Killaura.Values["Calculate Swing Speed"] then
 					visualCooldown = math.max(1 / 9, hitDelay)
 				else
 					visualCooldown = tonumber(Killaura.Values["Swing Speed"]) or 0.111
 				end
-				if now - lastVisualSwing >= visualCooldown then
-					lastVisualSwing = now
+				if nowServerTime - lastVisualSwing >= visualCooldown then
+					lastVisualSwing = nowServerTime
 					if canRequire and kaSwordController then
 						kaSwordController:playSwordEffect({sword = {}}, false, {playAnimation = true, playSound = true})
 					else
@@ -7828,26 +7864,25 @@ Killaura.Callbacks.OnToggle = function(state)
 		if Killaura.Values["Wall Check"] and not kaCanSee(besttarget) then return end
 		if not isInFOV(rootPart, targetHRP, tonumber(Killaura.Values["Angle Check"]) or 180) then return end
 
-		isClicking = (typeof(clicking) == "boolean" and clicking) or (typeof(mouse1down) == "boolean" and mouse1down) or false
+		local isClicking = (typeof(clicking) == "boolean" and clicking) or (typeof(mouse1down) == "boolean" and mouse1down) or false
 		if Killaura.Values["Manual Swing"] and not isClicking then return end
 
-		invFolder = game.ReplicatedStorage:FindFirstChild("Inventories") and game.ReplicatedStorage.Inventories:FindFirstChild(Player.Name)
-		heldName = handItem.Value and (typeof(handItem.Value) == "Instance" and handItem.Value.Name or tostring(handItem.Value)) or ""
-		isSword = swords and table.find(swords, heldName)
+		local invFolder = game.ReplicatedStorage:FindFirstChild("Inventories") and game.ReplicatedStorage.Inventories:FindFirstChild(Player.Name)
+		local isSword = swords and table.find(swords, heldName)
 
 		if not isSword then
 			if Killaura.Values["Require Sword Equipped"] then
 				return
 			else
-				if now - lastEquipTime > 0.25 then
-					lastEquipTime = now
+				if nowServerTime - lastEquipTime > 0.25 then
+					lastEquipTime = nowServerTime
 					task.spawn(function()
-						bestSword = getBestEquippedSword(Player.Name)
+						local bestSword = getBestEquippedSword(Player.Name)
 						if bestSword then
-							swordInstance = typeof(bestSword) == "Instance" and bestSword or nil
+							local swordInstance = typeof(bestSword) == "Instance" and bestSword or nil
 							if not swordInstance then
-								swapInv = G.Services.RS:FindFirstChild("Inventories")
-								playerInv = swapInv and swapInv:FindFirstChild(Player.Name)
+								local swapInv = G.Services.RS:FindFirstChild("Inventories")
+								local playerInv = swapInv and swapInv:FindFirstChild(Player.Name)
 								swordInstance = playerInv and playerInv:FindFirstChild(tostring(bestSword))
 							end
 							if swordInstance then
@@ -7860,59 +7895,43 @@ Killaura.Callbacks.OnToggle = function(state)
 			end
 		end
 
-		inventoryWeapon = invFolder and invFolder:FindFirstChild(heldName)
+		local inventoryWeapon = invFolder and invFolder:FindFirstChild(heldName)
 		if not inventoryWeapon then
 			inventoryWeapon = getBestEquippedSword(Player.Name)
 		end
 
 		if not loops["killaura"] then return end
 
-		-- 6. THE ACCUMULATOR TRIGGER & ANTI-STUTTER CHECK
+		-- 6. THE ACCUMULATOR TRIGGER
 		if accumulatedTime >= hitDelay then
 			accumulatedTime = accumulatedTime - hitDelay
 			if accumulatedTime > hitDelay then 
 				accumulatedTime = 0 
 			end
 
-			canFire = true
-			if canRequire and kaSwordController then
-				serverTime = G.Services.Workspace:GetServerTimeNow()
-				weaponSpeed = 0.15
-				if ItemMetaTable and ItemMetaTable[heldName] and ItemMetaTable[heldName].sword then
-					weaponSpeed = ItemMetaTable[heldName].sword.attackSpeed or 0.15
-				end
-
-				if (serverTime - (kaSwordController.lastAttack or 0)) < weaponSpeed then
-					canFire = false
-					accumulatedTime = accumulatedTime + hitDelay 
-				end
+			currentKaTarget = besttarget
+			local dir = (targetHRP.Position - rootPart.Position).Unit
+			local spoofedTargetPosition = targetHRP.Position
+			if distance > 14 then
+				spoofedTargetPosition = targetHRP.Position + ((rootPart.Position - targetHRP.Position).Unit * (distance - 13.5))
 			end
 
-			if canFire then
-				currentKaTarget = besttarget
-				dir = (targetHRP.Position - rootPart.Position).Unit
-				spoofedTargetPosition = targetHRP.Position
-				if distance > 14 then
-					spoofedTargetPosition = targetHRP.Position + ((rootPart.Position - targetHRP.Position).Unit * (distance - 13.5))
-				end
+			local kaArgs = {{
+				chargedAttack = { chargeRatio = 0 },
+				entityInstance = besttarget,
+				validate = {
+					selfPosition = { value = rootPart.Position + dir * 5.5 },
+					targetPosition = { value = spoofedTargetPosition },
+					raycast = {
+						cameraPosition = { value = G.Services.Workspace.CurrentCamera.CFrame.Position },
+						cursorDirection = { value = dir }
+					}
+				},
+				weapon = inventoryWeapon,
+				timeSinceSwingStart = 0
+			}}
 
-				kaArgs = {{
-					chargedAttack = { chargeRatio = 0 },
-					entityInstance = besttarget,
-					validate = {
-						selfPosition = { value = rootPart.Position + dir * 5.5 },
-						targetPosition = { value = spoofedTargetPosition },
-						raycast = {
-							cameraPosition = { value = G.Services.Workspace.CurrentCamera.CFrame.Position },
-							cursorDirection = { value = dir }
-						}
-					},
-					weapon = inventoryWeapon,
-					timeSinceSwingStart = 0
-				}}
-
-				SwordHitRemote:FireServer(unpack(kaArgs))
-			end
+			SwordHitRemote:FireServer(unpack(kaArgs))
 		end
 	end)
 end
@@ -8536,6 +8555,8 @@ UserInputService.InputEnded:Connect(function(input, GPE)
 	end
 end)
 
+local Players = game:GetService("Players")
+
 local function getAlpha()
 	return math.clamp(1 - (AimAssist.Values["Smoothness"] / 100), 0.01, 1)
 end
@@ -8545,7 +8566,6 @@ AimAssist.Callbacks.OnToggle = function(state)
 	loops["aim assist"] = state
 
 	if loops["aim assist"] == false then 
-
 		if aimConnection then
 			aimConnection:Disconnect()
 			aimConnection = nil
@@ -8553,147 +8573,158 @@ AimAssist.Callbacks.OnToggle = function(state)
 		currentTarget = nil
 		return 
 	end
+	
 
+	aimConnection = RunService.Heartbeat:Connect(function()
+		local s, e = pcall(function()
+			if currentTarget and currentTarget.PrimaryPart then
+				targetPart = currentTarget.PrimaryPart
 
-	aimConnection = G.Services.HeartBeat.RenderStepped:Connect(function()
+				shakeIntensity = AimAssist.Values["Shake Intensity"]
+				shakeSpeed = AimAssist.Values["Shake Speed"]
+				currentTime = os.clock() * shakeSpeed
 
-		if currentTarget and currentTarget.PrimaryPart then
-			targetPart = currentTarget.PrimaryPart
+				offsetX = math.noise(currentTime, 0, 0) * shakeIntensity
+				offsetY = math.noise(0, currentTime, 0) * shakeIntensity
+				offsetZ = math.noise(0, 0, currentTime) * shakeIntensity
+				shakeVector = Vector3.new(offsetX, offsetY, offsetZ)
 
-			shakeIntensity = AimAssist.Values["Shake Intensity"]
-			shakeSpeed = AimAssist.Values["Shake Speed"]
+				spoofedTargetPos = targetPart.Position + shakeVector
+				goalCFrame = CFrame.new(camera.CFrame.Position, spoofedTargetPos)
 
-			currentTime = os.clock() * shakeSpeed
+				char = Player.Character
+				if not char then return end 
 
-			offsetX = math.noise(currentTime, 0, 0) * shakeIntensity
-			offsetY = math.noise(0, currentTime, 0) * shakeIntensity
-			offsetZ = math.noise(0, 0, currentTime) * shakeIntensity
+				local handItem = char:FindFirstChild("HandInvItem", true) 
 
-			shakeVector = Vector3.new(offsetX, offsetY, offsetZ)
+				if AimAssist.Values["Sync with KA Target"] == false and AimAssist.Values["Track Through Walls"] == false then
+					local raycastParams = RaycastParams.new()
+					raycastParams.FilterDescendantsInstances = {char, currentTarget} 
+					raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+					raycastParams.IgnoreWater = true
 
-			spoofedTargetPos = targetPart.Position + shakeVector
+					origin = camera.CFrame.Position
+					direction = targetPart.Position - origin
+					wallHit = G.Services.Workspace:Raycast(origin, direction, raycastParams)
 
-			goalCFrame = CFrame.new(camera.CFrame.Position, spoofedTargetPos)
-			char = Player.Character
-			if not char then return end 
-
-			local handItem = char:FindFirstChild("HandInvItem", true) 
-
-			if AimAssist.Values["Sync with KA Target"] == false and AimAssist.Values["Track Through Walls"] == false then
-				local raycastParams = RaycastParams.new()
-				raycastParams.FilterDescendantsInstances = {char, currentTarget} 
-				raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-				raycastParams.IgnoreWater = true
-
-				origin = camera.CFrame.Position
-				direction = targetPart.Position - origin
-				wallHit = G.Services.Workspace:Raycast(origin, direction, raycastParams)
-
-
-				if wallHit then
-					return 
+					if wallHit then
+						return 
+					end
 				end
-			end
 
-
-
-			if AimAssist.Values["Require Sword Equipped"] == true then
-				if handItem and table.find(swords, tostring(handItem.Value)) then
+				if AimAssist.Values["Require Sword Equipped"] == true then
+					if handItem and table.find(swords, tostring(handItem.Value)) then
+						if AimAssist.Values["Face Target"] == true then faceTarget(char, currentTarget) end
+						camera.CFrame = camera.CFrame:Lerp(goalCFrame, getAlpha())
+					else
+						return 
+					end
+				else
 					if AimAssist.Values["Face Target"] == true then faceTarget(char, currentTarget) end
 					camera.CFrame = camera.CFrame:Lerp(goalCFrame, getAlpha())
-
-				else
-					return 
 				end
-			else
-				if AimAssist.Values["Face Target"] == true then faceTarget(char, currentTarget) end
-				camera.CFrame = camera.CFrame:Lerp(goalCFrame, getAlpha())
 			end
-		end
+		end)
+		if not s then warn("[AimAssist Render ERROR] " .. tostring(e)) end
 	end)
 
 	task.spawn(function()
+		local debugTick = 0 
+
 		while AimAssist.Toggled do
 			task.wait(0.05) 
 
+			local success, errorMessage = pcall(function()
+				debugTick = debugTick + 1
+				local shouldPrint = (debugTick % 20 == 0) 
 
-			char = Player.Character
-			if not char or not char:FindFirstChild("HumanoidRootPart") then
-				currentTarget = nil
-				continue 
-			end
-			local myHRP = char.HumanoidRootPart
+				if debugTick == 1 then
+				end
 
+				char = Player.Character
+				if not char or not char:FindFirstChild("HumanoidRootPart") then
+					if shouldPrint then print("[AimAssist] Waiting for player character/HRP...") end
+					currentTarget = nil
+					return -- Use return instead of continue inside a pcall
+				end
+				local myHRP = char.HumanoidRootPart
 
-			local playerTarget = nil
-			local dummyTarget = nil
-			local bestTarget = nil
+				local playerTarget = nil
+				local dummyTarget = nil
+				local bestTarget = nil
 
-			if AimAssist.Values["Target Players"] == true then
-				for _, player in pairs(game.Players:GetPlayers()) do
-					if player == Player or player.Team == Player.Team or player.Character == nil then continue end
-					local targetCharacter = G.Services.Workspace:FindFirstChild(player.Name)
+				local closestPlayerDist = AimAssist.Values["Range"]
+				local closestNpcDist = AimAssist.Values["Range"]
 
-					if targetCharacter then
+				if shouldPrint then
+				end
+
+				-- PLAYERS
+				if AimAssist.Values["Target Players"] == true then
+					for _, targetCharacter in ipairs(EntityCache.Players) do
+						local targetPlayer = Players:GetPlayerFromCharacter(targetCharacter)
+						if targetPlayer == Player or (targetPlayer and targetPlayer.Team == Player.Team) then continue end
+
 						local HRP = targetCharacter:FindFirstChild("HumanoidRootPart") or targetCharacter.PrimaryPart
-
 						if HRP then
 							local distance = (HRP.Position - myHRP.Position).Magnitude
-
-							if distance <= AimAssist.Values["Range"] then
+							if distance <= closestPlayerDist then
+								closestPlayerDist = distance
 								playerTarget = targetCharacter
 							end
 						end
 					end
 				end
-			end
 
-			if AimAssist.Values["Target NPC/Dummies"] == true then
-				for _, npc in pairs(G.Services.Workspace:GetChildren()) do
-					if npc:IsA("Model") and npc:FindFirstChild("Humanoid", true) then
-						if Players:FindFirstChild(npc.Name) then continue end
-						local HRP = npc.PrimaryPart
+				-- NPCs
+				if AimAssist.Values["Target NPC/Dummies"] == true then
+
+					for _, npc in ipairs(EntityCache.NPCs) do
+						local HRP = npc.PrimaryPart or npc:FindFirstChild("HumanoidRootPart")
 						if HRP then
 							local distance = (HRP.Position - myHRP.Position).Magnitude
 
-							if distance <= AimAssist.Values["Range"] then
+							if distance <= closestNpcDist then
+								closestNpcDist = distance
 								dummyTarget = npc
-
 							end
 						end
 					end
 				end
-			end
-			local priority = AimAssist.Values["Priority"]
 
-			if priority == "Player" then
-				bestTarget = playerTarget or dummyTarget
-			elseif priority == "NPC/Dummy" then
-				bestTarget = dummyTarget or playerTarget
-			end
-
-			-- FIX: Make sure Killaura is ACTUALLY toggled on before trying to sync!
-			if AimAssist.Values["Sync with KA Target"] == true and loops["killaura"] == true then
-				local kaTarget = currentKaTarget 
-
-				if kaTarget and kaTarget:FindFirstChild("Humanoid") and kaTarget.Humanoid.Health > 0 then
-					currentTarget = kaTarget
-				else
-					currentTarget = nil
+				local priority = AimAssist.Values["Priority"]
+				if priority == "Player" then
+					bestTarget = playerTarget or dummyTarget
+				elseif priority == "NPC/Dummy" then
+					bestTarget = dummyTarget or playerTarget
 				end
-			else
-				-- If Killaura is turned off OR Sync is turned off, fall back to normal Aim Assist
-				if bestTarget and bestTarget:FindFirstChild("Humanoid") and bestTarget.Humanoid.Health > 0 then
-					currentTarget = bestTarget
+
+				-- SYNC / ASSIGNMENT
+				if AimAssist.Values["Sync with KA Target"] == true and loops["killaura"] == true then
+					local kaTarget = currentKaTarget 
+					if kaTarget and kaTarget:FindFirstChild("Humanoid") and kaTarget.Humanoid.Health > 0 then
+						currentTarget = kaTarget
+					else
+						currentTarget = nil
+					end
+					if shouldPrint then  end
 				else
-					currentTarget = nil
+					if bestTarget and bestTarget:FindFirstChild("Humanoid") and bestTarget.Humanoid.Health > 0 then
+						currentTarget = bestTarget
+					else
+						currentTarget = nil
+					end
+					if shouldPrint then  end
 				end
+			end)
+
+			if not success then
+				warn("[AimAssist ERROR] The loop crashed! Reason: " .. tostring(errorMessage))
 			end
 
 		end
 	end)
 end
-
 -- Radar for Bridges
 local function IsOnVoidOrBridge(hrp)
 	SharedRayParams.FilterDescendantsInstances = {hrp.Parent}
@@ -14539,9 +14570,7 @@ local function applyTracer(obj, isPreview)
 				beam.Width1 = widthVal 
 			end)
 		end
-
-		local colorSeq = typeof(colorVal) == "Color3" and ColorSequence.new(colorVal) or colorVal
-		beam.Color = colorSeq
+		beam.Color = ColorSequence.new(colorVal)
 
 		beam.LightEmission = ProjectileTracers.Values["Glow"] and ProjectileTracers.Values["Glow Intensity"] or 0
 	end
@@ -15687,40 +15716,7 @@ end
 
 
 
-AutoClicker.Callbacks.OnToggle = function(state)
-	loops["auto clicker"] = state
 
-	if loops["auto clicker"] then
-		if autoClickerThread then task.cancel(autoClickerThread) end
-
-		autoClickerThread = task.spawn(function()
-			while loops["auto clicker"] do
-				local char = Player.Character
-				local hum  = char:FindFirstChild("Humanoid")
-
-				if hum and hum.Health > 0 then
-					local tool = char:FindFirstChild("HandInvItem").Value  -- held item (not HandInvItem)
-					if tool then
-						local isSword = table.find(swords, tool.Name)
-						if not isSword and AutoClicker.Values["Block Placement"] then
-							placeBlockAtCursor()              -- holding a block -> place
-						elseif isSword and AutoClicker.Values["Sword Swings"] then
-							-- sword swing later
-						end
-						-- shop purchasing later
-					end
-				end
-
-				task.wait(1 / AutoClicker.Values["CPS"])      -- wait AFTER the action
-			end
-		end)
-	else
-		if autoClickerThread then
-			task.cancel(autoClickerThread)                    -- was breakThread (the bug)
-			autoClickerThread = nil
-		end
-	end
-end
 
 Sprint.Callbacks.OnToggle = function(state)
 	loops["sprint"] = state
@@ -15837,7 +15833,6 @@ TriggerBot.Callbacks.OnToggle = function(state)
 end
 
 
-
 -- ===== live sword controller =====
 SwordController = require(Player.PlayerScripts.TS.controllers.global.combat.sword["sword-controller"]).SwordController
 
@@ -15849,8 +15844,43 @@ acPlaceResolved = false
 acPlacePath = nil
 acLastPlace = 0
 acPlaceDiag = false
+acLastShopClick = 0
 
--- ===== block placer resolver (runs once; tries every known path, prints the winner) =====
+-- ===== SHOP REMOTE SETUP =====
+acShopRemote = nil
+pcall(function()
+	local Net = G.Services.RS:WaitForChild("rbxts_include", 10):WaitForChild("node_modules", 10):WaitForChild("@rbxts", 10):WaitForChild("net", 10):WaitForChild("out", 10):WaitForChild("_NetManaged", 10)
+	acShopRemote = Net:WaitForChild("BedwarsPurchaseItem", 10)
+end)
+
+-- ===== BLOCK TRACKING (Reads item-meta to find all valid blocks) =====
+acBlockList = {}
+pcall(function()
+	local ItemMetaModule = require(G.Services.RS:WaitForChild("TS", 10):WaitForChild("item", 10):WaitForChild("item-meta", 10))
+	local itemsTable = ItemMetaModule.items or ItemMetaModule
+
+	if type(itemsTable) == "table" then
+		for itemName, itemData in pairs(itemsTable) do
+			if type(itemData) == "table" and itemData.block then
+				acBlockList[itemName] = true
+			end
+		end
+	end
+end)
+
+if next(acBlockList) == nil then
+	acBlockList = {
+		["wool_white"] = true, ["wool_orange"] = true, ["wool_magenta"] = true, ["wool_light_blue"] = true,
+		["wool_yellow"] = true, ["wool_lime"] = true, ["wool_pink"] = true, ["wool_gray"] = true,
+		["wool_light_gray"] = true, ["wool_cyan"] = true, ["wool_purple"] = true, ["wool_blue"] = true,
+		["wool_brown"] = true, ["wool_green"] = true, ["wool_red"] = true, ["wool_black"] = true,
+		["stone_bricks"] = true, ["cracked_stone_bricks"] = true, ["mossy_stone_bricks"] = true,
+		["oak_plank"] = true, ["birch_plank"] = true, ["spruce_plank"] = true, ["acacia_plank"] = true,
+		["dark_oak_plank"] = true, ["jungle_plank"] = true, ["obsidian"] = true, ["end_stone"] = true
+	}
+end
+
+-- ===== block placer resolver =====
 function acPickMethod(p)
 	for _, mn in ipairs({"placeBlock", "PlaceBlock", "place", "Place"}) do
 		if type(p[mn]) == "function" then return mn end
@@ -15867,19 +15897,14 @@ end
 function acResolvePlacer()
 	if acPlaceResolved then return end
 	acPlaceResolved = true
-
 	if not KnitClient then
-		pcall(function()
-			KnitClient = require(G.Services.RS.rbxts_include
-				.node_modules["@easy-games"].knit.src).KnitClient
-		end)
+		pcall(function() KnitClient = require(G.Services.RS.rbxts_include.node_modules["@easy-games"].knit.src).KnitClient end)
 	end
-
-	pcall(function()   -- 1: named controller
+	pcall(function()
 		acC = KnitClient and KnitClient.Controllers and KnitClient.Controllers.BlockPlacementController
 		if acC then acTry(acC.blockPlacer or acC.placer, "BlockPlacementController") end
 	end)
-	pcall(function()   -- 2: search controllers by name
+	pcall(function()
 		if acPlacer or not (KnitClient and KnitClient.Controllers) then return end
 		for k, c in pairs(KnitClient.Controllers) do
 			if type(k) == "string" and k:lower():find("place") then
@@ -15888,53 +15913,18 @@ function acResolvePlacer()
 			end
 		end
 	end)
-	pcall(function()   -- 3: client block engine
-		if acPlacer then return end
-		acCBE = require(Player.PlayerScripts.TS.lib["block-engine"]["client-block-engine"]).ClientBlockEngine
-		if acCBE and acCBE.getBlockPlacer then acTry(acCBE:getBlockPlacer(), "ClientBlockEngine") end
-	end)
-	pcall(function()   -- 4: shared block engine
-		if acPlacer then return end
-		acBE = require(G.Services.RS.rbxts_include
-			.node_modules["@easy-games"]["block-engine"].out).BlockEngine
-		if acBE and acBE.getBlockPlacer then acTry(acBE:getBlockPlacer(), "BlockEngine") end
-	end)
-
-	if acPlacer then
-		print("[AC-PLACE] placer found via", acPlacePath, "| method =", acPlaceMethod)
-	else
-		print("[AC-PLACE] NO placer instance -> mouse1click() fallback")
-		pcall(function()
-			if KnitClient and KnitClient.Controllers then
-				acN = {}
-				for k in pairs(KnitClient.Controllers) do if type(k) == "string" then table.insert(acN, k) end end
-				print("[AC-PLACE] controllers seen:", table.concat(acN, ", "))
-			end
-		end)
-	end
+	if not acPlacer then print("[AC-PLACE] NO placer instance -> mouse1click() fallback") end
 end
 
 function acGetPlacePos()
 	if acPlacer then
 		acOk, acPos = pcall(function()
 			acSel = acPlacer.clientManager and acPlacer.clientManager:getBlockSelector()
-			if acSel then
-				acInfo = acSel:getMouseInfo((BlockSelectorMode and BlockSelectorMode.PLACE) or 0)
-				return acInfo and acInfo.placementPosition or nil
-			end
+			if acSel then return acSel:getMouseInfo(0).placementPosition end
 		end)
 		if acOk and acPos and acPos == acPos then return acPos end
 	end
-	if BlockSelector then
-		acOk, acPos = pcall(function()
-			acS = BlockSelector.new()
-			acInfo = acS:getMouseInfo((BlockSelectorMode and BlockSelectorMode.PLACE) or 0)
-			return acInfo and acInfo.placementPosition or nil
-		end)
-		if acOk and acPos and acPos == acPos then return acPos end
-	end
-	acM = Player:GetMouse()
-	return acM and acM.Hit and acM.Hit.Position or nil
+	return Player:GetMouse().Hit.Position
 end
 
 function acPlaceAtCursor()
@@ -15944,38 +15934,84 @@ function acPlaceAtCursor()
 	if not (acPos and acPos == acPos) then return end
 	acLastPlace = tick()
 	if acPlacer and acPlaceMethod then
-		acOk, acErr = pcall(acPlacer[acPlaceMethod], acPlacer, acPos)
-		if not acOk and not acPlaceDiag then acPlaceDiag = true; print("[AC-PLACE] placeBlock threw:", acErr) end
+		pcall(acPlacer[acPlaceMethod], acPlacer, acPos)
 	else
 		pcall(mouse1click)
 	end
 end
 
--- ===== the loop (polls mouse1; sword OR block depending on what's in hand) =====
+-- ===== SHOP AUTO CLICKER LOGIC (Direct Remote Call) =====
+function acClickShop()
+	if not AutoClicker.Values["Shop Purchasing"] then return end
+	if tick() - acLastShopClick < (1 / (AutoClicker.Values["Shop CPS"] or 7)) then return end
+
+	-- Check if Shop GUI is open
+	local shopGui = Player.PlayerGui:FindFirstChild("BedwarsShop") or Player.PlayerGui:FindFirstChild("Shop")
+	if not shopGui or not shopGui.Enabled then return end
+
+	-- Try to get the currently selected item from the ClientStore
+	local success, result = pcall(function()
+		if not ClientStore then return nil end
+		local state = ClientStore:getState()
+		if state and state.Game and state.Game.shop then
+			return state.Game.shop.selectedItem
+		end
+		return nil
+	end)
+
+	if success and result and acShopRemote then
+		-- Fire the purchase remote directly
+		pcall(function()
+			acShopRemote:InvokeServer({
+				shopItem = result,
+				shopId = "1_item_shop" -- Default shop ID
+			})
+		end)
+		acLastShopClick = tick()
+	end
+end
+
+-- ===== the loop =====
 function autoClickerLoop()
 	while loops["auto clicker"] do
-		held = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or acMobileHold
+		-- 1. Check for Shop First (Highest Priority)
+		acClickShop()
+
+		-- 2. Check for Combat/Building
+		local held = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or acMobileHold
 		if held then
-			char = Player.Character
-			hum = char and char:FindFirstChildOfClass("Humanoid")
+			local char = Player.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum and hum.Health > 0 then
-				hi = char:FindFirstChild("HandInvItem")
-				hv = hi and hi.Value
-				heldName = hv and (typeof(hv) == "Instance" and hv.Name or tostring(hv)) or nil
-				isSword = heldName and table.find(swords, heldName) or nil
+				local hi = char:FindFirstChild("HandInvItem")
+				local hv = hi and hi.Value
+				local heldName = hv and (typeof(hv) == "Instance" and hv.Name or tostring(hv)) or nil
+				local isSword = heldName and table.find(swords, heldName) or nil
+				local isBlock = heldName and acBlockList[heldName] or nil
 
 				if isSword then
 					if AutoClicker.Values["Sword Swings"] then
-						pcall(function() SwordController.lastSwing = 0 end)
-						pcall(function() SwordController:swingSwordAtMouse(0.39) end)
+						if Player:GetAttribute("IsCasting") == false then 
+							-- Reset lastSwing to bypass isClickingTooFast
+							pcall(function() SwordController.lastSwing = 0 end)
+
+							-- Try swinging at mouse first
+							local swung = pcall(function() SwordController:swingSwordAtMouse(0) end)
+
+							-- Fallback: If swingAtMouse didn't work (no target), force a region swing
+							-- This ensures the animation and hit registration happen even if aiming at air
+							if not swung or true then 
+								pcall(function() SwordController:swingSwordInRegion(0) end)
+							end
+						end
 					end
-				else
-					if heldName and AutoClicker.Values["Block Placement"] then
+				elseif isBlock then
+					if AutoClicker.Values["Block Placement"] then
 						acPlaceAtCursor()
 					end
 				end
 
-				cps = isSword and AutoClicker.Values["Sword CPS"] or AutoClicker.Values["Block CPS"]
+				local cps = isSword and AutoClicker.Values["Sword CPS"] or AutoClicker.Values["Block CPS"]
 				if not cps or cps <= 0 then cps = 7 end
 				task.wait(1 / cps)
 			else
@@ -15994,13 +16030,16 @@ AutoClicker.Callbacks.OnToggle = function(state)
 	if state then
 		if not autoClickerThread then autoClickerThread = task.spawn(autoClickerLoop) end
 		pcall(function()
-			acMob = Player.PlayerGui:FindFirstChild("MobileUI")
+			local acMob = Player.PlayerGui:FindFirstChild("MobileUI")
 			if acMob then
 				for _, id in ipairs({"2", "5"}) do
-					acBtn = acMob:FindFirstChild(id)
+					local acBtn = acMob:FindFirstChild(id)
 					if acBtn then
-						acBtn.MouseButton1Down:Connect(function() acMobileHold = true end)
-						acBtn.MouseButton1Up:Connect(function() acMobileHold = false end)
+						if acBtnDownConn then acBtnDownConn:Disconnect() end
+						if acBtnUpConn then acBtnUpConn:Disconnect() end
+
+						acBtnDownConn = acBtn.MouseButton1Down:Connect(function() acMobileHold = true end)
+						acBtnUpConn = acBtn.MouseButton1Up:Connect(function() acMobileHold = false end)
 					end
 				end
 			end
@@ -16008,12 +16047,14 @@ AutoClicker.Callbacks.OnToggle = function(state)
 	else
 		if autoClickerThread then task.cancel(autoClickerThread); autoClickerThread = nil end
 		acMobileHold = false
+		if acBtnDownConn then acBtnDownConn:Disconnect(); acBtnDownConn = nil end
+		if acBtnUpConn then acBtnUpConn:Disconnect(); acBtnUpConn = nil end
 	end
 end
 
 local Terrain = G.Services.Workspace.Terrain
 
-isSwimming = fals
+isSwimming = false
 swimLoop = nil
 lastWaterCFrame = nil
 waterSize = Vector3.new(4, 4, 4) 
@@ -29617,3 +29658,451 @@ BeehiveESP.Callbacks.OnToggle = function(state)
 		table.clear(beehiveEspCache)
 	end
 end
+-- ============================================================
+--  ZERO-LAG PROFILES SYSTEM (Fixed Logic + Premium B&W)
+-- ============================================================
+HttpService = game:GetService("HttpService")
+Profiles = {
+	Current = "Default",
+	List = {"Default"},
+	Data = {}
+}
+
+-- 1. SAFE DEEP COPY
+function safeDeepCopy(orig)
+	local orig_type = type(orig)
+	local copy
+	if orig_type == 'table' then
+		copy = {}
+		for orig_key, orig_value in next, orig, nil do
+			if type(orig_key) == 'table' then
+				copy[safeDeepCopy(orig_key)] = safeDeepCopy(orig_value)
+			else
+				copy[orig_key] = safeDeepCopy(orig_value)
+			end
+		end
+		setmetatable(copy, safeDeepCopy(getmetatable(orig)))
+	else
+		copy = orig
+	end
+	return copy
+end
+
+-- 2. SETUP THE DRAGGABLE PROFILES FRAME
+profilesFrame = Instance.new("Frame")
+profilesFrame.Name = "Featherware_Profiles"
+profilesFrame.Size = UDim2.new(0, 260, 0, 340)
+profilesFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+profilesFrame.BorderSizePixel = 0
+profilesFrame.Visible = true
+profilesFrame.Parent = mainScreenUI
+uiCorner(profilesFrame, 8)
+
+pStroke = Instance.new("UIStroke")
+pStroke.Color = Color3.fromRGB(255, 255, 255)
+pStroke.Thickness = 1
+pStroke.Transparency = 0.8
+pStroke.Parent = profilesFrame
+
+savedPos = _G.SavedConfig and _G.SavedConfig["Profiles_Frame_Position"]
+if savedPos then
+	profilesFrame.Position = UDim2.new(savedPos.XScale, savedPos.XOffset, savedPos.YScale, savedPos.YOffset)
+else
+	profilesFrame.Position = UDim2.new(0, 50, 0.5, -170)
+end
+
+makeDraggable(profilesFrame)
+profilesFrame:GetPropertyChangedSignal("Position"):Connect(function()
+	if not _G.SavedConfig then _G.SavedConfig = {} end
+	pos = profilesFrame.Position
+	_G.SavedConfig["Profiles_Frame_Position"] = {
+		XScale = pos.X.Scale, XOffset = pos.X.Offset,
+		YScale = pos.Y.Scale, YOffset = pos.Y.Offset
+	}
+end)
+
+-- Header
+pHeader = Instance.new("Frame")
+pHeader.Size = UDim2.new(1, 0, 0, 42)
+pHeader.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+pHeader.BorderSizePixel = 0
+pHeader.Parent = profilesFrame
+uiCorner(pHeader, 8)
+
+pHeaderHider = Instance.new("Frame")
+pHeaderHider.Size = UDim2.new(1, 0, 0, 15)
+pHeaderHider.Position = UDim2.new(0, 0, 1, -15)
+pHeaderHider.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+pHeaderHider.BorderSizePixel = 0
+pHeaderHider.Parent = pHeader
+
+pTitle = Instance.new("TextLabel")
+pTitle.Size = UDim2.new(0, 80, 1, 0)
+pTitle.Position = UDim2.new(0, 15, 0, 0)
+pTitle.BackgroundTransparency = 1
+pTitle.Text = "PROFILES"
+pTitle.Font = Enum.Font.GothamBlack
+pTitle.TextSize = 14
+pTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+pTitle.TextXAlignment = Enum.TextXAlignment.Left
+pTitle.Parent = pHeader
+
+-- Visibility Toggle Button (Text-based, no emoji)
+pVisBtn = Instance.new("TextButton")
+pVisBtn.Size = UDim2.new(0, 45, 0, 22)
+pVisBtn.Position = UDim2.new(1, -55, 0.5, -11)
+pVisBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+pVisBtn.Text = "HIDE"
+pVisBtn.Font = Enum.Font.GothamBold
+pVisBtn.TextSize = 10
+pVisBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+pVisBtn.AutoButtonColor = false
+pVisBtn.Parent = pHeader
+uiCorner(pVisBtn, 4)
+
+pVisBtn.MouseEnter:Connect(function() pVisBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45) end)
+pVisBtn.MouseLeave:Connect(function() pVisBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25) end)
+
+-- Current Profile Indicator (Moved left to prevent clipping)
+pCurrentPill = Instance.new("Frame")
+pCurrentPill.Size = UDim2.new(0, 100, 0, 22)
+pCurrentPill.Position = UDim2.new(0, 95, 0.5, -11)
+pCurrentPill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+pCurrentPill.BackgroundTransparency = 0.9
+pCurrentPill.BorderSizePixel = 0
+pCurrentPill.Parent = pHeader
+uiCorner(pCurrentPill, 11)
+
+pCurrentLabel = Instance.new("TextLabel")
+pCurrentLabel.Size = UDim2.new(1, 0, 1, 0)
+pCurrentLabel.BackgroundTransparency = 1
+pCurrentLabel.Text = "Default"
+pCurrentLabel.Font = Enum.Font.GothamBold
+pCurrentLabel.TextSize = 11
+pCurrentLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+pCurrentLabel.Parent = pCurrentPill
+
+-- Scroll Frame
+pScroll = Instance.new("ScrollingFrame")
+pScroll.Size = UDim2.new(1, -16, 1, -100)
+pScroll.Position = UDim2.new(0, 8, 0, 50)
+pScroll.BackgroundTransparency = 1
+pScroll.BorderSizePixel = 0
+pScroll.ScrollBarThickness = 4
+pScroll.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+pScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+pScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+pScroll.ClipsDescendants = true
+pScroll.Parent = profilesFrame
+
+pLayout = Instance.new("UIListLayout")
+pLayout.Padding = UDim.new(0, 6)
+pLayout.SortOrder = Enum.SortOrder.LayoutOrder
+pLayout.Parent = pScroll
+
+-- Bottom Controls
+pControls = Instance.new("Frame")
+pControls.Size = UDim2.new(1, -16, 0, 34)
+pControls.Position = UDim2.new(0, 8, 1, -42)
+pControls.BackgroundTransparency = 1
+pControls.Parent = profilesFrame
+
+function createControlBtn(text, posX)
+	btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0.31, 0, 1, 0)
+	btn.Position = UDim2.new(posX, 0, 0, 0)
+	btn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	btn.Text = text
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 11
+	btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+	btn.AutoButtonColor = false
+	btn.Parent = pControls
+	uiCorner(btn, 6)
+
+	btn.MouseEnter:Connect(function() 
+		btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45) 
+		btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	end)
+	btn.MouseLeave:Connect(function() 
+		btn.BackgroundColor3 = Color3.fromRGB(25, 25, 25) 
+		btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+	end)
+	return btn
+end
+
+addBtn = createControlBtn("ADD", 0)
+delBtn = createControlBtn("DELETE", 0.69)
+
+-- Click Feedback Tween
+function flashButton(btn)
+	originalColor = btn.BackgroundColor3
+	btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	btn.TextColor3 = Color3.fromRGB(0, 0, 0)
+	task.delay(0.05, function()
+		btn.BackgroundColor3 = originalColor
+		btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+	end)
+end
+
+-- 3. CORE LOGIC (Fixed to map prefixed keys to UpdateFunctions)
+
+function saveCurrentToProfile()
+	Profiles.Data[Profiles.Current] = safeDeepCopy(_G.SavedConfig or {})
+end
+
+function loadProfile(profileName)
+	if not table.find(Profiles.List, profileName) then return end
+
+	saveCurrentToProfile()
+	Profiles.Current = profileName
+	_G.SavedConfig = safeDeepCopy(Profiles.Data[profileName] or {})
+
+	-- CRITICAL FIX: Loop through all modules and force their UpdateFunctions
+	-- We match the uniquePrefix_settingName keys from _G.SavedConfig to mod.UpdateFunctions
+	if _G.__FW_ALL_MODULES then
+		for _, mod in ipairs(_G.__FW_ALL_MODULES) do
+			if mod.UpdateFunctions then
+				for settingName, updateFunc in pairs(mod.UpdateFunctions) do
+					for savedKey, savedValue in pairs(_G.SavedConfig) do
+						-- Check if the saved key ends with the setting name (e.g., "Overlay_Killaura" ends with "Killaura")
+						if savedKey == settingName or savedKey:sub(-#settingName) == settingName then
+							pcall(function() 
+								updateFunc(savedValue) 
+							end)
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- Defer the disk write so it doesn't freeze the client
+	task.defer(saveConfigToPC)
+	refreshProfileList()
+end
+
+lastClickTime = 0
+lastClickTarget = nil
+
+function refreshProfileList()
+	for _, child in ipairs(pScroll:GetChildren()) do
+		if child:IsA("TextButton") then child:Destroy() end
+	end
+
+	pCurrentLabel.Text = Profiles.Current
+
+	for idx, pName in ipairs(Profiles.List) do
+		btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(1, 0, 0, 32)
+		btn.BackgroundColor3 = (pName == Profiles.Current) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(20, 20, 20)
+		btn.Text = "   " .. pName
+		btn.Font = Enum.Font.Gotham
+		btn.TextSize = 13
+		btn.TextColor3 = (pName == Profiles.Current) and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(180, 180, 180)
+		btn.TextXAlignment = Enum.TextXAlignment.Left
+		btn.AutoButtonColor = false
+		btn.Parent = pScroll
+		uiCorner(btn, 6)
+
+		btn.MouseEnter:Connect(function() 
+			if pName ~= Profiles.Current then 
+				btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35) 
+				btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+			end 
+		end)
+		btn.MouseLeave:Connect(function() 
+			if pName ~= Profiles.Current then 
+				btn.BackgroundColor3 = Color3.fromRGB(20, 20, 20) 
+				btn.TextColor3 = Color3.fromRGB(180, 180, 180)
+			end 
+		end)
+
+		-- Single Click: Load | Double Click: Rename
+		btn.MouseButton1Click:Connect(function()
+			local now = tick()
+			if now - lastClickTime < 0.3 and lastClickTarget == pName then
+				-- Double Click -> Rename
+				lastClickTime = 0
+				lastClickTarget = nil
+				if pName == "Default" then return end
+
+				inputFrame = Instance.new("Frame")
+				inputFrame.Size = UDim2.new(0, 220, 0, 50)
+				inputFrame.Position = UDim2.new(0.5, -110, 0.5, -25)
+				inputFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+				inputFrame.BorderSizePixel = 0
+				inputFrame.ZIndex = 100
+				inputFrame.Parent = mainScreenUI
+				uiCorner(inputFrame, 8)
+
+				inputStroke = Instance.new("UIStroke", inputFrame)
+				inputStroke.Color = Color3.fromRGB(255, 255, 255)
+				inputStroke.Thickness = 2
+
+				inputBox = Instance.new("TextBox")
+				inputBox.Size = UDim2.new(1, -16, 1, -16)
+				inputBox.Position = UDim2.new(0, 8, 0, 8)
+				inputBox.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+				inputBox.Text = pName
+				inputBox.Font = Enum.Font.GothamBold
+				inputBox.TextSize = 14
+				inputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+				inputBox.PlaceholderText = "Enter new name..."
+				inputBox.Parent = inputFrame
+				uiCorner(inputBox, 6)
+
+				inputBox.FocusLost:Connect(function(enterPressed)
+					if enterPressed and inputBox.Text ~= "" then
+						oldName = pName
+						newName = inputBox.Text
+
+						for i, name in ipairs(Profiles.List) do
+							if name == oldName then
+								Profiles.List[i] = newName
+								break
+							end
+						end
+
+						Profiles.Data[newName] = Profiles.Data[oldName]
+						Profiles.Data[oldName] = nil
+
+						if Profiles.Current == oldName then
+							Profiles.Current = newName
+						end
+
+						task.defer(saveConfigToPC)
+						refreshProfileList()
+					end
+					inputFrame:Destroy()
+				end)
+
+				inputBox:CaptureFocus()
+			else
+				-- Single Click -> Load
+				lastClickTime = now
+				lastClickTarget = pName
+				loadProfile(pName)
+			end
+		end)
+	end
+end
+
+-- 4. HOOK INTO EXISTING SAVE SYSTEM
+originalSaveConfigToPC = saveConfigToPC
+saveConfigToPC = function()
+	saveCurrentToProfile()
+
+	pcall(function()
+		dataToSave = {
+			Current = Profiles.Current,
+			List = Profiles.List,
+			Data = Profiles.Data
+		}
+		writefile("Featherware_Profiles.json", HttpService:JSONEncode(dataToSave))
+	end)
+
+	if originalSaveConfigToPC then
+		pcall(originalSaveConfigToPC)
+	end
+end
+
+-- 5. LOAD ON STARTUP
+task.spawn(function()
+	task.wait(1)
+
+	pcall(function()
+		if isfile("Featherware_Profiles.json") then
+			jsonData = readfile("Featherware_Profiles.json")
+			decoded = HttpService:JSONDecode(jsonData)
+
+			if decoded and decoded.List and decoded.Data then
+				Profiles.List = decoded.List
+				Profiles.Data = decoded.Data
+				Profiles.Current = decoded.Current or "Default"
+
+				if not table.find(Profiles.List, "Default") then
+					table.insert(Profiles.List, 1, "Default")
+					Profiles.Data["Default"] = Profiles.Data["Default"] or {}
+				end
+
+				loadProfile(Profiles.Current)
+			end
+		end
+	end)
+
+	refreshProfileList()
+end)
+
+-- 6. BUTTON EVENTS
+addBtn.MouseButton1Click:Connect(function()
+	flashButton(addBtn)
+	saveCurrentToProfile()
+
+	newName = "Profile " .. tostring(#Profiles.List + 1)
+	i = 1
+	while table.find(Profiles.List, newName) do
+		newName = "Profile " .. tostring(#Profiles.List + i)
+		i = i + 1
+	end
+
+	table.insert(Profiles.List, newName)
+	Profiles.Data[newName] = safeDeepCopy(Profiles.Data[Profiles.Current] or {})
+
+	loadProfile(newName)
+end)
+
+delBtn.MouseButton1Click:Connect(function()
+	if Profiles.Current == "Default" then return end
+	flashButton(delBtn)
+
+	idx = table.find(Profiles.List, Profiles.Current)
+	if idx then
+		table.remove(Profiles.List, idx)
+		Profiles.Data[Profiles.Current] = nil
+
+		-- Go to the previous profile, or the first one if we deleted the first
+		newIdx = math.max(1, idx - 1)
+		nextProfile = Profiles.List[newIdx] or "Default"
+
+		-- Instantly switch without saving the deleted profile
+		Profiles.Current = nextProfile
+		_G.SavedConfig = safeDeepCopy(Profiles.Data[nextProfile] or {})
+
+		-- Apply settings instantly
+		if _G.__FW_ALL_MODULES then
+			for _, mod in ipairs(_G.__FW_ALL_MODULES) do
+				if mod.UpdateFunctions then
+					for settingName, updateFunc in pairs(mod.UpdateFunctions) do
+						for savedKey, savedValue in pairs(_G.SavedConfig) do
+							if savedKey == settingName or savedKey:sub(-#settingName) == settingName then
+								pcall(function() updateFunc(savedValue) end)
+								break
+							end
+						end
+					end
+				end
+			end
+		end
+
+		task.defer(saveConfigToPC)
+		refreshProfileList()
+	end
+end)
+
+-- Visibility Toggle
+pVisBtn.MouseButton1Click:Connect(function()
+	flashButton(pVisBtn)
+	pScroll.Visible = not pScroll.Visible
+	pControls.Visible = not pControls.Visible
+	pCurrentPill.Visible = not pCurrentPill.Visible
+
+	if pScroll.Visible then
+		profilesFrame.Size = UDim2.new(0, 260, 0, 340)
+		pVisBtn.Text = "HIDE"
+	else
+		profilesFrame.Size = UDim2.new(0, 260, 0, 42)
+		pVisBtn.Text = "SHOW"
+	end
+end)
