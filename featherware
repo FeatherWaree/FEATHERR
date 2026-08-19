@@ -2119,6 +2119,7 @@ local ShopTierBypassMechanic = {
 }
 
 function ShopTierBypassMechanic:Toggle(state)
+	task.wait(1)
 	self.Enabled = state
 
 	if self.Enabled then
@@ -14574,50 +14575,8 @@ end
 
 -- Projectile Tracers Event-Based System
 projectileTracerConnections = {}
-projectileEventBus = nil
 
--- Function to setup event-based tracers
-function setupEventBasedTracers()
-	if not canRequire then return false end
 
-	success = pcall(function()
-		-- Try to get the event bus
-		local eventBusPath = replicatedStorage:WaitForChild("TS"):WaitForChild("shared"):WaitForChild("event"):WaitForChild("event-bus")
-		if eventBusPath then
-			projectileEventBus = require(eventBusPath).EventBus
-		end
-
-		if not projectileEventBus then return false end
-
-		-- Connect to ProjectileLaunchedEvent
-		ProjectileLaunchedEvent = require(replicatedStorage:WaitForChild("TS"):WaitForChild("controllers"):WaitForChild("game"):WaitForChild("combat"):WaitForChild("projectile"):WaitForChild("event"):WaitForChild("projectile-launched-event")).ProjectileLaunchedEvent
-
-		conn1 = projectileEventBus:connect(ProjectileLaunchedEvent, function(event)
-			if loops["projectile tracers"] and event and event.projectile then
-				task.spawn(function()
-					applyTracer(event.projectile, false)
-				end)
-			end
-		end)
-		table.insert(projectileTracerConnections, conn1)
-
-		-- Connect to FireClientProjectileEvent for preview projectiles
-		FireClientProjectileEvent = require(replicatedStorage:WaitForChild("TS"):WaitForChild("controllers"):WaitForChild("game"):WaitForChild("combat"):WaitForChild("projectile"):WaitForChild("event"):WaitForChild("fire-client-projectile-event")).FireClientProjectileEvent
-
-		conn2 = projectileEventBus:connect(FireClientProjectileEvent, function(event)
-			if loops["projectile tracers"] and event and event.projectile then
-				task.spawn(function()
-					applyTracer(event.projectile, true)
-				end)
-			end
-		end)
-		table.insert(projectileTracerConnections, conn2)
-
-		return true
-	end)
-
-	return success
-end
 
 -- Fallback G.Services.Workspace scanner
 function connectWorkspaceScanner()
@@ -14639,13 +14598,7 @@ ProjectileTracers.Callbacks.OnToggle = function(state)
 	loops["projectile tracers"] = state
 
 	if state then
-		-- Try event-based first (optimized)
-		eventSuccess = setupEventBasedTracers()
-
-		if not eventSuccess then
-			-- Fallback to G.Services.Workspace scanner
 			connectG.Services.WorkspaceScanner()
-		end
 
 		-- Apply to existing projectiles
 		for _, obj in pairs(G.Services.Workspace:GetDescendants()) do
@@ -14657,7 +14610,6 @@ ProjectileTracers.Callbacks.OnToggle = function(state)
 			applyTracer(child, true)
 		end
 	else
-		-- Disconnect all connections
 		for i, conn in ipairs(projectileTracerConnections) do
 			if conn.Disconnect then
 				conn:Disconnect()
