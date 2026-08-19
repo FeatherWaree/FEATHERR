@@ -27527,7 +27527,6 @@ Player.OnTeleport:Connect(function(teleportState)
 				repeat task.wait() until game:IsLoaded()
 				local lp = game:GetService("Players").LocalPlayer
 				repeat task.wait() until lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-				task.wait(1)
 				
 				]] .. bootstrapCode .. [[
 			]])
