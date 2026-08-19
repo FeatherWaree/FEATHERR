@@ -7703,7 +7703,13 @@ Killaura.Callbacks.OnToggle = function(state)
 			local npcdummytarget, npcdummydistance = nil, selectionRange
 
 			for _, charModel in ipairs(EntityCache.Players or {}) do
-				if charModel ~= Player.Character and charModel.Parent then
+				-- 1. Get the Player object from the character model
+				local targetPlayer = Players:GetPlayerFromCharacter(charModel)
+
+				-- 2. Check if it's not you, has a parent, AND is not on your team
+				local isTeammate = (targetPlayer and Player.Team and targetPlayer.Team == Player.Team)
+
+				if charModel ~= Player.Character and charModel.Parent and not isTeammate then
 					local tHRP = charModel:FindFirstChild("HumanoidRootPart")
 					local tHum = charModel:FindFirstChildOfClass("Humanoid")
 
