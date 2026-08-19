@@ -2132,55 +2132,55 @@ end
 local tieredCache = {}
 local nextTierCache = {}
 local originalGetShop = nil
-
-local ShopTierBypassMechanic = {
-	Enabled = false
-}
+local ShopTierBypassMechanic = {Enabled = false}
 
 function ShopTierBypassMechanic:Toggle(state)
-	task.wait(1)
 	self.Enabled = state
-
 	if self.Enabled then
-		repeat task.wait() until bedwarsShop.ShopItems
+		-- Wait for shop items to load safely
+		task.spawn(function()
+			repeat task.wait(0.1) until bedwarsShop and bedwarsShop.ShopItems
 
-		for _, v in pairs(bedwarsShop.ShopItems) do
-			tieredCache[v] = v.tiered
-			nextTierCache[v] = v.nextTier
-			v.nextTier = nil
-			v.tiered = nil
-		end
-
-		originalGetShop = bedwarsShop.getShop
-		bedwarsShop.getShop = function(...)
-			local res = {originalGetShop(...)}
-
-			for _, v in pairs(res[1]) do
-				v.nextTier = nil
-				v.tiered = nil
+			-- Cache and strip tier data
+			for _, v in pairs(bedwarsShop.ShopItems) do
+				if type(v) == "table" then
+					tieredCache[v] = v.tiered
+					nextTierCache[v] = v.nextTier
+					v.nextTier = nil
+					v.tiered = nil
+				end
 			end
 
-			return unpack(res)
+			-- Hook getShop safely
+			if not originalGetShop and bedwarsShop.getShop then
+				originalGetShop = bedwarsShop.getShop
+				bedwarsShop.getShop = function(...)
+					local result = originalGetShop(...)
+					-- Ensure we return a table, not an Instance
+					if type(result) ~= "table" then
+						return {}
+					end
+					return result
+				end
+			end
+		end)
+	else
+		-- Restore original data
+		for v, tiered in pairs(tieredCache) do
+			if type(v) == "table" then
+				v.tiered = tiered
+				v.nextTier = nextTierCache[v]
+			end
 		end
 
-
-	else
-
-		if originalGetShop then
+		-- Restore original function
+		if originalGetShop and bedwarsShop then
 			bedwarsShop.getShop = originalGetShop
 			originalGetShop = nil
 		end
 
-		for item, value in pairs(tieredCache) do
-			item.tiered = value
-		end
-		for item, value in pairs(nextTierCache) do
-			item.nextTier = value
-		end
-
-		table.clear(nextTierCache)
 		table.clear(tieredCache)
-
+		table.clear(nextTierCache)
 	end
 end
 
@@ -14450,7 +14450,9 @@ Player.CharacterAdded:Connect(function(char)
 	cachedChar = char
 	if char then
 		cachedHRP = char:WaitForChild("HumanoidRootPart")
-		cachedHumanoid = char:WaitForChild("Humanoid")
+		if char:FindFirstChild("Humanoid") then
+			cachedHumanoid = char:WaitForChild("Humanoid", 5)
+		end
 	end
 
 	CachePhaseParts(char)
