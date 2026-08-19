@@ -7610,18 +7610,16 @@ Killaura.Callbacks.OnToggle = function(state)
 		end
 
 		-- 1. PERFECT TIMING ACCUMULATOR
-		-- We use real deltaTime passed by Heartbeat instead of task.wait()
 		now = os.clock()
 		realDelta = now - lastFrameTime
 		lastFrameTime = now
 
-		-- Cap delta to prevent stockpiling if the game freezes/lags heavily
 		if realDelta > 0.25 then realDelta = 0.016 end
 		accumulatedTime = accumulatedTime + realDelta
 
 		hitsPer10 = tonumber(Killaura.Values["Hits per 10s"]) or 35
 		calculatedDelay = 10 / math.max(hitsPer10, 0.025)
-		hitDelay = math.max(calculatedDelay, 0.025) -- Allow up to ~40 CPS max internally
+		hitDelay = math.max(calculatedDelay, 0.025)
 
 		if not (Killaura.Values["Target Players"] or Killaura.Values["Target NPCs/Dummies"]) then return end
 
@@ -7664,7 +7662,7 @@ Killaura.Callbacks.OnToggle = function(state)
 					end
 				end
 			end
-			
+
 			if Killaura.Values["Target NPCs/Dummies"] then
 				for _, npc in ipairs(EntityCache.NPCs or {}) do
 					if npc and npc.Parent then
@@ -7735,7 +7733,7 @@ Killaura.Callbacks.OnToggle = function(state)
 
 		distance = (rootPart.Position - targetHRP.Position).Magnitude
 
-		-- 3. VISUALS (Highlight & 3D Box)
+		-- 3. VISUALS (Highlight & 3D Box) - FIXED TO PREVENT PHYSICS LAUNCH
 		if distance <= selectionRange then
 			if Killaura.Values["Highlight Target"] then
 				kaHighlight.FillColor = Killaura.Values["Highlight Color"]
@@ -7747,17 +7745,25 @@ Killaura.Callbacks.OnToggle = function(state)
 			if Killaura.Values["3D Box Target"] then
 				if currentVisualTarget ~= besttarget then
 					currentVisualTarget = besttarget
-					ka3DBox.Anchored = false
+					-- Safe setup: Massless, Anchored, no physics interaction
+					ka3DBox.Massless = true
+					ka3DBox.Anchored = true
+					ka3DBox.CanCollide = false
+					ka3DBox.CanQuery = false
+					ka3DBox.CanTouch = false
 					ka3DBox.Parent = G.Services.Workspace
-					ka3DBox.CFrame = targetHRP.CFrame
-					ka3DBox.Size = Vector3.new(0.1, 0.1, 0.1)
-					if ka3DBoxWeld then ka3DBoxWeld:Destroy() end
-					ka3DBoxWeld = Instance.new("WeldConstraint")
-					ka3DBoxWeld.Part0 = ka3DBox
-					ka3DBoxWeld.Part1 = targetHRP
-					ka3DBoxWeld.Parent = ka3DBox
-					TweenService:Create(ka3DBox, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = Vector3.new(4, 5, 2)}):Play()
+					ka3DBox.Size = Vector3.new(4, 5, 2) -- Set final size immediately, no tween needed for safety
+					ka3DBox.Transparency = 0.65
+					ka3DBox.Material = Enum.Material.SmoothPlastic
+					-- Clean up old weld if it exists
+					if ka3DBoxWeld then 
+						ka3DBoxWeld:Destroy() 
+						ka3DBoxWeld = nil 
+					end
 				end
+
+				-- Update position every frame safely without physics
+				ka3DBox.CFrame = targetHRP.CFrame
 				ka3DBox.Color = Killaura.Values["3D Box Color"]
 			else
 				if currentVisualTarget ~= nil then
@@ -7848,27 +7854,21 @@ Killaura.Callbacks.OnToggle = function(state)
 
 		-- 6. THE ACCUMULATOR TRIGGER & ANTI-STUTTER CHECK
 		if accumulatedTime >= hitDelay then
-			-- Prevent accumulator from stockpiling if frame drops occur
 			accumulatedTime = accumulatedTime - hitDelay
 			if accumulatedTime > hitDelay then 
 				accumulatedTime = 0 
 			end
 
-			-- ANTI-STUTTER: Check the game's internal SwordController cooldown
-			-- This prevents the script from firing while the game is buffering an attack, eliminating the 0.3s-0.5s dead zone.
 			canFire = true
 			if canRequire and kaSwordController then
 				serverTime = G.Services.Workspace:GetServerTimeNow()
-				-- Get the weapon's actual attack speed dynamically
-				weaponSpeed = 0.15 -- Default fallback
+				weaponSpeed = 0.15
 				if ItemMetaTable and ItemMetaTable[heldName] and ItemMetaTable[heldName].sword then
 					weaponSpeed = ItemMetaTable[heldName].sword.attackSpeed or 0.15
 				end
 
-				-- If the game is still on cooldown, DO NOT FIRE. Wait for the next frame.
 				if (serverTime - (kaSwordController.lastAttack or 0)) < weaponSpeed then
 					canFire = false
-					-- Refund the time so we try again immediately on the next frame
 					accumulatedTime = accumulatedTime + hitDelay 
 				end
 			end
@@ -7901,6 +7901,8 @@ Killaura.Callbacks.OnToggle = function(state)
 		end
 	end)
 end
+
+
 Player = Player or G.Services.Players.LocalPlayer
 Players = Players or G.Services.Players
 UserInputService = UserInputService or G.Services.UIS
