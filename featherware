@@ -853,10 +853,24 @@ EntityCache = {
 EC_CS = game:GetService("CollectionService")
 EC_PlayersService = game:GetService("Players")
 
+-- Helper to check if an instance is a valid NPC based on your updated rules
+local function isValidNPC(instance)
+	if not instance:IsA("Model") then return false end
+	if not instance:FindFirstChildOfClass("Humanoid") then return false end
+
+	-- If it has the "entity" tag, its name must contain "Dummy" (case-insensitive)
+	if EC_CS:HasTag(instance, "entity") then
+		if not instance.Name:lower():find("dummy") then
+			return false
+		end
+	end
+
+	return true
+end
+
 -- 1. Helper to safely add to NPCs without duplicates
 EC_AddNPC = function(instance)
-	if not instance:IsA("Model") then return end
-	if instance:FindFirstChildOfClass("Humanoid") then
+	if isValidNPC(instance) then
 		if not table.find(EntityCache.NPCs, instance) then
 			table.insert(EntityCache.NPCs, instance)
 		end
@@ -890,7 +904,7 @@ end
 
 -- 5. PLAYER TRACKING (No CollectionService, tracks characters directly via Player events)
 EC_AddPlayerChar = function(char)
-	if char and char:IsA("Model")  then
+	if char and char:IsA("Model") then
 		if not table.find(EntityCache.Players, char) then
 			table.insert(EntityCache.Players, char)
 		end
@@ -7901,7 +7915,6 @@ Killaura.Callbacks.OnToggle = function(state)
 		end
 	end)
 end
-
 
 Player = Player or G.Services.Players.LocalPlayer
 Players = Players or G.Services.Players
@@ -16236,8 +16249,8 @@ task.spawn(function()
 	pcall(function() paKnit = require(paRS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("knit",5):WaitForChild("src",5)).KnitClient end)
 	pcall(function()
 		paNet = paRS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@rbxts",5):WaitForChild("net",5):WaitForChild("out",5):WaitForChild("_NetManaged",5)
-		paFire   = paNet:WaitForChild("ProjectileFire",5)
-		paHit    = paNet:WaitForChild("ProjectileHit",5)
+		paFire  = paNet:WaitForChild("ProjectileFire",5)
+		paHit   = paNet:WaitForChild("ProjectileHit",5)
 		paSetInv = paNet:WaitForChild("SetInvItem",5)
 	end)
 	pcall(function() paItems = paRS:WaitForChild("Items",5) end)
@@ -16264,7 +16277,6 @@ PA_LOADOUTS, PA_REBUILT = {}, 0
 PA_MANAGED, paSavedHand, paLastShot = {}, nil, 0
 lastHeldName, lastSwapTime, lastShotTime = nil, 0, 0
 paLockedSpeed = nil
-PA_NPC_SCAN, PA_NPC_LAST = {}, 0
 PA_DBG = 0
 PA_RR = 0
 PA_HAND_OFFSET = Vector3.new(0, 2, 0)
@@ -16323,50 +16335,6 @@ function paUpdateLegitTracer(origin, aimVt, active)
 	PA_LEGIT_TRACER_A1.Position = pa_camCf:PointToObjectSpace(pa_endPoint)
 	PA_LEGIT_TRACER_BEAM.Color = ColorSequence.new(PA_LEGIT_TRACER_COLOR)
 	PA_LEGIT_TRACER_BEAM.Enabled = true
-end
-
-function paScanFolder(parent, depth)
-	for _, ch in ipairs(parent:GetChildren()) do
-		if ch:IsA("Model") then
-			if ch ~= Players.LocalPlayer.Character and not Players:GetPlayerFromCharacter(ch) then
-				chh = ch:FindFirstChildOfClass("Humanoid")
-				if chh and chh.Health > 0 then
-					table.insert(PA_NPC_SCAN, ch)
-				elseif depth < 3 then
-					paScanFolder(ch, depth + 1)
-				end
-			end
-		elseif ch:IsA("Folder") and depth < 3 then
-			paScanFolder(ch, depth + 1)
-		end
-	end
-end
-
-function paGetNpcList()
-	if tick() - PA_NPC_LAST > 1 then
-		PA_NPC_LAST = tick()
-		PA_NPC_SCAN = {}
-		if EntityCache and EntityCache.npcs then
-			for _, e in ipairs(EntityCache.npcs) do table.insert(PA_NPC_SCAN, e) end
-		else
-			paScanFolder(G.Services.Workspace, 1)
-		end
-	end
-	return PA_NPC_SCAN
-end
-
-function paNpcRoot(m)
-	if typeof(m) == "Instance" then
-		if m:IsA("BasePart") then return m, m.Parent end
-		if m:IsA("Humanoid") then
-			hm = m.Parent
-			return hm and (hm:FindFirstChild("HumanoidRootPart") or hm.PrimaryPart or hm:FindFirstChildWhichIsA("BasePart")), hm
-		end
-		if m:IsA("Model") then
-			return m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart"), m
-		end
-	end
-	return nil, nil
 end
 
 function paGetHeldName()
@@ -16658,29 +16626,25 @@ end
 function paPickTarget(myPos)
 	pap_best, pap_bd, pap_bh, pap_bv = nil, nil, nil, nil
 	if ProjectileAura.Values["Target Players"] then
-		if EntityCache and EntityCache.players then
-			for _, pap_pl in ipairs(EntityCache.players) do
-				pap_c = pap_pl.Character
-				pap_h = pap_c and pap_c:FindFirstChild("HumanoidRootPart")
-				if pap_h then
-					paConsider(pap_c, pap_h, pap_h.AssemblyLinearVelocity or pap_h.Velocity or Vector3.zero, myPos)
+		if EntityCache and EntityCache.Players then
+			for _, pap_plChar in ipairs(EntityCache.Players) do
+				if pap_plChar ~= Players.LocalPlayer.Character then
+					pap_h = pap_plChar:FindFirstChild("HumanoidRootPart")
+					pap_hum = pap_plChar:FindFirstChildOfClass("Humanoid")
+					if pap_h and pap_hum and pap_hum.Health > 0 then
+						paConsider(pap_plChar, pap_h, pap_h.AssemblyLinearVelocity or pap_h.Velocity or Vector3.zero, myPos)
+					end
 				end
 			end
 		end
 	end
 	if ProjectileAura.Values["Target NPCs/Dummies"] then
-		if EntityCache and EntityCache.npcs then
-			for _, pap_m in ipairs(EntityCache.npcs) do
+		if EntityCache and EntityCache.NPCs then
+			for _, pap_m in ipairs(EntityCache.NPCs) do
 				pap_h = pap_m:FindFirstChild("HumanoidRootPart") or pap_m.PrimaryPart
-				if pap_h then
+				pap_hum = pap_m:FindFirstChildOfClass("Humanoid")
+				if pap_h and pap_hum and pap_hum.Health > 0 then
 					paConsider(pap_m, pap_h, pap_h.AssemblyLinearVelocity or pap_h.Velocity or Vector3.zero, myPos)
-				end
-			end
-		else
-			for _, pap_m in ipairs(paGetNpcList()) do
-				pap_root, pap_model = paNpcRoot(pap_m)
-				if pap_root then
-					paConsider(pap_model, pap_root, pap_root.AssemblyLinearVelocity or pap_root.Velocity or Vector3.zero, myPos)
 				end
 			end
 		end
@@ -16806,8 +16770,6 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 		return
 	end
 
-	startEntityCache()
-
 	char = Players.LocalPlayer.Character
 	hum = char and char:FindFirstChildOfClass("Humanoid")
 	if hum then originalWalkSpeed = hum.WalkSpeed end
@@ -16841,7 +16803,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 					paUpdateLegitTracer(nil, nil, false)
 					if hum then hum.WalkSpeed = originalWalkSpeed end
 				end
-				task.wait(0.25)
+				G.Services.RunService.Heartbeat:Wait()
 			else
 				if loops["killaura"] and currentKaTarget and currentKaTarget.Parent then
 					kaTgtHRP = currentKaTarget:FindFirstChild("HumanoidRootPart") or currentKaTarget.PrimaryPart
@@ -16850,7 +16812,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 						kaDist = (kaMyHRP.Position - kaTgtHRP.Position).Magnitude
 						kaReach = tonumber(Killaura.Values["Reach"]) or 12.4
 						if kaDist <= kaReach + 2 then
-							task.wait(0.03)
+							G.Services.RunService.Heartbeat:Wait()
 							continue
 						end
 					end
@@ -16867,7 +16829,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 						paUpdateLegitTracer(nil, nil, false)
 						if hum then hum.WalkSpeed = originalWalkSpeed end
 					end
-					task.wait(0.1)
+					G.Services.RunService.Heartbeat:Wait()
 				else
 					pa_target, pa_hrp, pa_vel = paPickTarget(pa_myPos)
 					pa_n = #PA_LOADOUTS
@@ -16880,7 +16842,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 							paUpdateLegitTracer(nil, nil, false)
 							if hum then hum.WalkSpeed = originalWalkSpeed end
 						end
-						task.wait(0.05)
+						G.Services.RunService.Heartbeat:Wait()
 					else
 						pa_hum2 = pa_target:FindFirstChildOfClass("Humanoid")
 						pa_air2 = (pa_hum2 and pa_hum2.FloorMaterial == Enum.Material.Air) or math.abs(pa_vel.Y) > 2
@@ -16906,7 +16868,6 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 									isCharging = false
 									if drawTrack then pcall(function() drawTrack:Stop() end); drawTrack = nil end
 									paUpdateLegitTracer(nil, nil, false)
-									
 									if hum then hum.WalkSpeed = originalWalkSpeed end
 								end
 							end
@@ -16918,7 +16879,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 									paUpdateLegitTracer(nil, nil, false)
 									if hum then hum.WalkSpeed = originalWalkSpeed end
 								end
-								task.wait(0.05)
+								G.Services.RunService.Heartbeat:Wait()
 							else
 								if paHasAmmo(currentLoadout) and now - lastSwapTime >= 0.01 and now - lastShotTime >= (currentLoadout.fireDelay + 0.02) and (not paIsSpearVisual(currentLoadout.projectile) or now >= paFireAnimDone + 0.15) then
 									pa_pm = PA_PROJ_META[currentLoadout.projectile] or PA_PROJ_META[currentLoadout.weapon.Name] or {}
@@ -17034,7 +16995,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 					end
 				end
 
-				task.wait(0.03)
+				G.Services.RunService.Heartbeat:Wait()
 			end
 		end
 	end)
@@ -17051,7 +17012,6 @@ ProjectileAura:CreateColorPicker("Legit Tracer Color", PA_LEGIT_TRACER_COLOR, fu
 	PA_LEGIT_TRACER_COLOR = color
 end)
 
-
 PA_FOV_SCALE = 0.18
 PA_LIMB_NAMES = { "Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso", "LeftUpperArm", "RightUpperArm", "LeftUpperLeg", "RightUpperLeg", "LeftHand", "RightHand", "LeftFoot", "RightFoot" }
 asRandCache = setmetatable({}, {__mode = "k"})
@@ -17059,6 +17019,31 @@ asTrack = setmetatable({}, {__mode = "k"})
 asNow = 0
 asWallParams = RaycastParams.new(); asWallParams.FilterType = Enum.RaycastFilterType.Exclude; asWallParams.IgnoreWater = true
 asErrShown = false; asAssisted = false
+
+-- ============ HIGH-PERFORMANCE BUILT-IN ENTITY CACHE = ============
+LocalCache = {players = {}, npcs = {}, lastUpdate = 0}
+function updateEntityCache()
+	local now = tick()
+	if now - LocalCache.lastUpdate < 0.2 then return end -- Throttled updates for performance
+	LocalCache.lastUpdate = now
+
+	table.clear(LocalCache.players)
+	table.clear(LocalCache.npcs)
+
+	local localPlayer = G.Services.Players.LocalPlayer
+	for _, p in ipairs(G.Services.Players:GetPlayers()) do
+		if p ~= localPlayer and p.Character then
+			table.insert(LocalCache.players, p)
+		end
+	end
+
+	local workspaceChildren = G.Services.Workspace:GetChildren()
+	for _, inst in ipairs(workspaceChildren) do
+		if inst:FindFirstChildOfClass("Humanoid") and not G.Services.Players:GetPlayerFromCharacter(inst) then
+			table.insert(LocalCache.npcs, inst)
+		end
+	end
+end
 
 -- ============ MISSING FUNCTIONS (add once, replaces nothing) ============
 UserInputService = UserInputService or G.Services.UIS
@@ -17173,9 +17158,10 @@ function asConsider(model, part, rawVel)
 end
 
 function asPickTarget()
+	updateEntityCache()
 	asBestAng = math.huge; asBestModel, asBestPart, asBestVel = nil, nil, nil
 	if ProjectileAssist.Values["Target Players"] then
-		for _, aspl in ipairs(EntityCache.players) do
+		for _, aspl in ipairs(LocalCache.players) do
 			if not asIsSpectator(aspl.Team) then
 				asc = aspl.Character
 				if asc then asch = asc:FindFirstChild("HumanoidRootPart"); if asch then asConsider(asc, asPartFor(asc), asch.AssemblyLinearVelocity) end end
@@ -17183,14 +17169,13 @@ function asPickTarget()
 		end
 	end
 	if ProjectileAssist.Values["Target NPCs/Dummies"] then
-		for _, asm in ipairs(EntityCache.npcs) do asConsider(asm, asPartFor(asm), Vector3.zero) end
+		for _, asm in ipairs(LocalCache.npcs) do asConsider(asm, asPartFor(asm), Vector3.zero) end
 	end
 	return asBestModel, asBestPart, asBestVel
 end
 
 function asTick()
 	asOk, asErr = pcall(function()
-		-- DYNAMIC LOOKUP: This ensures it never breaks on respawn/equip (From Script 2)
 		asHandler = nil
 		if asKnit and asKnit.Controllers then
 			for _, asC in pairs(asKnit.Controllers) do
@@ -17214,7 +17199,6 @@ function asTick()
 					asHeldLower = asHname and asHname:lower() or ""
 					asHinst = asHname and paInv and paInv:FindFirstChild(asHname) or nil
 
-					-- INSTANT ENGAGEMENT: Removed the camera magnitude check and strict ammo/meta requirements (From Script 1)
 					if asHinst or asTool then
 						asL = asHinst and asResolve(asHname, asHinst) or nil
 						asPm = (asL and PA_PROJ_META[asL.projectile]) or nil
@@ -17256,7 +17240,6 @@ function asTick()
 		asLead = Vector3.new(asVel.X, asLeadY, asVel.Z)
 		if asLead.Magnitude > 200 then asLead = asLead.Unit * 200 end
 
-		-- UNIVERSAL FALLBACK: If projectile has no meta, defaults to a fast velocity so it always works (From Script 1)
 		local baseVel = (asPm and asPm.launchVelocity) or 150
 		local handlerMult = asHandler.velocityMultiplier or 1
 		asEffV = baseVel * handlerMult
@@ -17289,7 +17272,6 @@ ProjectileAssist.Callbacks.OnToggle = function(state)
 		asTrack = setmetatable({}, {__mode = "k"})
 		return
 	end
-	startEntityCache()
 	asRandCache = setmetatable({}, {__mode = "k"})
 	asTrack = setmetatable({}, {__mode = "k"})
 	asErrShown = false; asAssisted = false
@@ -18684,12 +18666,9 @@ Shaders.Callbacks.OnToggle = function(state)
 	end
 end
 
-chams_gen = (chams_gen or 0) + 1
-if chams_active then
-	for chams_m, chams_hl in pairs(chams_active) do pcall(function() chams_hl:Destroy() end) end
-end
-chams_active = {}
-chams_lastFC = nil; chams_lastOC = nil; chams_lastFT = nil; chams_lastOT = nil
+
+chams_active = chams_active or {}
+chamsConnections = chamsConnections or {}
 
 chamsFolder = G.Services.Workspace:FindFirstChild("Chams_Highlights")
 if not chamsFolder then
@@ -18700,111 +18679,208 @@ else
 	chamsFolder:ClearAllChildren()
 end
 
-Chams = Visuals:CreateButton("Chams", nil, true)
-Chams:CreateToggle("Target Players", true, nil)
-Chams:CreateToggle("Target NPCs/Dummies", false, nil)
-Chams:CreateColorPicker("Cham Color", Color3.fromRGB(140, 120, 255), nil)
-Chams:CreateColorPicker("Outline Color", Color3.fromRGB(255, 255, 255), nil)
-Chams:CreateSlider("Cham Transparency", 0, 1, 0.5, nil, 0.05)
-Chams:CreateSlider("Outline Transparency", 0, 1, 0, nil, 0.05)
+-- 1. DEFINE HELPER FUNCTIONS FIRST (Prevents nil reference errors)
 
-function chamsV(name, def)
-	chams_vv = Chams.Values[name]
-	if chams_vv == nil then return def end
-	return chams_vv
+local function getSetting(name, def)
+	if not Chams or not Chams.Values then return def end
+	local val = Chams.Values[name]
+	if val == nil then return def end
+	return val
 end
 
-function chamsMake(model)
-	chams_ok, chams_hl = pcall(function()
-		chams_h = Instance.new("Highlight")
-		chams_h.Adornee = model
-		chams_h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-		chams_h.FillColor = chamsV("Cham Color", Color3.fromRGB(140, 120, 255))
-		chams_h.OutlineColor = chamsV("Outline Color", Color3.fromRGB(255, 255, 255))
-		chams_h.FillTransparency = chamsV("Cham Transparency", 0.5)
-		chams_h.OutlineTransparency = chamsV("Outline Transparency", 0)
-		chams_h.Parent = chamsFolder
-		return chams_h
+local function updateAllHighlightProperties()
+	if not loops["chams"] then return end
+
+	local fc = getSetting("Cham Color", Color3.fromRGB(140, 120, 255))
+	local oc = getSetting("Outline Color", Color3.fromRGB(255, 255, 255))
+	local ft = getSetting("Cham Transparency", 0.5)
+	local ot = getSetting("Outline Transparency", 0)
+
+	for _, hl in pairs(chams_active) do
+		if hl and hl.Parent then
+			hl.FillColor = fc
+			hl.OutlineColor = oc
+			hl.FillTransparency = ft
+			hl.OutlineTransparency = ot
+		end
+	end
+end
+
+local function isValidTarget(model)
+	if not model or not model.Parent then return false end
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return false end
+
+	local plr = Players:GetPlayerFromCharacter(model)
+	if plr then
+		if not getSetting("Target Players", true) then return false end
+		if plr == Player then return false end
+		local sameTeam = (plr.Team ~= nil and Player.Team ~= nil and plr.Team == Player.Team)
+		local isSpec = (plr.Team ~= nil and tostring(plr.Team.Name):lower():find("spectat") ~= nil)
+		if sameTeam or isSpec then return false end
+		return true
+	else
+		if not getSetting("Target NPCs/Dummies", false) then return false end
+		return true
+	end
+end
+
+local function chamsRemove(model)
+	if chams_active[model] then
+		pcall(function() chams_active[model]:Destroy() end)
+		chams_active[model] = nil
+	end
+end
+
+local function chamsMake(model)
+	if not loops["chams"] then return end
+	if chams_active[model] then return end
+	if not isValidTarget(model) then return end
+
+	local ok, hl = pcall(function()
+		local h = Instance.new("Highlight")
+		h.Adornee = model
+		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		h.FillColor = getSetting("Cham Color", Color3.fromRGB(140, 120, 255))
+		h.OutlineColor = getSetting("Outline Color", Color3.fromRGB(255, 255, 255))
+		h.FillTransparency = getSetting("Cham Transparency", 0.5)
+		h.OutlineTransparency = getSetting("Outline Transparency", 0)
+		h.Parent = chamsFolder
+		return h
 	end)
-	if chams_ok and chams_hl then chams_active[model] = chams_hl end
-end
 
-function chamsReconcile()
-	chams_desired = {}
+	if ok and hl then
+		chams_active[model] = hl
 
-	if Chams.Values["Target Players"] then
-		for _, chams_pl in pairs(Players:GetPlayers()) do
-			if chams_pl ~= Player then
-				chams_c = chams_pl.Character
-				if chams_c then
-					chams_hum = chams_c:FindFirstChildOfClass("Humanoid")
-					if chams_hum and chams_hum.Health > 0 then
-						chams_sameTeam = (chams_pl.Team ~= nil and Player.Team ~= nil and chams_pl.Team == Player.Team)
-						chams_isSpec = (chams_pl.Team ~= nil and tostring(chams_pl.Team.Name):lower():find("spectat") ~= nil)
-						if not chams_sameTeam and not chams_isSpec then
-							chams_desired[chams_c] = true
-						end
-					end
+		hl.AncestryChanged:Connect(function()
+			if not hl.Parent and chams_active[model] == hl then
+				chams_active[model] = nil
+				if loops["chams"] and isValidTarget(model) then
+					task.defer(function()
+						chamsMake(model)
+					end)
 				end
 			end
-		end
+		end)
 	end
+end
 
-	if Chams.Values["Target NPCs/Dummies"] then
-		for _, chams_m in ipairs(EntityCache.npcs) do
-			if chams_m and chams_m.Parent then
-				chams_hum2 = chams_m:FindFirstChildOfClass("Humanoid")
-				if chams_hum2 and chams_hum2.Health > 0 then chams_desired[chams_m] = true end
+local function chamsReconcileAll()
+	if not loops["chams"] then return end
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= Player then
+			local char = plr.Character
+			if char and isValidTarget(char) then
+				chamsMake(char)
+			else
+				if char then chamsRemove(char) end
 			end
 		end
 	end
 
-	for chams_m, chams_hl in pairs(chams_active) do
-		if not chams_desired[chams_m] or not chams_m.Parent then
-			pcall(function() chams_hl:Destroy() end)
-			chams_active[chams_m] = nil
+	local npcList = (EntityCache and EntityCache.NPCs) or {}
+	for _, npc in ipairs(npcList) do
+		if isValidTarget(npc) then
+			chamsMake(npc)
+		else
+			chamsRemove(npc)
 		end
-	end
-
-	for chams_m in pairs(chams_desired) do
-		chams_hl = chams_active[chams_m]
-		if not chams_hl or not chams_hl.Parent then chamsMake(chams_m) end
-	end
-
-	chams_fc = chamsV("Cham Color", Color3.fromRGB(140, 120, 255))
-	chams_oc = chamsV("Outline Color", Color3.fromRGB(255, 255, 255))
-	chams_ft = chamsV("Cham Transparency", 0.5)
-	chams_ot = chamsV("Outline Transparency", 0)
-	if chams_fc ~= chams_lastFC or chams_oc ~= chams_lastOC or chams_ft ~= chams_lastFT or chams_ot ~= chams_lastOT then
-		for _, chams_hl in pairs(chams_active) do
-			chams_hl.FillColor = chams_fc
-			chams_hl.OutlineColor = chams_oc
-			chams_hl.FillTransparency = chams_ft
-			chams_hl.OutlineTransparency = chams_ot
-		end
-		chams_lastFC = chams_fc; chams_lastOC = chams_oc; chams_lastFT = chams_ft; chams_lastOT = chams_ot
 	end
 end
+
+-- 2. CREATE UI ELEMENTS AFTER FUNCTIONS ARE DECLARED
+
+Chams = Visuals:CreateButton("Chams", nil, true)
+
+Chams:CreateToggle("Target Players", true, function(state)
+	chamsReconcileAll()
+end)
+
+Chams:CreateToggle("Target NPCs/Dummies", false, function(state)
+	chamsReconcileAll()
+end)
+
+Chams:CreateColorPicker("Cham Color", Color3.fromRGB(140, 120, 255), function(color)
+	if loops["chams"] then updateAllHighlightProperties() end
+end)
+
+Chams:CreateColorPicker("Outline Color", Color3.fromRGB(255, 255, 255), function(color)
+	if loops["chams"] then updateAllHighlightProperties() end
+end)
+
+Chams:CreateSlider("Cham Transparency", 0, 1, 0.5, function(val)
+	if loops["chams"] then updateAllHighlightProperties() end
+end, 0.05)
+
+Chams:CreateSlider("Outline Transparency", 0, 1, 0, function(val)
+	if loops["chams"] then updateAllHighlightProperties() end
+end, 0.05)
+
+-- 3. TOGGLE CALLBACK
 
 Chams.Callbacks.OnToggle = function(state)
 	loops["chams"] = state
+
+	for _, conn in pairs(chamsConnections) do
+		pcall(function() conn:Disconnect() end)
+	end
+	chamsConnections = {}
+
 	if state then
-		startEntityCache()
-		chams_gen = chams_gen + 1
-		pcall(chamsReconcile)
-		task.spawn(function(g)
-			while loops["chams"] and chams_gen == g do
-				pcall(chamsReconcile)
-				task.wait(0.15)
+		if type(startEntityCache) == "function" then
+			startEntityCache()
+		end
+
+		chamsReconcileAll()
+
+		table.insert(chamsConnections, Players.PlayerAdded:Connect(function(plr)
+			table.insert(chamsConnections, plr.CharacterAdded:Connect(function(char)
+				task.wait(0.5)
+				chamsReconcileAll()
+			end))
+			table.insert(chamsConnections, plr:GetPropertyChangedSignal("Team"):Connect(chamsReconcileAll))
+		end))
+
+		table.insert(chamsConnections, Players.PlayerRemoving:Connect(function(plr)
+			if plr.Character then
+				chamsRemove(plr.Character)
 			end
-		end, chams_gen)
+		end))
+
+		for _, plr in ipairs(Players:GetPlayers()) do
+			table.insert(chamsConnections, plr.CharacterAdded:Connect(function(char)
+				task.wait(0.5)
+				chamsReconcileAll()
+			end))
+			table.insert(chamsConnections, plr:GetPropertyChangedSignal("Team"):Connect(chamsReconcileAll))
+		end
+
+		table.insert(chamsConnections, Player:GetPropertyChangedSignal("Team"):Connect(chamsReconcileAll))
+
+		table.insert(chamsConnections, G.Services.Workspace.ChildAdded:Connect(function(child)
+			if child:FindFirstChildOfClass("Humanoid") and not Players:GetPlayerFromCharacter(child) then
+				task.wait(0.5)
+				chamsReconcileAll()
+			end
+		end))
+
+		table.insert(chamsConnections, G.Services.Workspace.ChildRemoved:Connect(function(child)
+			chamsRemove(child)
+		end))
+
 	else
-		for chams_m, chams_hl in pairs(chams_active) do pcall(function() chams_hl:Destroy() end) end
+		-- Ensure everything gets completely wiped and destroyed on untoggle
+		for model, hl in pairs(chams_active) do
+			pcall(function() hl:Destroy() end)
+		end
 		chams_active = {}
+
+		if chamsFolder then
+			chamsFolder:ClearAllChildren()
+		end
 	end
 end
-
-
 
 if tr_renderConn then pcall(function() tr_renderConn:Disconnect() end) end
 tr_renderConn = nil
