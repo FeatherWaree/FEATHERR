@@ -890,7 +890,7 @@ end
 
 -- 5. PLAYER TRACKING (No CollectionService, tracks characters directly via Player events)
 EC_AddPlayerChar = function(char)
-	if char and char:IsA("Model") and char ~= localPlayer.Character then
+	if char and char:IsA("Model")  then
 		if not table.find(EntityCache.Players, char) then
 			table.insert(EntityCache.Players, char)
 		end
