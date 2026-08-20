@@ -1,5 +1,224 @@
+-- ============================================================
+--  FEATHERWARE SECURE KEY AUTHENTICATION (HIDDEN URL)
+-- ============================================================
+HttpService = game:GetService("HttpService")
+Players = game:GetService("Players")
+Player = Players.LocalPlayer
+PlayerGui = Player:WaitForChild("PlayerGui")
+TweenService = game:GetService("TweenService")
 
+-- CONFIGURATION (HIDDEN)
+-- This is your URL: https://pastebin.com/raw/YEtjE2FM 
+-- converted into ASCII codes so nobody can read it on GitHub.
+urlCodes = {104, 116, 116, 112, 115, 58, 47, 47, 112, 97, 115, 116, 101, 98, 105, 110, 46, 99, 111, 109, 47, 114, 97, 119, 47, 89, 69, 116, 106, 69, 50, 70, 77}
 
+-- Function to translate the numbers back into the URL secretly
+function decodeURL()
+	decodedString = ""
+	for _, code in ipairs(urlCodes) do
+		decodedString = decodedString .. string.char(code)
+	end
+	return decodedString
+end
+
+-- 1. CREATE THE PREMIUM LOGIN GUI
+authGui = Instance.new("ScreenGui")
+authGui.Name = "Featherware_Auth"
+authGui.ResetOnSpawn = false
+authGui.IgnoreGuiInset = true
+authGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+authGui.Parent = PlayerGui
+
+mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 380, 0, 240)
+mainFrame.Position = UDim2.new(0.5, -190, 0.5, -120)
+mainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = authGui
+
+mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent = mainFrame
+
+mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(40, 40, 45)
+mainStroke.Thickness = 1.5
+mainStroke.Parent = mainFrame
+
+headerLine = Instance.new("Frame")
+headerLine.Size = UDim2.new(1, 0, 0, 3)
+headerLine.BackgroundColor3 = Color3.fromRGB(78, 173, 73)
+headerLine.BorderSizePixel = 0
+headerLine.Parent = mainFrame
+
+title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 50)
+title.Position = UDim2.new(0, 0, 0, 10)
+title.BackgroundTransparency = 1
+title.Text = "FEATHERWARE"
+title.Font = Enum.Font.GothamBlack
+title.TextSize = 22
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Parent = mainFrame
+
+subtitle = Instance.new("TextLabel")
+subtitle.Size = UDim2.new(1, 0, 0, 20)
+subtitle.Position = UDim2.new(0, 0, 0, 40)
+subtitle.BackgroundTransparency = 1
+subtitle.Text = "PREMIUM ACCESS REQUIRED"
+subtitle.Font = Enum.Font.Gotham
+subtitle.TextSize = 11
+subtitle.TextColor3 = Color3.fromRGB(120, 120, 120)
+subtitle.Parent = mainFrame
+
+keyBox = Instance.new("TextBox")
+keyBox.Size = UDim2.new(1, -40, 0, 45)
+keyBox.Position = UDim2.new(0, 20, 0, 80)
+keyBox.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+keyBox.Text = ""
+keyBox.PlaceholderText = "Enter your license key..."
+keyBox.Font = Enum.Font.Gotham
+keyBox.TextSize = 14
+keyBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+keyBox.PlaceholderColor3 = Color3.fromRGB(80, 80, 80)
+keyBox.ClearTextOnFocus = false
+keyBox.Parent = mainFrame
+
+keyCorner = Instance.new("UICorner")
+keyCorner.CornerRadius = UDim.new(0, 6)
+keyCorner.Parent = keyBox
+
+keyStroke = Instance.new("UIStroke")
+keyStroke.Color = Color3.fromRGB(35, 35, 40)
+keyStroke.Thickness = 1
+keyStroke.Parent = keyBox
+
+statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -40, 0, 20)
+statusLabel.Position = UDim2.new(0, 20, 0, 130)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = ""
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 12
+statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = mainFrame
+
+authBtn = Instance.new("TextButton")
+authBtn.Size = UDim2.new(1, -40, 0, 45)
+authBtn.Position = UDim2.new(0, 20, 0, 160)
+authBtn.BackgroundColor3 = Color3.fromRGB(78, 173, 73)
+authBtn.Text = "AUTHENTICATE"
+authBtn.Font = Enum.Font.GothamBold
+authBtn.TextSize = 14
+authBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+authBtn.AutoButtonColor = false
+authBtn.Parent = mainFrame
+
+btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0, 6)
+btnCorner.Parent = authBtn
+
+authBtn.MouseEnter:Connect(function()
+	TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(90, 190, 85)}):Play()
+end)
+authBtn.MouseLeave:Connect(function()
+	TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(78, 173, 73)}):Play()
+end)
+
+function shakeFrame()
+	originalPos = mainFrame.Position
+	for i = 1, 6 do
+		offset = (i % 2 == 0) and 8 or -8
+		TweenService:Create(mainFrame, TweenInfo.new(0.04), {Position = originalPos + UDim2.new(0, offset, 0, 0)}):Play()
+		task.wait(0.04)
+	end
+	TweenService:Create(mainFrame, TweenInfo.new(0.04), {Position = originalPos}):Play()
+end
+
+function authenticate()
+	inputKey = keyBox.Text
+	if inputKey == "" then
+		statusLabel.Text = " Please enter a license key."
+		statusLabel.TextColor3 = Color3.fromRGB(255, 150, 50)
+		shakeFrame()
+		return
+	end
+
+	statusLabel.Text = "⟳ Connecting to authentication server..."
+	statusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+	authBtn.Active = false
+	TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundTransparency = 0.5}):Play()
+
+	-- Secretly decode the URL and fetch the key
+	success, response = pcall(function()
+		return game:HttpGet(decodeURL())
+	end)
+
+	if not success then
+		statusLabel.Text = "⚠ Failed to connect to auth server."
+		statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+		authBtn.Active = true
+		TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundTransparency = 0}):Play()
+		shakeFrame()
+		return
+	end
+
+	-- Clean the response (remove any accidental spaces or newlines from Pastebin)
+	validKey = string.gsub(response, "%s+", "")
+	cleanInput = string.gsub(inputKey, "%s+", "")
+
+	if cleanInput == validKey then
+		statusLabel.Text = "✓ Access Granted! Loading Featherware..."
+		statusLabel.TextColor3 = Color3.fromRGB(78, 173, 73)
+		TweenService:Create(authBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(78, 173, 73)}):Play()
+
+		task.wait(1)
+
+		-- Fade out and destroy the auth GUI
+		TweenService:Create(mainFrame, TweenInfo.new(0.3), {BackgroundTransparency = 1, Position = mainFrame.Position - UDim2.new(0, 0, 0, 20)}):Play()
+		for _, v in ipairs(mainFrame:GetDescendants()) do
+			pcall(function()
+				if v:IsA("TextBox") then
+					TweenService:Create(v, TweenInfo.new(0.3), {TextTransparency = 1, PlaceholderTransparency = 1}):Play()
+				elseif v:IsA("TextLabel") or v:IsA("TextButton") then
+					TweenService:Create(v, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
+				elseif v:IsA("UIStroke") then
+					TweenService:Create(v, TweenInfo.new(0.3), {Transparency = 1}):Play()
+				elseif v:IsA("Frame") then
+					TweenService:Create(v, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
+				end
+			end)
+		end
+		task.wait(0.3)
+		authGui:Destroy()
+
+		-- Signal that authentication is complete
+		_G.FEATHERWARE_AUTHENTICATED = true
+	else
+		statusLabel.Text = "✕ Invalid License Key."
+		statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+		authBtn.Active = true
+		TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundTransparency = 0}):Play()
+		shakeFrame()
+	end
+end
+
+authBtn.MouseButton1Click:Connect(authenticate)
+keyBox.FocusLost:Connect(function(enterPressed)
+	if enterPressed then authenticate() end
+end)
+
+-- 4. SCRIPT GATEKEEPER
+-- This pauses the entire script until the user enters the correct key
+repeat task.wait(0.1) until _G.FEATHERWARE_AUTHENTICATED == true
+task.wait(0.5)
+
+-- ============================================================
+--  PASTE THE REST OF YOUR FEATHERWARE SCRIPT BELOW THIS LINE
+-- ============================================================
 
 repeat
 	task.wait()
@@ -4106,10 +4325,7 @@ local function UninjectFW()
 		pcall(function() if autoYuziThread then task.cancel(autoYuziThread) autoYuziThread = nil end end)
 		pcall(function() if infinitecrystal then task.cancel(infinitecrystal) infinitecrystal = nil end end)
 		pcall(function() if breakThread then task.cancel(breakThread) breakThread = nil end end)
-		-- HitBoxes
-		pcall(hbClearAllHitboxes)
-		pcall(hbRestoreRanges)
-		if hb_conn then hb_conn:Disconnect() hb_conn = nil end
+
 		-- Shop Tier Bypass
 		pcall(function() if ShopTierBypassMechanic then ShopTierBypassMechanic:Toggle(false) end end)
 		-- Sprint
@@ -4677,188 +4893,165 @@ AutoClicker:CreateToggle("Block Placement", true, nil)
 AutoClicker:CreateSlider("Block CPS", 1,200,7, nil)
 AutoClicker:CreateToggle("Sword Swings", true, nil)
 AutoClicker:CreateSlider("Sword CPS", 1,9,9, nil)
-AutoClicker:CreateToggle("Shop Purchasing", true, nil)
-AutoClicker:CreateSlider("Shop CPS", 1,50,7, nil)
 
-hb_rs = (typeof(paRS) == "Instance") and paRS or G.Services.RS
-hb_itemMeta = nil
-hb_items = nil
-hb_origRanges = {}
-hb_objects = {}
-hb_conn = nil
-hb_lastScan = 0
-
-pcall(function()
-	hb_itemMeta = require(hb_rs:WaitForChild("TS", 4):WaitForChild("item", 4):WaitForChild("item-meta", 4))
-	hb_items = hb_itemMeta.items
-end)
+-- ===== UI SETUP =====
 HitboxExpander = Combat:CreateButton("Hitbox Expander", nil, true)
 HitboxExpander:CreateToggle("Expand Players", true, nil)
 HitboxExpander:CreateToggle("Expand NPCs", true, nil)
-HitboxExpander:CreateToggle("Projectile Hitbox Only", true, nil)
-HitboxExpander:CreateSlider("Expand Size", 4, 20, 12, nil, 0.5)
+HitboxExpander:CreateSlider("Expand Size", 2, 20, 12, nil, 0.5)
 
-HBE_parts = {}
-HBE_projectileWeapons = {
-	"wood_bow","wood_crossbow","tactical_crossbow","tactical_headhunter",
-	"feather_bow","falconer_bow","falconer_crossbow","falconer_headhunter",
-	"headhunter","golden_bow","mage_spellbook","whim_spellbook",
-	"frost_staff_1","frost_staff_2","frost_staff_3",
-	"tactical_headhunter_arrow","tactical_headhunter_arrow_iron",
-	"tactical_crossbow_arrow","tactical_crossbow_arrow_iron",
-	"crossbow_arrow","crossbow_arrow_iron","crossbow_firework_arrow",
-	"tactical_crossbow_firework_arrow","headhunter_arrow","headhunter_arrow_iron",
-	"headhunter_firework_arrow","tactical_headhunter_arrow_iron",
-	"flower_arrow","flower_arrow_iron","flower_crossbow_arrow",
-	"flower_crossbow_arrow_iron","flower_headhunter_arrow",
-	"flower_headhunter_arrow_iron","sheriff_crossbow_arrow",
-	"rainbow_arrow","rainbow_bridge","rainbow_bridge_gadget",
-	"fork_trident_projectile","gumball","glue_trap","glue_trap_charging",
-	"repair_tool","meteor_shower","star_projectile","teleport_hat",
-	"owl_projectile","sword_wave","sword_wave1","festive_sword_wave",
-	"festive_sword_wave1","electric_orb","lightning_strike","carrot_rocket",
-	"boba_pearl","detonated_bomb","spirit_bridge","ninja_chakram_1",
-	"ninja_chakram_2","ninja_chakram_3","ninja_chakram_4","bananarang",
-	"pit","cluster_bomb","party_hat_missile","firework_rocket_missile",
-	"water","single_water_bullet","water_bullet","penguin_web","big_web",
-	"frosty_snowball_1","frosty_snowball_2","frosty_snowball_3",
-	"life_arrow","life_crossbow_arrow","life_headhunter_arrow",
-	"harpoon_projectile","hero_magical_girl_scepter_projectile",
-	"villain_magical_girl_scepter_projectile","firecrackers","ghost_orb",
-	"fireball","telepearl","snowball","spear","lasso","swap_ball",
-	"banana_peel","blackhole_bomb","popup_cube","robbery_ball",
-	"guided_missile","heat_seeking_rock","turretBullet","autoTurretBullet",
-	"ballista_projectile","rocket_launcher_missile","stun_grenade",
-	"tornado_missile","dragon_breath","portal_projectile","impulse_grenade",
-	"water_balloon","slime_water_balloon","frost_water_balloon",
-	"smoke_grenade","hot_potato","sleep_splash_potion","poison_splash_potion",
-	"heal_splash_potion","deploy_spirit","ghost","fisherman_bobber",
-	"zipline","deploy_chicken","oil_projectile","throwing_knife",
-	"large_rock","throwable_bridge","santa_bomb","santa_bomb_siege",
-	"frosted_snowball","golden_arrow","golden_arrow_iron",
-	"blunderbuss_bullet","tennis_ball","glitch_arrow","glitch_snowball",
-	"glitch_popup_cube","glitch_robbery_ball","glitch_throwable_bridge",
-	"glitch_stun_grenade","glitch_tactical_arrow","mage_spell_base",
-	"mage_spell_fire","mage_spell_ice","mage_spell_nature",
-	"pumpkin_bomb_1","pumpkin_bomb_2","pumpkin_bomb_3","sticky_firework",
-	"dizzy_toad","sand_spear","easter_egg","beehive_grenade"
-}
+hitboxConnections = {}
 
-HBE_isProjectileWeapon = function(name)
-	if not name then return false end
-	local n = string.lower(name)
-	for _, w in ipairs(HBE_projectileWeapons) do
-		if string.find(n, string.lower(w)) then return true end
+-- Clears all active event listeners so they don't stack
+function clearHitboxConnections()
+	for _, conn in pairs(hitboxConnections) do
+		pcall(function() conn:Disconnect() end)
 	end
-	return false
+	hitboxConnections = {}
 end
 
-HBE_isHoldingProjectile = function()
-	local char = Player.Character
-	if not char then return false end
-	local hi = char:FindFirstChild("HandInvItem")
-	if not hi or not hi.Value then return false end
-	local name = typeof(hi.Value) == "Instance" and hi.Value.Name or tostring(hi.Value)
-	return HBE_isProjectileWeapon(name)
-end
+-- Applies the size and fixes camera properties
+function applyHitboxToPart(part, sizeValue)
+	if not part or not part:IsA("BasePart") then return end
 
-HBE_getTargets = function()
-	local targets = {}
-	if HitboxExpander.Values["Expand Players"] then
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if plr ~= Player and plr.Character and plr.Team ~= Player.Team then
-				local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-				local hum = plr.Character:FindFirstChild("Humanoid")
-				if hrp and hum and hum.Health > 0 then
-					table.insert(targets, {model = plr.Character, hrp = hrp})
-				end
-			end
-		end
-	end
-	if HitboxExpander.Values["Expand NPCs"] then
-		for _, npc in ipairs(G.Services.Workspace:GetChildren()) do
-			if npc:IsA("Model") and npc:FindFirstChild("Humanoid") and not Players:GetPlayerFromCharacter(npc) then
-				local hrp = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-				local hum = npc:FindFirstChild("Humanoid")
-				if hrp and hum and hum.Health > 0 then
-					table.insert(targets, {model = npc, hrp = hrp})
-				end
-			end
-		end
-	end
-	return targets
-end
+	-- Ignore weapons and armor accessories so we don't make swords giant
+	if part:FindFirstAncestorOfClass("Accessory") or part:FindFirstAncestorOfClass("Tool") then return end
 
-HBE_createPart = function(model, hrp, expand)
-	local part = Instance.new("Part")
-	part.Name = "HBE_Hitbox"
-	part.Shape = Enum.PartType.Ball
-	part.Size = Vector3.new(expand, expand, expand)
-	part.CFrame = hrp.CFrame
-	part.Transparency = 1
-	part.CanCollide = false
-	part.CanQuery = true
-	part.CanTouch = false
-	part.Anchored = true
+	-- Save original states
+	if not part:GetAttribute("OriginalSizeX") then
+		part:SetAttribute("OriginalSizeX", part.Size.X)
+		part:SetAttribute("OriginalSizeY", part.Size.Y)
+		part:SetAttribute("OriginalSizeZ", part.Size.Z)
+		part:SetAttribute("OriginalTrans", part.Transparency)
+	end
+
+	-- THE FIX: Keep Y size the exact same to bypass raycast anti-cheat flags. Expand X and Z.
+	part.Size = Vector3.new(sizeValue, part:GetAttribute("OriginalSizeY"), sizeValue)
 	part.Massless = true
-	part.CastShadow = false
-	part.Parent = model
-	HBE_parts[model] = part
-	return part
-end
+	part.CanCollide = false
 
-HBE_update = function()
-	local holdingProj = HitboxExpander.Values["Projectile Hitbox Only"] and HBE_isHoldingProjectile()
-	local targets = HBE_getTargets()
-	local expand = tonumber(HitboxExpander.Values["Expand Size"]) or 12
-
-	-- Remove hitboxes for models no longer in targets
-	for model, part in pairs(HBE_parts) do
-		if not model.Parent then
-			if part and part.Parent then part:Destroy() end
-			HBE_parts[model] = nil
-		end
-	end
-
-	-- Remove hitboxes when not holding projectile weapon
-	if HitboxExpander.Values["Projectile Hitbox Only"] and not holdingProj then
-		for model, part in pairs(HBE_parts) do
-			if part and part.Parent then part:Destroy() end
-			HBE_parts[model] = nil
-		end
-		return
-	end
-
-	for _, t in ipairs(targets) do
-		local part = HBE_parts[t.model]
-		if not part or not part.Parent then
-			part = HBE_createPart(t.model, t.hrp, expand)
-			HBE_parts[t.model] = part
-		end
-		part.CFrame = t.hrp.CFrame
-		part.Size = Vector3.new(expand, expand, expand)
+	-- THE FIX: Roblox camera/mouse ignores parts with transparency > 0.25
+	if part.Transparency < 0.5 then
+		part.Transparency = 0.5
 	end
 end
 
-HBE_loop = function()
-	while loops["hitbox expander"] do
-		HBE_update()
-		task.wait(0.1)
+-- Reverts the part when you toggle the module off
+function revertHitboxPart(part)
+	if part and part:IsA("BasePart") and part:GetAttribute("OriginalSizeX") then
+		part.Size = Vector3.new(
+			part:GetAttribute("OriginalSizeX"),
+			part:GetAttribute("OriginalSizeY"),
+			part:GetAttribute("OriginalSizeZ")
+		)
+		if part:GetAttribute("OriginalTrans") then
+			part.Transparency = part:GetAttribute("OriginalTrans")
+		end
 	end
 end
 
+-- Processes an entire character model (Players or NPCs)
+function processCharacter(char, isPlayer)
+	if not char then return end
+
+	-- 1. Apply to parts that already loaded
+	for _, desc in pairs(char:GetDescendants()) do
+		pcall(function()
+			if HitboxExpander.Values["Expand Players"] and isPlayer then
+				applyHitboxToPart(desc, HitboxExpander.Values["Expand Size"] or 12)
+			elseif HitboxExpander.Values["Expand NPCs"] and not isPlayer then
+				applyHitboxToPart(desc, HitboxExpander.Values["Expand Size"] or 12)
+			end
+		end)
+	end
+
+	-- 2. Listen for parts loading in late (like late armor spawns) without any loops
+	table.insert(hitboxConnections, char.DescendantAdded:Connect(function(desc)
+		pcall(function()
+			if HitboxExpander.Values["Expand Players"] and isPlayer then
+				applyHitboxToPart(desc, HitboxExpander.Values["Expand Size"] or 12)
+			elseif HitboxExpander.Values["Expand NPCs"] and not isPlayer then
+				applyHitboxToPart(desc, HitboxExpander.Values["Expand Size"] or 12)
+			end
+		end)
+	end))
+end
+
+-- Main Setup Event Function
+function runHitboxExpanderEvents()
+	clearHitboxConnections()
+
+	-- ==== SETUP PLAYERS ====
+	if HitboxExpander.Values["Expand Players"] then
+		-- Apply to current players
+		for _, plr in pairs(game:GetService("Players"):GetPlayers()) do
+			if plr ~= game:GetService("Players").LocalPlayer then
+				if plr.Character then
+					processCharacter(plr.Character, true)
+				end
+				-- Listen for when they die and respawn
+				table.insert(hitboxConnections, plr.CharacterAdded:Connect(function(char)
+					processCharacter(char, true)
+				end))
+			end
+		end
+
+		-- Listen for brand new players joining the match
+		table.insert(hitboxConnections, game:GetService("Players").PlayerAdded:Connect(function(plr)
+			if plr ~= game:GetService("Players").LocalPlayer then
+				table.insert(hitboxConnections, plr.CharacterAdded:Connect(function(char)
+					processCharacter(char, true)
+				end))
+			end
+		end))
+	end
+
+	-- ==== SETUP NPCS ====
+	if HitboxExpander.Values["Expand NPCs"] then
+		-- Apply to currently existing Hitbox tags
+		for _, box in pairs(game:GetService("CollectionService"):GetTagged("Hitbox")) do
+			pcall(function() applyHitboxToPart(box, HitboxExpander.Values["Expand Size"] or 12) end)
+		end
+
+		-- Listen for new tags being added by the server in real-time
+		table.insert(hitboxConnections, game:GetService("CollectionService"):GetInstanceAddedSignal("Hitbox"):Connect(function(box)
+			pcall(function() applyHitboxToPart(box, HitboxExpander.Values["Expand Size"] or 12) end)
+		end))
+	end
+end
+
+-- Cleanup Function
+function revertAllHitboxes()
+	clearHitboxConnections()
+
+	-- Revert players
+	for _, plr in pairs(game:GetService("Players"):GetPlayers()) do
+		if plr.Character then
+			for _, desc in pairs(plr.Character:GetDescendants()) do
+				pcall(function() revertHitboxPart(desc) end)
+			end
+		end
+	end
+
+	-- Revert tags
+	for _, box in pairs(game:GetService("CollectionService"):GetTagged("Hitbox")) do
+		pcall(function() revertHitboxPart(box) end)
+		if box.Parent then
+			for _, desc in pairs(box.Parent:GetDescendants()) do
+				pcall(function() revertHitboxPart(desc) end)
+			end
+		end
+	end
+end
+
+-- ===== TOGGLE HOOK =====
 HitboxExpander.Callbacks.OnToggle = function(state)
-	loops["hitbox expander"] = state
 	if state then
-		task.spawn(HBE_loop)
+		runHitboxExpanderEvents()
 	else
-		for model, part in pairs(HBE_parts) do
-			if part and part.Parent then part:Destroy() end
-			HBE_parts[model] = nil
-		end
+		revertAllHitboxes()
 	end
 end
-
 Reach = Combat:CreateButton("Reach", nil, true, true)
 Reach:CreateToggle("Sword", true, nil)
 Reach:CreateToggle("Placing", true, nil)
@@ -7650,11 +7843,6 @@ Killaura.Callbacks.OnToggle = function(state)
 		if realDelta > 0.25 then realDelta = 0.016 end
 		accumulatedTime = accumulatedTime + realDelta
 
-		-- BYPASS THE 9 CPS HARDCAP (isClickingTooFast)
-		if canRequire and kaSwordController then
-			kaSwordController.lastSwing = 0
-		end
-
 		-- 2. DYNAMIC HIT DELAY CALCULATION
 		local hitsPer10 = tonumber(Killaura.Values["Hits per 10s"]) or 35
 
@@ -7670,10 +7858,7 @@ Killaura.Callbacks.OnToggle = function(state)
 		-- Calculate the target delay based on the slider
 		local calculatedDelay = 10 / math.max(hitsPer10, 0.025)
 
-		-- CRITICAL FIX: Use the HIGHER of the two delays (slider vs weapon speed) + 3ms safety padding
-		-- This ensures you NEVER fire faster than the server allows, completely eliminating the 1.01x buffer stutter
 		-- CRITICAL FIX: Use the HIGHER of the two delays (slider vs weapon speed) + 0.5ms safety padding
-		-- 0.5ms is the mathematical sweet spot: it prevents the 1.01x buffer stutter, but is small enough to still hit exactly 35.0 CPS
 		local hitDelay = math.max(calculatedDelay, weaponSpeed) + 0.0005
 
 		if not (Killaura.Values["Target Players"] or Killaura.Values["Target NPCs/Dummies"]) then return end
@@ -7703,10 +7888,7 @@ Killaura.Callbacks.OnToggle = function(state)
 			local npcdummytarget, npcdummydistance = nil, selectionRange
 
 			for _, charModel in ipairs(EntityCache.Players or {}) do
-				-- 1. Get the Player object from the character model
 				local targetPlayer = Players:GetPlayerFromCharacter(charModel)
-
-				-- 2. Check if it's not you, has a parent, AND is not on your team
 				local isTeammate = (targetPlayer and Player.Team and targetPlayer.Team == Player.Team)
 
 				if charModel ~= Player.Character and charModel.Parent and not isTeammate then
@@ -7913,6 +8095,11 @@ Killaura.Callbacks.OnToggle = function(state)
 			accumulatedTime = accumulatedTime - hitDelay
 			if accumulatedTime > hitDelay then 
 				accumulatedTime = 0 
+			end
+
+			-- BYPASS THE 9 CPS HARDCAP ONLY WHEN FIRING (Fixes manual swing cooldown)
+			if canRequire and kaSwordController then
+				kaSwordController.lastSwing = 0
 			end
 
 			currentKaTarget = besttarget
@@ -8579,7 +8766,7 @@ AimAssist.Callbacks.OnToggle = function(state)
 		currentTarget = nil
 		return 
 	end
-	
+
 
 	aimConnection = RunService.Heartbeat:Connect(function()
 		local s, e = pcall(function()
@@ -13005,10 +13192,7 @@ Speed.Callbacks.OnToggle = function(value)
 		speedConnection:Disconnect()
 		speedConnection = nil
 	end
-	if speedRetryConn then
-		speedRetryConn:Disconnect()
-		speedRetryConn = nil
-	end
+
 
 	if loops["speed"] then
 		if not cachedChar or not cachedHumanoid or cachedHumanoid.Health <= 0 then
@@ -14635,7 +14819,7 @@ ProjectileTracers.Callbacks.OnToggle = function(state)
 	loops["projectile tracers"] = state
 
 	if state then
-			connectG.Services.WorkspaceScanner()
+		connectG.Services.WorkspaceScanner()
 
 		-- Apply to existing projectiles
 		for _, obj in pairs(G.Services.Workspace:GetDescendants()) do
@@ -15841,10 +16025,12 @@ TriggerBot.Callbacks.OnToggle = function(state)
 end
 
 
--- ===== live sword controller =====
+-- ===== LIVE CONTROLLERS & SERVICES =====
 SwordController = require(Player.PlayerScripts.TS.controllers.global.combat.sword["sword-controller"]).SwordController
+local BedwarsShopController = KnitClient and KnitClient.Controllers and KnitClient.Controllers.BedwarsShopController
 
 autoClickerThread = nil
+shopAutoThread = nil
 acMobileHold = false
 acPlacer = nil
 acPlaceMethod = nil
@@ -15852,14 +16038,6 @@ acPlaceResolved = false
 acPlacePath = nil
 acLastPlace = 0
 acPlaceDiag = false
-acLastShopClick = 0
-
--- ===== SHOP REMOTE SETUP =====
-acShopRemote = nil
-pcall(function()
-	local Net = G.Services.RS:WaitForChild("rbxts_include", 10):WaitForChild("node_modules", 10):WaitForChild("@rbxts", 10):WaitForChild("net", 10):WaitForChild("out", 10):WaitForChild("_NetManaged", 10)
-	acShopRemote = Net:WaitForChild("BedwarsPurchaseItem", 10)
-end)
 
 -- ===== BLOCK TRACKING (Reads item-meta to find all valid blocks) =====
 acBlockList = {}
@@ -15884,17 +16062,21 @@ if next(acBlockList) == nil then
 		["wool_brown"] = true, ["wool_green"] = true, ["wool_red"] = true, ["wool_black"] = true,
 		["stone_bricks"] = true, ["cracked_stone_bricks"] = true, ["mossy_stone_bricks"] = true,
 		["oak_plank"] = true, ["birch_plank"] = true, ["spruce_plank"] = true, ["acacia_plank"] = true,
-		["dark_oak_plank"] = true, ["jungle_plank"] = true, ["obsidian"] = true, ["end_stone"] = true
+		["dark_oak_plank"] = true, ["jungle_plank"] = true, ["obsidian"] = true, ["end_stone"] = true,
+		["prismarine"] = true, ["nether_brick"] = true, ["red_nether_brick"] = true, ["quartz_block"] = true,
+		["purpur_block"] = true, ["sponge"] = true, ["wet_sponge"] = true, ["glowstone"] = true,
+		["sea_lantern"] = true, ["glass"] = true, ["stained_glass_white"] = true, ["stained_glass_black"] = true
 	}
 end
 
--- ===== block placer resolver =====
+-- ===== BLOCK PLACER RESOLVER =====
 function acPickMethod(p)
 	for _, mn in ipairs({"placeBlock", "PlaceBlock", "place", "Place"}) do
 		if type(p[mn]) == "function" then return mn end
 	end
 	return nil
 end
+
 function acTry(p, label)
 	if acPlacer then return end
 	if type(p) == "table" or type(p) == "userdata" then
@@ -15902,17 +16084,23 @@ function acTry(p, label)
 		if acMN then acPlacer = p; acPlaceMethod = acMN; acPlacePath = label end
 	end
 end
+
 function acResolvePlacer()
 	if acPlaceResolved then return end
 	acPlaceResolved = true
+
 	if not KnitClient then
-		pcall(function() KnitClient = require(G.Services.RS.rbxts_include.node_modules["@easy-games"].knit.src).KnitClient end)
+		pcall(function()
+			KnitClient = require(G.Services.RS.rbxts_include
+				.node_modules["@easy-games"].knit.src).KnitClient
+		end)
 	end
-	pcall(function()
+
+	pcall(function()   
 		acC = KnitClient and KnitClient.Controllers and KnitClient.Controllers.BlockPlacementController
 		if acC then acTry(acC.blockPlacer or acC.placer, "BlockPlacementController") end
 	end)
-	pcall(function()
+	pcall(function()   
 		if acPlacer or not (KnitClient and KnitClient.Controllers) then return end
 		for k, c in pairs(KnitClient.Controllers) do
 			if type(k) == "string" and k:lower():find("place") then
@@ -15921,18 +16109,40 @@ function acResolvePlacer()
 			end
 		end
 	end)
-	if not acPlacer then print("[AC-PLACE] NO placer instance -> mouse1click() fallback") end
+	pcall(function()   
+		if acPlacer then return end
+		acCBE = require(Player.PlayerScripts.TS.lib["block-engine"]["client-block-engine"]).ClientBlockEngine
+		if acCBE and acCBE.getBlockPlacer then acTry(acCBE:getBlockPlacer(), "ClientBlockEngine") end
+	end)
+	pcall(function()   
+		if acPlacer then return end
+		acBE = require(G.Services.RS.rbxts_include
+			.node_modules["@easy-games"]["block-engine"].out).BlockEngine
+		if acBE and acBE.getBlockPlacer then acTry(acBE:getBlockPlacer(), "BlockEngine") end
+	end)
 end
 
 function acGetPlacePos()
 	if acPlacer then
 		acOk, acPos = pcall(function()
 			acSel = acPlacer.clientManager and acPlacer.clientManager:getBlockSelector()
-			if acSel then return acSel:getMouseInfo(0).placementPosition end
+			if acSel then
+				acInfo = acSel:getMouseInfo((BlockSelectorMode and BlockSelectorMode.PLACE) or 0)
+				return acInfo and acInfo.placementPosition or nil
+			end
 		end)
 		if acOk and acPos and acPos == acPos then return acPos end
 	end
-	return Player:GetMouse().Hit.Position
+	if BlockSelector then
+		acOk, acPos = pcall(function()
+			acS = BlockSelector.new()
+			acInfo = acS:getMouseInfo((BlockSelectorMode and BlockSelectorMode.PLACE) or 0)
+			return acInfo and acInfo.placementPosition or nil
+		end)
+		if acOk and acPos and acPos == acPos then return acPos end
+	end
+	acM = Player:GetMouse()
+	return acM and acM.Hit and acM.Hit.Position or nil
 end
 
 function acPlaceAtCursor()
@@ -15947,70 +16157,25 @@ function acPlaceAtCursor()
 		pcall(mouse1click)
 	end
 end
-
--- ===== SHOP AUTO CLICKER LOGIC (Direct Remote Call) =====
-function acClickShop()
-	if not AutoClicker.Values["Shop Purchasing"] then return end
-	if tick() - acLastShopClick < (1 / (AutoClicker.Values["Shop CPS"] or 7)) then return end
-
-	-- Check if Shop GUI is open
-	local shopGui = Player.PlayerGui:FindFirstChild("BedwarsShop") or Player.PlayerGui:FindFirstChild("Shop")
-	if not shopGui or not shopGui.Enabled then return end
-
-	-- Try to get the currently selected item from the ClientStore
-	local success, result = pcall(function()
-		if not ClientStore then return nil end
-		local state = ClientStore:getState()
-		if state and state.Game and state.Game.shop then
-			return state.Game.shop.selectedItem
-		end
-		return nil
-	end)
-
-	if success and result and acShopRemote then
-		-- Fire the purchase remote directly
-		pcall(function()
-			acShopRemote:InvokeServer({
-				shopItem = result,
-				shopId = "1_item_shop" -- Default shop ID
-			})
-		end)
-		acLastShopClick = tick()
-	end
-end
-
--- ===== the loop =====
 function autoClickerLoop()
 	while loops["auto clicker"] do
-		-- 1. Check for Shop First (Highest Priority)
-		acClickShop()
-
-		-- 2. Check for Combat/Building
-		local held = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or acMobileHold
+		held = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or acMobileHold
 		if held then
-			local char = Player.Character
-			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			char = Player.Character
+			hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum and hum.Health > 0 then
-				local hi = char:FindFirstChild("HandInvItem")
-				local hv = hi and hi.Value
-				local heldName = hv and (typeof(hv) == "Instance" and hv.Name or tostring(hv)) or nil
-				local isSword = heldName and table.find(swords, heldName) or nil
-				local isBlock = heldName and acBlockList[heldName] or nil
+				hi = char:FindFirstChild("HandInvItem")
+				hv = hi and hi.Value
+				heldName = hv and (typeof(hv) == "Instance" and hv.Name or tostring(hv)) or nil
+
+				isSword = heldName and type(swords) == "table" and table.find(swords, heldName) or nil
+				isBlock = heldName and acBlockList[heldName] or nil
 
 				if isSword then
 					if AutoClicker.Values["Sword Swings"] then
-						if Player:GetAttribute("IsCasting") == false then 
-							-- Reset lastSwing to bypass isClickingTooFast
+						if Player:GetAttribute("IsCasting") ~= true then 
 							pcall(function() SwordController.lastSwing = 0 end)
-
-							-- Try swinging at mouse first
-							local swung = pcall(function() SwordController:swingSwordAtMouse(0) end)
-
-							-- Fallback: If swingAtMouse didn't work (no target), force a region swing
-							-- This ensures the animation and hit registration happen even if aiming at air
-							if not swung or true then 
-								pcall(function() SwordController:swingSwordInRegion(0) end)
-							end
+							pcall(function() SwordController:swingSwordAtMouse(0.39) end)
 						end
 					end
 				elseif isBlock then
@@ -16019,7 +16184,7 @@ function autoClickerLoop()
 					end
 				end
 
-				local cps = isSword and AutoClicker.Values["Sword CPS"] or AutoClicker.Values["Block CPS"]
+				cps = isSword and AutoClicker.Values["Sword CPS"] or AutoClicker.Values["Block CPS"]
 				if not cps or cps <= 0 then cps = 7 end
 				task.wait(1 / cps)
 			else
@@ -16032,22 +16197,19 @@ function autoClickerLoop()
 	autoClickerThread = nil
 end
 
--- ===== toggle =====
+-- ===== TOGGLE CALLBACKS =====
 AutoClicker.Callbacks.OnToggle = function(state)
 	loops["auto clicker"] = state
 	if state then
 		if not autoClickerThread then autoClickerThread = task.spawn(autoClickerLoop) end
 		pcall(function()
-			local acMob = Player.PlayerGui:FindFirstChild("MobileUI")
+			acMob = Player.PlayerGui:FindFirstChild("MobileUI")
 			if acMob then
 				for _, id in ipairs({"2", "5"}) do
-					local acBtn = acMob:FindFirstChild(id)
+					acBtn = acMob:FindFirstChild(id)
 					if acBtn then
-						if acBtnDownConn then acBtnDownConn:Disconnect() end
-						if acBtnUpConn then acBtnUpConn:Disconnect() end
-
-						acBtnDownConn = acBtn.MouseButton1Down:Connect(function() acMobileHold = true end)
-						acBtnUpConn = acBtn.MouseButton1Up:Connect(function() acMobileHold = false end)
+						acBtn.MouseButton1Down:Connect(function() acMobileHold = true end)
+						acBtn.MouseButton1Up:Connect(function() acMobileHold = false end)
 					end
 				end
 			end
@@ -16055,10 +16217,10 @@ AutoClicker.Callbacks.OnToggle = function(state)
 	else
 		if autoClickerThread then task.cancel(autoClickerThread); autoClickerThread = nil end
 		acMobileHold = false
-		if acBtnDownConn then acBtnDownConn:Disconnect(); acBtnDownConn = nil end
-		if acBtnUpConn then acBtnUpConn:Disconnect(); acBtnUpConn = nil end
 	end
 end
+
+
 
 local Terrain = G.Services.Workspace.Terrain
 
