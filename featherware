@@ -45,22 +45,6 @@ end
 
 
 
-varStorage = {}
-originalEnv = getfenv(1) 
-
-local envProxy = setmetatable({}, {
-	__index = function(_, key)
-		if varStorage[key] ~= nil then
-			return varStorage[key]
-		end
-		return originalEnv[key]
-	end,
-	__newindex = function(_, key, value)
-		varStorage[key] = value
-	end
-})
-
-setfenv(1, envProxy)
 
 replicatedStorage = G.Services.RS
 HttpService = game:GetService("HttpService")
@@ -7688,6 +7672,8 @@ Killaura.Callbacks.OnToggle = function(state)
 			end
 
 			if Killaura.Values["Target NPCs/Dummies"] then
+				print("hi")
+				print(EntityCache.NPCs)
 				for _, npc in ipairs(EntityCache.NPCs or {}) do
 					if npc and npc.Parent then
 						local tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
@@ -30170,3 +30156,4 @@ pVisBtn.MouseButton1Click:Connect(function()
 		pVisBtn.Text = "SHOW"
 	end
 end)
+
