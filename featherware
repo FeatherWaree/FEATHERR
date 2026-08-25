@@ -12970,11 +12970,16 @@ speedRetryConn = nil
 consumingPotion = false 
 
 targetSpeed = 20
+lastValidSpeed = 20
 hasLegitBoost = false
 timeInCycle = 0
 extraSpeed = 0
 displacement = Vector3.new()
 hrp = nil
+liveChar = nil
+liveHum = nil
+rawVal = nil
+parsedVal = nil
 
 Speed.Callbacks.OnToggle = function(value)
 	loops["speed"] = value
@@ -12984,12 +12989,29 @@ Speed.Callbacks.OnToggle = function(value)
 		speedConnection = nil
 	end
 
+	if speedRetryConn then
+		speedRetryConn:Disconnect()
+		speedRetryConn = nil
+	end
 
 	if loops["speed"] then
+		liveChar = Player.Character
+		liveHum = liveChar and liveChar:FindFirstChildOfClass("Humanoid")
+
+		if liveChar and liveHum and liveHum.Health > 0 then
+			cachedChar = liveChar
+			cachedHumanoid = liveHum
+		end
+
 		if not cachedChar or not cachedHumanoid or cachedHumanoid.Health <= 0 then
 			NotificationSystem.Notify("Speed", "Waiting for character to load...", 3)
 
 			speedRetryConn = Player.CharacterAdded:Connect(function(newChar)
+				if speedRetryConn then
+					speedRetryConn:Disconnect()
+					speedRetryConn = nil
+				end
+				task.wait(0.2)
 				if loops["speed"] then
 					Speed.Callbacks.OnToggle(true)
 				end
@@ -13001,18 +13023,58 @@ Speed.Callbacks.OnToggle = function(value)
 
 		speedConnection = G.Services.RunService.Heartbeat:Connect(function(deltaTime)
 			if not mainScreenUI or mainScreenUI:GetAttribute("Running") == false then return end
-			if not cachedChar or not cachedHumanoid or cachedHumanoid.Health <= 0 then 
-				Speed.Callbacks.OnToggle(true) -- Triggers the retry logic automatically
-				return 
+
+			if not cachedChar or not cachedHumanoid or cachedHumanoid.Health <= 0 or not cachedChar.Parent then 
+				liveChar = Player.Character
+				liveHum = liveChar and liveChar:FindFirstChildOfClass("Humanoid")
+				if liveChar and liveHum and liveHum.Health > 0 then
+					cachedChar = liveChar
+					cachedHumanoid = liveHum
+				else
+					Speed.Callbacks.OnToggle(true)
+					return 
+				end
 			end
 
 			hrp = cachedChar:FindFirstChild("HumanoidRootPart")
 			if not hrp then return end
 
-			targetSpeed = tonumber(Speed.Values["Speed"]) or 20
+			-- ===== BULLETPROOF CONFIG & SLIDER PARSER =====
+			rawVal = Speed.Values["Speed"]
+
+			-- Unpack if the UI stored the value in a table object
+			if typeof(rawVal) == "table" then
+				rawVal = rawVal.Value or rawVal.Val or rawVal[1]
+			end
+
+			parsedVal = tonumber(rawVal)
+
+			if parsedVal then
+				-- Fix 1: If saved as a normalized float (e.g. 0.64 ratio of 75 max speed)
+				if parsedVal > 0 and parsedVal < 1 then
+					targetSpeed = math.round(parsedVal * 75)
+					-- Fix 2: If config load yields 1 on initial frame, use last known valid speed or default 20
+				elseif parsedVal == 1 then
+					if lastValidSpeed and lastValidSpeed > 1 then
+						targetSpeed = lastValidSpeed
+					else
+						targetSpeed = 20
+					end
+				else
+					targetSpeed = parsedVal
+				end
+			else
+				targetSpeed = 20
+			end
+
+			-- Save valid target speed so initial rejoin glitches won't reset your config
+			if targetSpeed > 1 then
+				lastValidSpeed = targetSpeed
+			end
+
 			hasLegitBoost = false 
 
-			if zephyrStacks >= 1 then
+			if zephyrStacks and zephyrStacks >= 1 then
 				targetSpeed = 34
 				hasLegitBoost = true
 			elseif cachedChar:GetAttribute("SpeedBoost") == 1.5 then
@@ -13055,7 +13117,12 @@ Speed.Callbacks.OnToggle = function(value)
 				end
 			end
 		end)
-		if cachedHumanoid then
+	else
+		liveChar = Player.Character
+		liveHum = liveChar and liveChar:FindFirstChildOfClass("Humanoid")
+		if liveHum then
+			liveHum.WalkSpeed = 20
+		elseif cachedHumanoid then
 			cachedHumanoid.WalkSpeed = 20
 		end
 		NotificationSystem.Notify("Speed", "Speed disabled.", 2)
@@ -13950,6 +14017,13 @@ activePushForce = nil
 originalGravity = nil
 vec = (vector and vector.create) or Vector3.new
 
+function getShotGUID()
+	if typeof(generateId) == "function" then
+		return generateId()
+	end
+	return game:GetService("HttpService"):GenerateGUID(false)
+end
+
 LongJump.Callbacks.OnToggle = function(state)
 	loops["long jump"] = state
 
@@ -13960,35 +14034,35 @@ LongJump.Callbacks.OnToggle = function(state)
 
 			if localRootPart then
 				replicatedStorage = G.Services.RS
-				local netManaged = replicatedStorage:WaitForChild("rbxts_include")
+				netManaged = replicatedStorage:WaitForChild("rbxts_include")
 					:WaitForChild("node_modules")
 					:WaitForChild("@rbxts")
 					:WaitForChild("net")
 					:WaitForChild("out")
 					:WaitForChild("_NetManaged")
 
-				local GLIDE_SPEED = 75
-				local UPWARD_LIFT = 7
+				GLIDE_SPEED = 75
+				UPWARD_LIFT = 7
 
 				if not originalGravity then
 					originalGravity = G.Services.Workspace.Gravity
 				end
 
-				local executedAbilityJump = false
+				executedAbilityJump = false
 
 				-- 1. Check for Yuzi Dash First
 				if LongJump.Values["Yuzi Jump"] then
-					local handInvItem = character:FindFirstChild("HandInvItem")
+					handInvItem = character:FindFirstChild("HandInvItem")
 					if handInvItem and handInvItem.Value then
-						local currentWeaponName = handInvItem.Value.Name
+						currentWeaponName = handInvItem.Value.Name
 
 						-- Verify if the held item is a valid Yuzi Dao
 						if currentWeaponName == "wood_dao" or currentWeaponName == "stone_dao" or currentWeaponName == "iron_dao" or currentWeaponName == "diamond_dao" or currentWeaponName == "emerald_dao" then
 
-							local lookDir = localRootPart.CFrame.LookVector
-							local currentPos = localRootPart.Position
+							lookDir = localRootPart.CFrame.LookVector
+							currentPos = localRootPart.Position
 
-							local dashArgs = {
+							dashArgs = {
 								"dash",
 								{
 									direction = Vector3.new(lookDir.X, lookDir.Y, lookDir.Z),
@@ -14014,42 +14088,48 @@ LongJump.Callbacks.OnToggle = function(state)
 						if playerInv then
 							fireballInst = playerInv:FindFirstChild("fireball")
 							if fireballInst then
-								local handInvItem = character:FindFirstChild("HandInvItem")
+								handInvItem = character:FindFirstChild("HandInvItem")
 								if handInvItem then
-									currentItemName = handInvItem.Value.Name
+									currentItemName = handInvItem.Value and handInvItem.Value.Name
 									oldItemInst = nil
 
-									if currentItemName ~= fireballInst.Name then
+									-- Equip fireball if not currently held
+									if currentItemName ~= "fireball" then
 										if currentItemName and currentItemName ~= "" then
 											oldItemInst = playerInv:FindFirstChild(currentItemName)
 										end
-										equipArgs = {{ hand = fireballInst }}
+										equipArgs = { { hand = fireballInst } }
 										netManaged:WaitForChild("SetInvItem"):InvokeServer(unpack(equipArgs))
+										task.wait(0.04) -- High-ping sync yield so server recognizes the held fireball
 									end
 
-									origin = localRootPart.Position
-									local targetPos = origin - Vector3.new(0, 2, 0)
-									local velocity = Vector3.new(0, -68, 0)
+									originPos = localRootPart.Position
+									targetPos = originPos - Vector3.new(0, 2, 0)
+									velocity = Vector3.new(0, -68, 0)
+									shotIdVal = getShotGUID()
 
-									local fireArgs = {
-										localInventory:FindFirstChild("fireball"),
+									fireballItemRef = (localInventory and localInventory:FindFirstChild("fireball")) or fireballInst
+
+									fireArgs = {
+										fireballItemRef,
 										"fireball",
 										"fireball",
-										vec(origin.X, origin.Y, origin.Z),
+										vec(originPos.X, originPos.Y, originPos.Z),
 										vec(targetPos.X, targetPos.Y, targetPos.Z),
 										vec(velocity.X, velocity.Y, velocity.Z),
-										generateId(),
-										{ shotId = generateId(), drawDurationSec = 0.25},
+										shotIdVal,
+										{ shotId = shotIdVal, drawDurationSec = 0.25 },
 										G.Services.Workspace:GetServerTimeNow()
 									}
 
 									netManaged:WaitForChild("ProjectileFire"):InvokeServer(unpack(fireArgs))
-									print(oldItemInst)
 
+									-- Re-equip original weapon only after fireball projectile validates on server
 									if oldItemInst and oldItemInst ~= fireballInst then
-										print(oldItemInst)
-										task.wait(0.05) 
-										netManaged:WaitForChild("SetInvItem"):InvokeServer({ hand = oldItemInst })
+										task.wait(0.12) -- High-ping safety delay
+										if loops["long jump"] then
+											netManaged:WaitForChild("SetInvItem"):InvokeServer({ hand = oldItemInst })
+										end
 									end
 								end
 							end
@@ -14057,7 +14137,7 @@ LongJump.Callbacks.OnToggle = function(state)
 					end
 				end
 
-				-- 3. Execute the Standard Long Jump / Glide (Runs instantly after abilities)
+				-- 3. Execute Standard Long Jump / Glide
 				localRootPart.CFrame = localRootPart.CFrame + Vector3.new(0, 3, 0)
 
 				if not activePushForce or not activePushForce.Parent then
@@ -14067,8 +14147,8 @@ LongJump.Callbacks.OnToggle = function(state)
 				end
 
 				while loops["long jump"] and localRootPart and activePushForce.Parent do
-					local look = localRootPart.CFrame.LookVector
-					local flatDirection = Vector3.new(look.X, 0, look.Z).Unit
+					look = localRootPart.CFrame.LookVector
+					flatDirection = Vector3.new(look.X, 0, look.Z).Unit
 
 					activePushForce.Velocity = Vector3.new(
 						flatDirection.X * GLIDE_SPEED,
