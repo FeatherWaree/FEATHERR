@@ -36,21 +36,12 @@ rainbowConnection = nil
 
 canRequire = false
 
-local success, result = pcall(function()
-	return require(replicatedStorage:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("knit"):WaitForChild("src").KnitClient)
-end)
-
-canRequire = success
-
-print("Can require:", canRequire)
-
 if canRequire then
 	print("✅ Supported!")
 else
 	print("❌ Not supported")
 end
 
-canRequire = true
 
 
 
@@ -1151,6 +1142,7 @@ shared_constants = nil
 mimicBlock = NetRemotes:WaitForChild("MimicBlock")
 
 ItemMetaTable = {}
+if canRequire then
 pcall(function()
 	metaModule = replicatedStorage:WaitForChild("TS"):WaitForChild("item"):WaitForChild("item-meta")
 	req = require(metaModule)
@@ -1159,14 +1151,16 @@ pcall(function()
 		ItemMetaTable = req.items
 	end
 end)
+end
 
 ItemMetaModule = nil
 
--- 1. Grab the module correctly
+if canRequire then
 pcall(function()
 	metaModule = replicatedStorage:WaitForChild("TS"):WaitForChild("item"):WaitForChild("item-meta")
 	ItemMetaModule = require(metaModule)
 end)
+end
 
 if canRequire then
 	easyGamesNode = replicatedStorage:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games")
@@ -2067,8 +2061,10 @@ local function applySkin(viewmodel, item)
 end
 
 
-local ProjectileMeta = require(replicatedStorage.TS.projectile["projectile-meta"])
+if canRequire then
+	local ProjectileMeta = require(replicatedStorage.TS.projectile["projectile-meta"])
 
+end
 
 local cachedPlayers = {}
 
@@ -6517,12 +6513,14 @@ adetundeBuildUI = function()
 end
 
 UserInputService.InputChanged:Connect(function(input)
+	if canRequire then
 	if adetundeData.ghost and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 		mousePos = UserInputService:GetMouseLocation()
 		inset = GuiService:GetGuiInset()
 		screenPos = mousePos - inset
 		localPos = screenPos - adetundeData.mainFrame.AbsolutePosition
 		adetundeData.ghost.Position = UDim2.fromOffset(localPos.X - adetundeData.ghost.AbsoluteSize.X/2, localPos.Y - adetundeData.ghost.AbsoluteSize.Y/2)
+	end
 	end
 end)
 
@@ -7381,6 +7379,7 @@ Killaura:CreateToggle("Calculate Swing Speed", false, nil)
 Killaura:CreateToggle("Range Visualiser", false, nil)
 
 ClientStore = nil
+if canRequire then
 pcall(function()
 	storePath = Player.PlayerScripts:FindFirstChild("TS", true)
 	if storePath then
@@ -7390,6 +7389,7 @@ pcall(function()
 		end
 	end
 end)
+end
 
 SwordHitRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SwordHit")
 SetInvItemRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetInvItem")
@@ -7613,6 +7613,8 @@ Killaura.Callbacks.OnToggle = function(state)
 			kaHeartbeatConn = nil
 			return
 		end
+		
+		if Player:GetAttribute("IsCasting") == true then return end
 
 		-- 1. PERFECT TIMING ACCUMULATOR (SYNCED TO SERVER TIME)
 		local nowServerTime = G.Services.Workspace:GetServerTimeNow()
@@ -10591,7 +10593,7 @@ phaseRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
 phaseRaycastParams.IgnoreWater = true
 lastRaycast = 0
 raycastDelay = 0.05
-local CoreGui = gethui and gethui() or cloneref(game:GetService("CoreGui"))
+ CoreGui = (gethui and gethui()) or cloneref(game:GetService("CoreGui"))
 
 local chamsESPFolder = G.Services.Workspace:FindFirstChild("chamsESPFolder") or Instance.new("Folder")
 chamsESPFolder.Name = "chamsESPFolder"
@@ -11571,7 +11573,10 @@ kaliyahGetKnit = function()
 	if not canRequire then return nil end
 	if kaliyahData.knit then return kaliyahData.knit end
 	pcall(function()
-		kaliyahData.knit = require(ReplicatedStorage:WaitForChild("rbxts_include", 5).node_modules["@easy-games"].knit.src).KnitClient
+		if canRequire then
+			kaliyahData.knit = require(ReplicatedStorage:WaitForChild("rbxts_include", 5).node_modules["@easy-games"].knit.src).KnitClient
+
+		end
 	end)
 	return kaliyahData.knit
 end
@@ -11587,6 +11592,7 @@ kaliyahLoadPunchAnim = function()
 	end
 
 	pcall(function()
+		if canRequire then
 		AnimationType = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("animation", 5):WaitForChild("animation-type", 5)).AnimationType
 		GameAnimationUtil = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("animation", 5):WaitForChild("animation-util", 5)).GameAnimationUtil
 		DragonSlayerConstants = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("games", 5):WaitForChild("bedwars", 5):WaitForChild("kit", 5):WaitForChild("kits", 5):WaitForChild("dragon-slayer", 5):WaitForChild("dragon-slayer-constants", 5)).DragonSlayerConstants
@@ -11595,6 +11601,7 @@ kaliyahLoadPunchAnim = function()
 		if animObj then
 			kaliyahData.punchAnimId = animObj.AnimationId
 			kaliyahData.punchAnimSpeed = DragonSlayerConstants.PUNCH_ANIMATION_SPEED or 1
+		end
 		end
 	end)
 
@@ -12566,7 +12573,9 @@ laniLoadRemotes = function()
 		laniData.abilityRemote = ReplicatedStorage:WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events", 5):WaitForChild("useAbility", 5)
 	end)
 	pcall(function()
+		if canRequire then
 		laniData.gameSound = require(ReplicatedStorage:WaitForChild("TS", 5):WaitForChild("sound", 5):WaitForChild("game-sound", 5)).GameSound
+		end
 	end)
 	return laniData.consumeRemote ~= nil and laniData.abilityRemote ~= nil and laniData.paladinRemote ~= nil
 end
@@ -12574,7 +12583,9 @@ end
 laniGetKnit = function()
 	if laniData.knit then return laniData.knit end
 	pcall(function()
+		if canRequire then
 		laniData.knit = require(ReplicatedStorage:WaitForChild("rbxts_include", 5).node_modules["@easy-games"].knit.src).KnitClient
+		end
 	end)
 	return laniData.knit
 end
@@ -13149,8 +13160,10 @@ end
 
 whisperProjMeta = {}
 pcall(function()
+	if canRequire then
 	whisperProjMeta = require(G.Services.RS:WaitForChild("TS",5):WaitForChild("projectile",5):WaitForChild("projectile-meta",5)).ProjectileMeta or {}
-end)
+	   end	
+	end)
 
 whisperSolve = function(O, T, v, g)
 	ws_d = T - O
@@ -13267,6 +13280,7 @@ whisperSpawnVisual = function(o, v, g, life)
 end
 
 whisperVisTick = function()
+	if canRequire then
 	nowT = tick(); i = 1
 	while i <= #whisperData.vis do
 		e = whisperData.vis[i]; t = nowT - e.t0
@@ -13280,6 +13294,7 @@ whisperVisTick = function()
 			if e.isModel then e.obj:PivotTo(cf) else e.mover.CFrame = cf end
 			i = i + 1
 		end
+	end
 	end
 end
 
@@ -14175,7 +14190,9 @@ CHEST_ICON_FRAC  = 0.23    -- icon size as a fraction of label height (fixed -> 
 
 asAllItems = {}
 asOk, asITMod = pcall(function()
+	if canRequire then
 	return require(G.Services.RS:WaitForChild("TS", 5):WaitForChild("item", 5):WaitForChild("item-type", 5))
+	end
 end)
 if asOk and asITMod then
 	asIT = asITMod.ItemType or asITMod
@@ -14440,22 +14457,24 @@ AutoMilo.Callbacks.OnToggled = function(state)
 	loops["auto milo"] = state
 end
 
-BlockDisguiseController.undisguisePlayer = function(self, player)
-	local conditionsMet = (canRequire == true) and (loops["auto milo"] == true) and (AutoMilo.Values["Infinite Milo"] == true)
+if canRequire and BlockDisguiseController then
+	BlockDisguiseController.undisguisePlayer = function(self, player)
+		local conditionsMet = (canRequire == true) and (loops["auto milo"] == true) and (AutoMilo.Values["Infinite Milo"] == true)
 
-	if player == Player and conditionsMet then
-		local targetBlock = MimicController:getSelectedBlockFromPlayer(Player) or "barrier"
+		if player == Player and conditionsMet then
+			local targetBlock = MimicController:getSelectedBlockFromPlayer(Player) or "barrier"
 
-		task.spawn(function()
-			remotes.Client:Get("MimicBlock"):SendToServer({
-				data = { blockType = targetBlock }
-			})
-		end)
+			task.spawn(function()
+				remotes.Client:Get("MimicBlock"):SendToServer({
+					data = { blockType = targetBlock }
+				})
+			end)
 
-		return 
+			return 
+		end
+
+		return originalUndisguise(self, player)
 	end
-
-	return originalUndisguise(self, player)
 end
 
 HitFix.Callbacks.OnToggled = function(state)
@@ -14631,20 +14650,22 @@ NoClickDelay.Callbacks.OnToggle = function(state)
 end
 
 
-sword_controller.isClickingTooFast = function(self)
-	if loops["no click delay"] then
-		local CUSTOM_CLICK_DELAY = 1 / NoClickDelay.Values["CPS"]
-		local currentTime = tick()
-		local timeSinceLastSwing = currentTime - self.lastSwing
+if canRequire and sword_controller then
+	sword_controller.isClickingTooFast = function(self)
+		if loops["no click delay"] then
+			local CUSTOM_CLICK_DELAY = 1 / NoClickDelay.Values["CPS"]
+			local currentTime = tick()
+			local timeSinceLastSwing = currentTime - self.lastSwing
 
-		if timeSinceLastSwing < CUSTOM_CLICK_DELAY then
-			return true 
+			if timeSinceLastSwing < CUSTOM_CLICK_DELAY then
+				return true 
+			end
+
+			self.lastSwing = currentTime 
+			return false
+		else
+			return originalIsClickingTooFast(self)
 		end
-
-		self.lastSwing = currentTime 
-		return false
-	else
-		return originalIsClickingTooFast(self)
 	end
 end
 
@@ -15772,6 +15793,11 @@ function getTriggerTarget()
 end
 
 function triggerLoop()
+	if not canRequire then 
+		loops["trigger bot"] = false
+		return 
+	end
+	
 	while loops["trigger bot"] do
 		if not (TriggerBot.Values["Target Players"] or TriggerBot.Values["Target NPCs/Dummies"]) then
 			task.wait(0.25)
@@ -15794,7 +15820,15 @@ function triggerLoop()
 	end
 end
 
+
 TriggerBot.Callbacks.OnToggle = function(state)
+	if state and not canRequire then
+		NotificationSystem.Notify("Trigger Bot", "Your executor does not support this feature. Support may come soon.", 2)
+		loops["trigger bot"] = false 
+
+		return
+	end
+
 	loops["trigger bot"] = state
 	if state then
 		if triggerThread then task.cancel(triggerThread) end
@@ -15805,10 +15839,10 @@ TriggerBot.Callbacks.OnToggle = function(state)
 end
 
 
--- ===== LIVE CONTROLLERS & SERVICES =====
-SwordController = require(Player.PlayerScripts.TS.controllers.global.combat.sword["sword-controller"]).SwordController
-local BedwarsShopController = KnitClient and KnitClient.Controllers and KnitClient.Controllers.BedwarsShopController
-
+if canRequire then
+	SwordController = require(Player.PlayerScripts.TS.controllers.global.combat.sword["sword-controller"]).SwordController
+	local BedwarsShopController = KnitClient and KnitClient.Controllers and KnitClient.Controllers.BedwarsShopController
+end
 autoClickerThread = nil
 shopAutoThread = nil
 acMobileHold = false
@@ -15822,6 +15856,7 @@ acPlaceDiag = false
 -- ===== BLOCK TRACKING (Reads item-meta to find all valid blocks) =====
 acBlockList = {}
 pcall(function()
+	if canRequire then
 	local ItemMetaModule = require(G.Services.RS:WaitForChild("TS", 10):WaitForChild("item", 10):WaitForChild("item-meta", 10))
 	local itemsTable = ItemMetaModule.items or ItemMetaModule
 
@@ -15831,6 +15866,7 @@ pcall(function()
 				acBlockList[itemName] = true
 			end
 		end
+	end
 	end
 end)
 
@@ -24991,24 +25027,21 @@ end, 1)
 
 
 local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-	local method = getnamecallmethod()
+if hookmetamethod then
+	oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+		local method = getnamecallmethod()
 
-	if not checkcaller() and method == "FireServer" then
-		local remoteName = tostring(self)
+		if not checkcaller() and method == "FireServer" then
+			local remoteName = tostring(self)
 
-		-- Catches both melee swings connecting and projectiles landing
-		if remoteName == "SwordHit" or remoteName == "ProjectileHit" then
+			if remoteName == "SwordHit" or remoteName == "ProjectileHit" then
 
-			-- If you eventually need to access the entity you hit:
-			-- local args = {...}
-			-- local hitData = args[1] 
-			-- (hitData usually contains the entityInstance or target info)
+			end
 		end
-	end
 
-	return oldNamecall(self, ...)
-end)
+		return oldNamecall(self, ...)
+	end)
+end
 
 silasData = {
 	abilityRemote = nil,
@@ -28712,7 +28745,9 @@ PlayerDisplay:CreateToggle("Show Kit Image", true, nil)
 
 BedwarsKitMetaModule = nil
 pcall(function()
+	if canRequire then
 	BedwarsKitMetaModule = require(G.Services.RS:WaitForChild("TS", 5):WaitForChild("games", 5):WaitForChild("bedwars", 5):WaitForChild("kit", 5):WaitForChild("bedwars-kit-meta", 5))
+	end
 end)
 
 UserInputService = G.Services.UIS
