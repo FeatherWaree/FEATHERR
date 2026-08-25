@@ -1,224 +1,4 @@
--- ============================================================
---  FEATHERWARE SECURE KEY AUTHENTICATION (HIDDEN URL)
--- ============================================================
-HttpService = game:GetService("HttpService")
-Players = game:GetService("Players")
-Player = Players.LocalPlayer
-PlayerGui = Player:WaitForChild("PlayerGui")
-TweenService = game:GetService("TweenService")
 
--- CONFIGURATION (HIDDEN)
--- This is your URL: https://pastebin.com/raw/YEtjE2FM 
--- converted into ASCII codes so nobody can read it on GitHub.
-urlCodes = {104, 116, 116, 112, 115, 58, 47, 47, 112, 97, 115, 116, 101, 98, 105, 110, 46, 99, 111, 109, 47, 114, 97, 119, 47, 89, 69, 116, 106, 69, 50, 70, 77}
-
--- Function to translate the numbers back into the URL secretly
-function decodeURL()
-	decodedString = ""
-	for _, code in ipairs(urlCodes) do
-		decodedString = decodedString .. string.char(code)
-	end
-	return decodedString
-end
-
--- 1. CREATE THE PREMIUM LOGIN GUI
-authGui = Instance.new("ScreenGui")
-authGui.Name = "Featherware_Auth"
-authGui.ResetOnSpawn = false
-authGui.IgnoreGuiInset = true
-authGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-authGui.Parent = PlayerGui
-
-mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 380, 0, 240)
-mainFrame.Position = UDim2.new(0.5, -190, 0.5, -120)
-mainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.Draggable = true
-mainFrame.Parent = authGui
-
-mainCorner = Instance.new("UICorner")
-mainCorner.CornerRadius = UDim.new(0, 10)
-mainCorner.Parent = mainFrame
-
-mainStroke = Instance.new("UIStroke")
-mainStroke.Color = Color3.fromRGB(40, 40, 45)
-mainStroke.Thickness = 1.5
-mainStroke.Parent = mainFrame
-
-headerLine = Instance.new("Frame")
-headerLine.Size = UDim2.new(1, 0, 0, 3)
-headerLine.BackgroundColor3 = Color3.fromRGB(78, 173, 73)
-headerLine.BorderSizePixel = 0
-headerLine.Parent = mainFrame
-
-title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 50)
-title.Position = UDim2.new(0, 0, 0, 10)
-title.BackgroundTransparency = 1
-title.Text = "FEATHERWARE"
-title.Font = Enum.Font.GothamBlack
-title.TextSize = 22
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.Parent = mainFrame
-
-subtitle = Instance.new("TextLabel")
-subtitle.Size = UDim2.new(1, 0, 0, 20)
-subtitle.Position = UDim2.new(0, 0, 0, 40)
-subtitle.BackgroundTransparency = 1
-subtitle.Text = "PREMIUM ACCESS REQUIRED"
-subtitle.Font = Enum.Font.Gotham
-subtitle.TextSize = 11
-subtitle.TextColor3 = Color3.fromRGB(120, 120, 120)
-subtitle.Parent = mainFrame
-
-keyBox = Instance.new("TextBox")
-keyBox.Size = UDim2.new(1, -40, 0, 45)
-keyBox.Position = UDim2.new(0, 20, 0, 80)
-keyBox.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-keyBox.Text = ""
-keyBox.PlaceholderText = "Enter your license key..."
-keyBox.Font = Enum.Font.Gotham
-keyBox.TextSize = 14
-keyBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-keyBox.PlaceholderColor3 = Color3.fromRGB(80, 80, 80)
-keyBox.ClearTextOnFocus = false
-keyBox.Parent = mainFrame
-
-keyCorner = Instance.new("UICorner")
-keyCorner.CornerRadius = UDim.new(0, 6)
-keyCorner.Parent = keyBox
-
-keyStroke = Instance.new("UIStroke")
-keyStroke.Color = Color3.fromRGB(35, 35, 40)
-keyStroke.Thickness = 1
-keyStroke.Parent = keyBox
-
-statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, -40, 0, 20)
-statusLabel.Position = UDim2.new(0, 20, 0, 130)
-statusLabel.BackgroundTransparency = 1
-statusLabel.Text = ""
-statusLabel.Font = Enum.Font.Gotham
-statusLabel.TextSize = 12
-statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-statusLabel.Parent = mainFrame
-
-authBtn = Instance.new("TextButton")
-authBtn.Size = UDim2.new(1, -40, 0, 45)
-authBtn.Position = UDim2.new(0, 20, 0, 160)
-authBtn.BackgroundColor3 = Color3.fromRGB(78, 173, 73)
-authBtn.Text = "AUTHENTICATE"
-authBtn.Font = Enum.Font.GothamBold
-authBtn.TextSize = 14
-authBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-authBtn.AutoButtonColor = false
-authBtn.Parent = mainFrame
-
-btnCorner = Instance.new("UICorner")
-btnCorner.CornerRadius = UDim.new(0, 6)
-btnCorner.Parent = authBtn
-
-authBtn.MouseEnter:Connect(function()
-	TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(90, 190, 85)}):Play()
-end)
-authBtn.MouseLeave:Connect(function()
-	TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(78, 173, 73)}):Play()
-end)
-
-function shakeFrame()
-	originalPos = mainFrame.Position
-	for i = 1, 6 do
-		offset = (i % 2 == 0) and 8 or -8
-		TweenService:Create(mainFrame, TweenInfo.new(0.04), {Position = originalPos + UDim2.new(0, offset, 0, 0)}):Play()
-		task.wait(0.04)
-	end
-	TweenService:Create(mainFrame, TweenInfo.new(0.04), {Position = originalPos}):Play()
-end
-
-function authenticate()
-	inputKey = keyBox.Text
-	if inputKey == "" then
-		statusLabel.Text = " Please enter a license key."
-		statusLabel.TextColor3 = Color3.fromRGB(255, 150, 50)
-		shakeFrame()
-		return
-	end
-
-	statusLabel.Text = "⟳ Connecting to authentication server..."
-	statusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-	authBtn.Active = false
-	TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundTransparency = 0.5}):Play()
-
-	-- Secretly decode the URL and fetch the key
-	success, response = pcall(function()
-		return game:HttpGet(decodeURL())
-	end)
-
-	if not success then
-		statusLabel.Text = "⚠ Failed to connect to auth server."
-		statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-		authBtn.Active = true
-		TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundTransparency = 0}):Play()
-		shakeFrame()
-		return
-	end
-
-	-- Clean the response (remove any accidental spaces or newlines from Pastebin)
-	validKey = string.gsub(response, "%s+", "")
-	cleanInput = string.gsub(inputKey, "%s+", "")
-
-	if cleanInput == validKey then
-		statusLabel.Text = "✓ Access Granted! Loading Featherware..."
-		statusLabel.TextColor3 = Color3.fromRGB(78, 173, 73)
-		TweenService:Create(authBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(78, 173, 73)}):Play()
-
-		task.wait(1)
-
-		-- Fade out and destroy the auth GUI
-		TweenService:Create(mainFrame, TweenInfo.new(0.3), {BackgroundTransparency = 1, Position = mainFrame.Position - UDim2.new(0, 0, 0, 20)}):Play()
-		for _, v in ipairs(mainFrame:GetDescendants()) do
-			pcall(function()
-				if v:IsA("TextBox") then
-					TweenService:Create(v, TweenInfo.new(0.3), {TextTransparency = 1, PlaceholderTransparency = 1}):Play()
-				elseif v:IsA("TextLabel") or v:IsA("TextButton") then
-					TweenService:Create(v, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
-				elseif v:IsA("UIStroke") then
-					TweenService:Create(v, TweenInfo.new(0.3), {Transparency = 1}):Play()
-				elseif v:IsA("Frame") then
-					TweenService:Create(v, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
-				end
-			end)
-		end
-		task.wait(0.3)
-		authGui:Destroy()
-
-		-- Signal that authentication is complete
-		_G.FEATHERWARE_AUTHENTICATED = true
-	else
-		statusLabel.Text = "✕ Invalid License Key."
-		statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-		authBtn.Active = true
-		TweenService:Create(authBtn, TweenInfo.new(0.1), {BackgroundTransparency = 0}):Play()
-		shakeFrame()
-	end
-end
-
-authBtn.MouseButton1Click:Connect(authenticate)
-keyBox.FocusLost:Connect(function(enterPressed)
-	if enterPressed then authenticate() end
-end)
-
--- 4. SCRIPT GATEKEEPER
--- This pauses the entire script until the user enters the correct key
-repeat task.wait(0.1) until _G.FEATHERWARE_AUTHENTICATED == true
-task.wait(0.5)
-
--- ============================================================
---  PASTE THE REST OF YOUR FEATHERWARE SCRIPT BELOW THIS LINE
--- ============================================================
 
 repeat
 	task.wait()
@@ -257,7 +37,7 @@ rainbowConnection = nil
 canRequire = false
 
 local success, result = pcall(function()
-	return require(G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("knit"):WaitForChild("src").KnitClient)
+	return require(replicatedStorage:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("knit"):WaitForChild("src").KnitClient)
 end)
 
 canRequire = success
@@ -16772,7 +16552,7 @@ end
 
 function paConsider(model, h, v, myPos)
 	if not paHasLOS(myPos, model, h) then return end
-	mode = ProjectileAura.Values["Mode"] or "Blatant"
+	local mode = ProjectileAura.Values["Mode"] or "Blatant"
 	if mode == "Legit" then
 		fovVal = ProjectileAura.Values["FOV"] or 150
 		fovAng = 5 + (fovVal / 1000) * 175
@@ -16956,8 +16736,7 @@ ProjectileAura.Callbacks.OnToggle = function(state)
 
 			char = Players.LocalPlayer.Character
 			hum = char and char:FindFirstChildOfClass("Humanoid")
-
-			mode = ProjectileAura.Values["Mode"] or "Blatant"
+			local mode = ProjectileAura.Values["Mode"] or "Blatant"
 
 			if not (ProjectileAura.Values["Target Players"] or ProjectileAura.Values["Target NPCs/Dummies"]) then
 				if isCharging then
@@ -17287,7 +17066,7 @@ function asTrackUpdate(model, pos, now, rawVel)
 end
 
 function asPartFor(model)
-	asp_mode = ProjectileAssist.Values["Target Part"] or "Torso"
+	local asp_mode = ProjectileAssist.Values["Target Part"] or "Torso"
 	asp_torso = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
 	if asp_mode == "Head" then return model:FindFirstChild("Head") or asp_torso end
 	if asp_mode == "Random" then
