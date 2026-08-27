@@ -13054,7 +13054,7 @@ end
 				if parsedVal then
 					-- Fix 1: If saved as a normalized float (e.g. 0.64 ratio of 75 max speed)
 					if parsedVal > 0 and parsedVal < 1 then
-						targetSpeed = math.round(parsedVal * 75)
+						targetSpeed = math.round(parsedVal)
 						-- Fix 2: If config load yields 1 on initial frame, use last known valid speed or default 20
 					elseif parsedVal == 1 then
 						if lastValidSpeed and lastValidSpeed > 1 then
