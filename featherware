@@ -42,6 +42,8 @@
 		print("❌ Not supported")
 	end
 
+canRequire = true
+
 
 
 
@@ -3016,281 +3018,309 @@ end
 			end)
 		end
 
-		function mod:CreateDropdown(dName, options, default, dCallback, multiSelect, isPlayerDropdown)
-			multiSelect = multiSelect or false
-			local settingID = uniquePrefix .. "_" .. dName
-			local favSettingID = settingID .. "_Favs"
+	function mod:CreateDropdown(dName, options, default, dCallback, multiSelect, isPlayerDropdown)
+		multiSelect = multiSelect or false
+		local settingID = uniquePrefix .. "_" .. dName
+		local favSettingID = settingID .. "_Favs"
 
-			if isPlayerDropdown then
-				options = {}
-				for _, p in ipairs(Players:GetPlayers()) do
-					table.insert(options, p.Name)
-				end
+		if isPlayerDropdown then
+			options = {}
+			for _, p in ipairs(Players:GetPlayers()) do
+				table.insert(options, p.Name)
 			end
-
-			if _G.SavedConfig[settingID] ~= nil then
-				default = _G.SavedConfig[settingID]
-			else
-				_G.SavedConfig[settingID] = default
-			end
-
-			if _G.SavedConfig[favSettingID] == nil then
-				_G.SavedConfig[favSettingID] = {}
-			end
-			local favorites = _G.SavedConfig[favSettingID]
-
-			if multiSelect then
-				if type(default) == "table" then
-					mod.Values[dName] = {}
-					for _, v in ipairs(default) do table.insert(mod.Values[dName], v) end
-				else
-					mod.Values[dName] = default and {default} or {}
-				end
-			else
-				mod.Values[dName] = default
-			end 
-
-			local dropCont = Instance.new("Frame", settingsCont)
-			dropCont.BackgroundTransparency = 1
-			dropCont.AutomaticSize = Enum.AutomaticSize.Y
-			dropCont.Size = UDim2.new(1, 0, 0, 0)
-			local dLayout = Instance.new("UIListLayout", dropCont)
-			dLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
-			local dBtn = Instance.new("TextButton", dropCont)
-			dBtn.Size = UDim2.new(1, 0, 0, 28)
-			dBtn.BackgroundTransparency = 1
-			dBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
-			dBtn.TextXAlignment = Enum.TextXAlignment.Left
-			dBtn.TextSize = 20
-			dBtn.FontFace = Font.fromName(textFont)
-			dBtn.LayoutOrder = 1
-
-			local optFrame = Instance.new("ScrollingFrame", dropCont)
-			optFrame.BackgroundTransparency = 1
-			optFrame.Size = UDim2.new(1, 0, 0, 240)
-			optFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-			optFrame.AutomaticCanvasSize = "Y"
-			optFrame.ScrollBarThickness = 4
-			optFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
-			optFrame.Visible = false
-			optFrame.LayoutOrder = 2
-
-			local oLayout = Instance.new("UIListLayout", optFrame)
-			oLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
-			dropdownElement = {}
-
-			function dropdownElement:SetVisible(state)
-				dropCont.Visible = state
-			end
-
-			local function updateDropdownText()
-				if multiSelect then
-					local count = #mod.Values[dName]
-					if count == 0 then
-						dBtn.Text = "      - " .. dName .. ": None"
-					elseif count == 1 then
-						dBtn.Text = "      - " .. dName .. ": " .. tostring(mod.Values[dName][1])
-					else
-						dBtn.Text = "      - " .. dName .. ": [" .. count .. " Selected]"
-					end
-				else
-					local val = mod.Values[dName]
-					dBtn.Text = "      - " .. dName .. ": " .. (val ~= nil and tostring(val) or "None")
-				end
-			end
-
-			updateDropdownText() 
-			if dCallback then dCallback(mod.Values[dName]) end
-
-			local fullyPopulated = false
-
-			local function buildOptions()
-				for _, child in ipairs(optFrame:GetChildren()) do
-					if child:IsA("Frame") then
-						child:Destroy()
-					end
-				end
-
-				for i, opt in ipairs(options) do
-					if i % 100 == 0 then task.wait() end
-
-					local optKey = tostring(opt)
-
-					local row = Instance.new("Frame", optFrame)
-					row.Size = UDim2.new(1, 0, 0, 24)
-					row.BackgroundTransparency = 1
-
-					local oBtn = Instance.new("TextButton", row)
-					oBtn.Size = UDim2.new(1, -35, 1, 0)
-					oBtn.BackgroundTransparency = 1
-					oBtn.TextColor3 = Color3.fromRGB(120, 120, 120)
-					oBtn.TextXAlignment = Enum.TextXAlignment.Left
-					oBtn.TextSize = 18
-					oBtn.FontFace = Font.fromName(textFont)
-
-					local favBtn = Instance.new("TextButton", row)
-					favBtn.Size = UDim2.new(0, 24, 0, 24)
-					favBtn.Position = UDim2.new(1, -28, 0, 0)
-					favBtn.BackgroundTransparency = 1
-					favBtn.TextSize = 16
-					favBtn.FontFace = Font.fromName(textFont)
-
-					local function updateVisual()
-						if multiSelect then
-							local isSelected = table.find(mod.Values[dName], opt)
-							oBtn.Text = (isSelected and "          > [x] " or "          > [ ] ") .. optKey
-							oBtn.TextColor3 = isSelected and Color3.new(1,1,1) or Color3.fromRGB(120, 120, 120)
-						else
-							oBtn.Text = "          > " .. optKey
-						end
-					end
-
-					local function updateFavSort()
-						local isFav = favorites[optKey] == true
-						row.LayoutOrder = isFav and i or (10000 + i)
-						favBtn.Text = isFav and "★" or "☆"
-						favBtn.TextColor3 = isFav and Color3.fromRGB(254, 204, 34) or Color3.fromRGB(80, 80, 80)
-					end
-
-					updateVisual() 
-					updateFavSort()
-
-					oBtn.MouseEnter:Connect(function() 
-						tween(oBtn, {TextColor3 = Color3.new(1,1,1)}) 
-					end)
-
-					oBtn.MouseLeave:Connect(function() 
-						if multiSelect and table.find(mod.Values[dName], opt) then return end
-						tween(oBtn, {TextColor3 = Color3.fromRGB(120, 120, 120)}) 
-					end)
-
-					favBtn.MouseEnter:Connect(function()
-						if not favorites[optKey] then favBtn.TextColor3 = Color3.fromRGB(200, 200, 200) end
-					end)
-
-					favBtn.MouseLeave:Connect(function()
-						if not favorites[optKey] then favBtn.TextColor3 = Color3.fromRGB(80, 80, 80) end
-					end)
-
-					favBtn.MouseButton1Click:Connect(function()
-						favorites[optKey] = not favorites[optKey] or nil
-						_G.SavedConfig[favSettingID] = favorites
-						saveConfigToPC()
-						updateFavSort()
-					end)
-
-					oBtn.MouseButton1Click:Connect(function()
-						if multiSelect then
-							local foundIdx = table.find(mod.Values[dName], opt)
-							if foundIdx then
-								table.remove(mod.Values[dName], foundIdx)
-							else
-								table.insert(mod.Values[dName], opt)
-							end
-
-							updateVisual()
-							updateDropdownText()
-
-							_G.SavedConfig[settingID] = mod.Values[dName]
-							saveConfigToPC()
-
-							if dCallback then dCallback(mod.Values[dName]) end
-							if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, mod.Values[dName]) end
-						else
-							optFrame.Visible = false
-							mod.Values[dName] = opt
-
-							updateDropdownText()
-
-							_G.SavedConfig[settingID] = opt
-							saveConfigToPC()
-
-							if dCallback then dCallback(opt) end
-							if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, opt) end
-						end
-					end)
-				end
-			end
-			mod.UpdateFunctions[dName] = function(forceVal)
-				mod.Values[dName] = forceVal
-				_G.SavedConfig[settingID] = forceVal
-				saveConfigToPC()
-				updateDropdownText()
-				if dCallback then dCallback(forceVal) end
-				if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, forceVal) end
-			end
-
-
-			dBtn.MouseButton1Click:Connect(function() 
-				optFrame.Visible = not optFrame.Visible 
-
-				if optFrame.Visible and not fullyPopulated then
-					fullyPopulated = true
-					buildOptions()
-				end
-			end)
-
-			local lastRightClick = 0
-			dBtn.MouseButton2Click:Connect(function()
-				local now = tick()
-				if now - lastRightClick < 0.3 then
-					lastRightClick = 0
-					if multiSelect then
-						mod.Values[dName] = {}
-					else
-						mod.Values[dName] = nil
-					end
-					updateDropdownText()
-					if optFrame.Visible then buildOptions() end
-					_G.SavedConfig[settingID] = mod.Values[dName]
-					saveConfigToPC()
-					if dCallback then dCallback(mod.Values[dName]) end
-					if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, mod.Values[dName]) end
-				else
-					lastRightClick = now
-				end
-			end)
-
-			if isPlayerDropdown then
-				local pAdded = Players.PlayerAdded:Connect(function(plr)
-					if not table.find(options, plr.Name) then
-						table.insert(options, plr.Name)
-						if fullyPopulated then buildOptions() end
-					end
-				end)
-
-				local pRemoving = Players.PlayerRemoving:Connect(function(plr)
-					local idx = table.find(options, plr.Name)
-					if idx then
-						table.remove(options, idx)
-						if fullyPopulated then buildOptions() end
-					end
-
-					if multiSelect then
-						local selIdx = table.find(mod.Values[dName], plr.Name)
-						if selIdx then
-							table.remove(mod.Values[dName], selIdx)
-							updateDropdownText()
-							if dCallback then dCallback(mod.Values[dName]) end
-						end
-					else
-						if mod.Values[dName] == plr.Name then
-							mod.Values[dName] = nil
-							updateDropdownText()
-							if dCallback then dCallback(nil) end
-						end
-					end
-				end)
-
-				dropCont.Destroying:Connect(function()
-					pAdded:Disconnect()
-					pRemoving:Disconnect()
-				end)
-			end
-			return { SetVisible = function(esp_sv) dropCont.Visible = esp_sv end }
 		end
+
+		if _G.SavedConfig[settingID] ~= nil then
+			default = _G.SavedConfig[settingID]
+		else
+			_G.SavedConfig[settingID] = default
+		end
+
+		if _G.SavedConfig[favSettingID] == nil then
+			_G.SavedConfig[favSettingID] = {}
+		end
+		local favorites = _G.SavedConfig[favSettingID]
+
+		-- CRITICAL FIX: Ensure multiSelect values are ALWAYS a table
+		if multiSelect then
+			if type(default) == "table" then
+				mod.Values[dName] = {}
+				for _, v in ipairs(default) do table.insert(mod.Values[dName], v) end
+			elseif type(default) == "string" and default ~= "" then
+				mod.Values[dName] = {default}
+			else
+				mod.Values[dName] = {}
+			end
+
+			-- Safety check: if the saved config somehow became a non-table, reset it
+			if type(mod.Values[dName]) ~= "table" then
+				mod.Values[dName] = {}
+			end
+		else
+			mod.Values[dName] = default
+		end 
+
+		local dropCont = Instance.new("Frame", settingsCont)
+		dropCont.BackgroundTransparency = 1
+		dropCont.AutomaticSize = Enum.AutomaticSize.Y
+		dropCont.Size = UDim2.new(1, 0, 0, 0)
+		local dLayout = Instance.new("UIListLayout", dropCont)
+		dLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+		local dBtn = Instance.new("TextButton", dropCont)
+		dBtn.Size = UDim2.new(1, 0, 0, 28)
+		dBtn.BackgroundTransparency = 1
+		dBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
+		dBtn.TextXAlignment = Enum.TextXAlignment.Left
+		dBtn.TextSize = 20
+		dBtn.FontFace = Font.fromName(textFont)
+		dBtn.LayoutOrder = 1
+
+		local optFrame = Instance.new("ScrollingFrame", dropCont)
+		optFrame.BackgroundTransparency = 1
+		optFrame.Size = UDim2.new(1, 0, 0, 240)
+		optFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+		optFrame.AutomaticCanvasSize = "Y"
+		optFrame.ScrollBarThickness = 4
+		optFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+		optFrame.Visible = false
+		optFrame.LayoutOrder = 2
+
+		local oLayout = Instance.new("UIListLayout", optFrame)
+		oLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+		dropdownElement = {}
+
+		function dropdownElement:SetVisible(state)
+			dropCont.Visible = state
+		end
+
+		local function updateDropdownText()
+			if multiSelect then
+				-- CRITICAL FIX: Ensure we are counting a table
+				local currentVal = mod.Values[dName]
+				if type(currentVal) ~= "table" then
+					currentVal = {}
+					mod.Values[dName] = currentVal
+				end
+
+				local count = #currentVal
+				if count == 0 then
+					dBtn.Text = "      - " .. dName .. ": None"
+				elseif count == 1 then
+					dBtn.Text = "      - " .. dName .. ": " .. tostring(currentVal[1])
+				else
+					dBtn.Text = "      - " .. dName .. ": [" .. count .. " Selected]"
+				end
+			else
+				local val = mod.Values[dName]
+				dBtn.Text = "      - " .. dName .. ": " .. (val ~= nil and tostring(val) or "None")
+			end
+		end
+
+		updateDropdownText() 
+		if dCallback then dCallback(mod.Values[dName]) end
+
+		local fullyPopulated = false
+
+		local function buildOptions()
+			for _, child in ipairs(optFrame:GetChildren()) do
+				if child:IsA("Frame") then
+					child:Destroy()
+				end
+			end
+
+			for i, opt in ipairs(options) do
+				if i % 100 == 0 then task.wait() end
+
+				local optKey = tostring(opt)
+
+				local row = Instance.new("Frame", optFrame)
+				row.Size = UDim2.new(1, 0, 0, 24)
+				row.BackgroundTransparency = 1
+
+				local oBtn = Instance.new("TextButton", row)
+				oBtn.Size = UDim2.new(1, -35, 1, 0)
+				oBtn.BackgroundTransparency = 1
+				oBtn.TextColor3 = Color3.fromRGB(120, 120, 120)
+				oBtn.TextXAlignment = Enum.TextXAlignment.Left
+				oBtn.TextSize = 18
+				oBtn.FontFace = Font.fromName(textFont)
+
+				local favBtn = Instance.new("TextButton", row)
+				favBtn.Size = UDim2.new(0, 24, 0, 24)
+				favBtn.Position = UDim2.new(1, -28, 0, 0)
+				favBtn.BackgroundTransparency = 1
+				favBtn.TextSize = 16
+				favBtn.FontFace = Font.fromName(textFont)
+
+				local function updateVisual()
+					if multiSelect then
+						local isSelected = table.find(mod.Values[dName], opt)
+						oBtn.Text = (isSelected and "          > [x] " or "          > [ ] ") .. optKey
+						oBtn.TextColor3 = isSelected and Color3.new(1,1,1) or Color3.fromRGB(120, 120, 120)
+					else
+						oBtn.Text = "          > " .. optKey
+					end
+				end
+
+				local function updateFavSort()
+					local isFav = favorites[optKey] == true
+					row.LayoutOrder = isFav and i or (10000 + i)
+					favBtn.Text = isFav and "★" or "☆"
+					favBtn.TextColor3 = isFav and Color3.fromRGB(254, 204, 34) or Color3.fromRGB(80, 80, 80)
+				end
+
+				updateVisual() 
+				updateFavSort()
+
+				oBtn.MouseEnter:Connect(function() 
+					tween(oBtn, {TextColor3 = Color3.new(1,1,1)}) 
+				end)
+
+				oBtn.MouseLeave:Connect(function() 
+					if multiSelect and table.find(mod.Values[dName], opt) then return end
+					tween(oBtn, {TextColor3 = Color3.fromRGB(120, 120, 120)}) 
+				end)
+
+				favBtn.MouseEnter:Connect(function()
+					if not favorites[optKey] then favBtn.TextColor3 = Color3.fromRGB(200, 200, 200) end
+				end)
+
+				favBtn.MouseLeave:Connect(function()
+					if not favorites[optKey] then favBtn.TextColor3 = Color3.fromRGB(80, 80, 80) end
+				end)
+
+				favBtn.MouseButton1Click:Connect(function()
+					favorites[optKey] = not favorites[optKey] or nil
+					_G.SavedConfig[favSettingID] = favorites
+					saveConfigToPC()
+					updateFavSort()
+				end)
+
+				oBtn.MouseButton1Click:Connect(function()
+					if multiSelect then
+						local foundIdx = table.find(mod.Values[dName], opt)
+						if foundIdx then
+							table.remove(mod.Values[dName], foundIdx)
+						else
+							table.insert(mod.Values[dName], opt)
+						end
+
+						updateVisual()
+						updateDropdownText()
+
+						_G.SavedConfig[settingID] = mod.Values[dName]
+						saveConfigToPC()
+
+						if dCallback then dCallback(mod.Values[dName]) end
+						if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, mod.Values[dName]) end
+					else
+						optFrame.Visible = false
+						mod.Values[dName] = opt
+
+						updateDropdownText()
+
+						_G.SavedConfig[settingID] = opt
+						saveConfigToPC()
+
+						if dCallback then dCallback(opt) end
+						if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, opt) end
+					end
+				end)
+			end
+		end
+
+		mod.UpdateFunctions[dName] = function(forceVal)
+			-- CRITICAL FIX: Ensure forced values for multiSelect are tables
+			if multiSelect then
+				if type(forceVal) == "table" then
+					mod.Values[dName] = forceVal
+				elseif type(forceVal) == "string" and forceVal ~= "" then
+					mod.Values[dName] = {forceVal}
+				else
+					mod.Values[dName] = {}
+				end
+			else
+				mod.Values[dName] = forceVal
+			end
+
+			_G.SavedConfig[settingID] = mod.Values[dName]
+			saveConfigToPC()
+			updateDropdownText()
+			if dCallback then dCallback(mod.Values[dName]) end
+			if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, mod.Values[dName]) end
+		end
+
+
+		dBtn.MouseButton1Click:Connect(function() 
+			optFrame.Visible = not optFrame.Visible 
+
+			if optFrame.Visible and not fullyPopulated then
+				fullyPopulated = true
+				buildOptions()
+			end
+		end)
+
+		local lastRightClick = 0
+		dBtn.MouseButton2Click:Connect(function()
+			local now = tick()
+			if now - lastRightClick < 0.3 then
+				lastRightClick = 0
+				if multiSelect then
+					mod.Values[dName] = {}
+				else
+					mod.Values[dName] = nil
+				end
+				updateDropdownText()
+				if optFrame.Visible then buildOptions() end
+				_G.SavedConfig[settingID] = mod.Values[dName]
+				saveConfigToPC()
+				if dCallback then dCallback(mod.Values[dName]) end
+				if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName, mod.Values[dName]) end
+			else
+				lastRightClick = now
+			end
+		end)
+
+		if isPlayerDropdown then
+			local pAdded = Players.PlayerAdded:Connect(function(plr)
+				if not table.find(options, plr.Name) then
+					table.insert(options, plr.Name)
+					if fullyPopulated then buildOptions() end
+				end
+			end)
+
+			local pRemoving = Players.PlayerRemoving:Connect(function(plr)
+				local idx = table.find(options, plr.Name)
+				if idx then
+					table.remove(options, idx)
+					if fullyPopulated then buildOptions() end
+				end
+
+				if multiSelect then
+					local selIdx = table.find(mod.Values[dName], plr.Name)
+					if selIdx then
+						table.remove(mod.Values[dName], selIdx)
+						updateDropdownText()
+						if dCallback then dCallback(mod.Values[dName]) end
+					end
+				else
+					if mod.Values[dName] == plr.Name then
+						mod.Values[dName] = nil
+						updateDropdownText()
+						if dCallback then dCallback(nil) end
+					end
+				end
+			end)
+
+			dropCont.Destroying:Connect(function()
+				pAdded:Disconnect()
+				pRemoving:Disconnect()
+			end)
+		end
+		return { SetVisible = function(esp_sv) dropCont.Visible = esp_sv end }
+	end
 
 		function mod:CreateKeybind(kName, defaultKey, kCallback)
 			local settingID = uniquePrefix .. "_" .. kName
@@ -5542,7 +5572,6 @@ end
 		ReplicatedStorage = G.Services.RS
 		netManaged = ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@rbxts", 5):WaitForChild("net", 5):WaitForChild("out", 5):WaitForChild("_NetManaged", 5)
 		wardenData.remote = netManaged:WaitForChild("CollectCollectableEntity", 5)
-		print("[Auto Warden] Remote loaded successfully!")
 	end)
 
 	wardenTryCollect = function(soulModel)
@@ -5556,7 +5585,6 @@ end
 		-- Find the part to measure distance from (Spirit or PrimaryPart)
 		local spiritPart = soulModel:FindFirstChild("Spirit") or soulModel.PrimaryPart or soulModel:FindFirstChildWhichIsA("BasePart")
 		if not spiritPart then 
-			print("[Auto Warden] Soul model has no Spirit/PrimaryPart.")
 			return 
 		end
 
@@ -5568,7 +5596,6 @@ end
 			local soulId = soulModel:GetAttribute("Id") or soulModel:GetAttribute("id")
 
 			if soulId then
-				print("[Auto Warden] Soul in range! ID: " .. tostring(soulId) .. " | Distance: " .. math.floor(distance))
 				wardenData.trackedSouls[soulModel] = true -- Mark as processing
 
 				task.spawn(function()
@@ -5581,17 +5608,13 @@ end
 						end)
 
 						if success then
-							print("[Auto Warden] Successfully collected soul!")
 						else
-							print("[Auto Warden] Failed to collect soul: " .. tostring(err))
-							wardenData.trackedSouls[soulModel] = nil -- Allow retry
+							wardenData.trackedSouls[soulModel] = nil 
 						end
 					else
-						print("[Auto Warden] Remote is nil! Cannot collect.")
 					end
 				end)
 			else
-				print("[Auto Warden] Soul found but has no Id attribute.")
 			end
 		end
 	end
@@ -5601,11 +5624,9 @@ end
 		wardenData.connections.active = true
 		wardenData.trackedSouls = {}
 
-		print("[Auto Warden] Started! Listening for JailorSoul tags...")
 
 		-- 1. Scan for existing souls
 		local existingSouls = wardenData.cs:GetTagged("JailorSoul")
-		print("[Auto Warden] Found " .. #existingSouls .. " existing souls.")
 		for _, soul in ipairs(existingSouls) do
 			if soul:IsA("Model") then
 				task.spawn(wardenTryCollect, soul)
@@ -5655,7 +5676,6 @@ end
 		end
 		wardenData.connections = {}
 		wardenData.trackedSouls = {}
-		print("[Auto Warden] Stopped.")
 	end
 
 
@@ -5820,7 +5840,7 @@ end
 	AutoGrimRepear:CreateToggle("Use Collect Animation", true, nil)
 
 	nyxSettings = {
-		mode = "On Hit",
+		Nyxmode = "On Hit",
 		range = 30
 	}
 
@@ -5843,7 +5863,6 @@ end
 		nyxData.lastFire = now
 		nyxData.ready = false
 		nyxData.progress = 0
-		print("[AutoNyx] Firing midnight!")
 		pcall(function()
 			useAbility:FireServer("midnight")
 		end)
@@ -5885,31 +5904,26 @@ end
 		wasReady = nyxData.ready
 		nyxData.ready = nyxData.progress >= nyxData.MAX
 		if nyxData.ready and not wasReady then
-			print("[AutoNyx] Bar FULL (" .. tostring(nyxData.progress) .. "/" .. tostring(nyxData.MAX) .. ")")
 		end
 		if not nyxData.ready or not loops["auto nyx"] then return end
 
-		if nyxSettings.mode == "In Range" then
+		if nyxSettings.Nyxmode == "In Range" then
 			nyxCheckRangeAndFire()
-		elseif nyxSettings.mode == "On Hit" then
-			-- Fallback: if the hit that filled the bar just happened (within 0.6s), fire now
+		elseif nyxSettings.Nyxmode == "On Hit" then
 			if os.clock() - nyxData.lastHitTime <= 0.6 then
 				nyxFire()
 			end
 		end
 	end
 
-	-- Safe Hookmetamethod for On Hit Mode (Same logic as Auto Martin)
 	nyxSetupHook = function()
 		if nyxData.hookActive then return end
 		if not canRequire then return end
 		if not hookmetamethod or not getnamecallmethod or not checkcaller then return end
 
 		nyxData.hookActive = true
-		print("[AutoNyx] Executor supports hooks. Using safe __namecall SwordHit/ProjectileHit detection.")
 
 		nyxData.oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-			-- CRITICAL: Always call the original function first to prevent breaking combat
 			local args = {...}
 			local result = nyxData.oldNamecall(self, unpack(args))
 
@@ -5919,11 +5933,9 @@ end
 					if method == "FireServer" or method == "InvokeServer" then
 						remoteName = tostring(self)
 
-						-- Catches both melee swings connecting and projectiles landing
 						if remoteName == "SwordHit" or remoteName == "ProjectileHit" then
-							if loops["auto nyx"] and nyxSettings.mode == "On Hit" then
+						if loops["auto nyx"] and nyxSettings.Nyxmode == "On Hit" then
 								nyxData.lastHitTime = os.clock()
-								print("[AutoNyx] Hit registered via hook | ready: " .. tostring(nyxData.ready))
 
 								if nyxData.ready then
 									nyxFire()
@@ -5934,7 +5946,6 @@ end
 				end)
 			end
 
-			-- CRITICAL: Return the original result so the game continues normally
 			return result
 		end)
 	end
@@ -5958,12 +5969,12 @@ end
 
 				now = os.clock()
 
-				if nyxSettings.mode == "In Range" then
+			if nyxSettings.Nyxmode == "In Range" then
 					if now - nyxData.lastRangeCheck < 0.2 then return end
 					nyxData.lastRangeCheck = now
 					nyxCheckRangeAndFire()
 
-				elseif nyxSettings.mode == "On Hit" and not nyxData.hookActive then
+			elseif nyxSettings.Nyxmode == "On Hit" and not nyxData.hookActive then
 					-- Fallback for On Hit if executor doesn't support hooks
 					if now - nyxData.lastHitTime <= 0.3 then
 						nyxFire()
@@ -5990,7 +6001,7 @@ end
 	end, true)
 
 	AutoNyx:CreateDropdown("Mode", {"On Hit", "In Range"}, "On Hit", function(val)
-		nyxSettings.mode = val or "On Hit"
+		nyxSettings.Nyxmode = val or "On Hit"
 	end)
 
 	AutoNyx:CreateSlider("Range", 15, 75, 30, function(val)
@@ -6737,7 +6748,6 @@ end
 						pos = portalData.worldPosition,
 						time = tick()
 					}
-					print("[Auto Styx] Cached REAL portal UUID:", portalData.uuid)
 				end
 			end
 		end))
@@ -6748,7 +6758,6 @@ end
 		table.insert(styxData.connections, styxData.despawnEvent.OnClientEvent:Connect(function(data)
 			if data and data.exitPortalData and data.exitPortalData.uuid then
 				styxData.cachedPortals[data.exitPortalData.uuid] = nil
-				print("[Auto Styx] Removed despawned portal UUID:", data.exitPortalData.uuid)
 			end
 		end))
 	end
@@ -6779,7 +6788,6 @@ end
 			if dist <= maxRange then
 				if styxData.tryRemote then
 					styxData.lastFire = now
-					print("[Auto Styx] Firing remote with REAL UUID:", uuid, "| Dist:", math.floor(dist))
 					task.wait(styxSettings.delay)
 					pcall(function()
 						styxData.tryRemote:InvokeServer(uuid)
@@ -6858,8 +6866,8 @@ end
 									if not miloTriggeredBeds[bed] then
 										miloTriggeredBeds[bed] = true
 
-										mode = AutoMilo.Values["Mimic Mode"] or "Custom Block"
-										if mode == "Surface" then
+										Milomode = AutoMilo.Values["Mimic Mode"] or "Custom Block"
+										if Milomode == "Surface" then
 											args = {
 												"MIMIC_BLOCK"
 											}
@@ -7683,8 +7691,6 @@ end
 				end
 
 				if Killaura.Values["Target NPCs/Dummies"] then
-					print("hi")
-					print(EntityCache.NPCs)
 					for _, npc in ipairs(EntityCache.NPCs or {}) do
 						if npc and npc.Parent then
 							local tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
@@ -8615,7 +8621,7 @@ end
 
 					char = Player.Character
 					if not char or not char:FindFirstChild("HumanoidRootPart") then
-						if shouldPrint then print("[AimAssist] Waiting for player character/HRP...") end
+						if shouldPrint then end
 						currentTarget = nil
 						return -- Use return instead of continue inside a pcall
 					end
@@ -9715,8 +9721,8 @@ end
 
 	function apDoPearl(ap_pearlInv)
 		ap_hrp4 = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-		if not ap_hrp4 then print("[AutoPearl] fire abort: no HRP"); return false end
-		if not ap_launchRemote then print("[AutoPearl] fire abort: no launch remote resolved"); return false end
+		if not ap_hrp4 then return false end
+		if not ap_launchRemote then  return false end
 		ap_dir, ap_hitAim = apAimDir()
 		ap_vel = ap_dir * ap_PEARL_SPEED
 		ap_pos = ap_hrp4.Position
@@ -9734,7 +9740,7 @@ end
 			{ shotId = ap_sid, drawDurationSec = ap_draw },
 			G.Services.Workspace:GetServerTimeNow(),
 		}
-		print("[AutoPearl] FIRE ->", tostring(ap_launchRemote), "| method:", ap_fireMethod, "| crosshairHitBlock:", ap_hitAim, "| dir:", tostring(ap_dir), "| vel(mag125):", tostring(ap_vel))
+
 		ap_ok, ap_err = pcall(function()
 			if ap_fireMethod == "invoke" then
 				return ap_launchRemote:InvokeServer(unpack(ap_args))
@@ -9742,8 +9748,7 @@ end
 				ap_launchRemote:FireServer(unpack(ap_args))
 			end
 		end)
-		if not ap_ok then print("[AutoPearl] FIRE ERROR:", ap_err); return false end
-		print("[AutoPearl] fire call returned OK")
+		if not ap_ok then return false end
 		return true
 	end
 
@@ -9770,9 +9775,7 @@ end
 		end
 		ap_setInv = (type(paSetInv) ~= "nil" and paSetInv) or (type(SetInvItem) ~= "nil" and SetInvItem) or nil
 		ap_invTop = (type(inventoriesFolder) == "Instance") and inventoriesFolder or nil
-		print("[AutoPearl] ON | launchRemote:", tostring(ap_launchRemote), "| method:", tostring(ap_fireMethod), "| setInv:", tostring(ap_setInv), "| invTop:", tostring(ap_invTop), "| paFire global present:", type(paFire) ~= "nil")
 		if not ap_launchRemote then
-			print("[AutoPearl] !! NO launch remote found -> make sure the Projectile Aura module ran first (so paFire exists), or set: paFire = <the remote your aura calls :InvokeServer on>")
 		end
 
 		ap_busy = false
@@ -9830,21 +9833,19 @@ end
 					if not ap_isVoid then ap_voidPrinted = false; return end
 					if not ap_voidPrinted then
 						ap_voidPrinted = true
-						print("[AutoPearl] VOID trigger (" .. ap_reason .. ") Y:", math.floor(ap_hrp.Position.Y), " velY:", math.floor(ap_velY))
 					end
 
 					ap_myInv = (ap_invTop and ap_invTop:FindFirstChild(Player.Name)) or (type(paInv) ~= "nil" and paInv) or nil
 					ap_hi = ap_char:FindFirstChild("HandInvItem")
 					ap_hv = ap_hi and ap_hi.Value
 					ap_heldName = ap_hv and (ap_hv.Name or tostring(ap_hv)) or nil
-					if not ap_myInv then print("[AutoPearl] no inventory folder for player:", Player.Name); return end
+					if not ap_myInv then  return end
 					ap_pearlInv = ap_myInv:FindFirstChild("telepearl")
-					if not ap_pearlInv then print("[AutoPearl] no telepearl in inventory"); return end
+					if not ap_pearlInv then  return end
 
 					ap_busy = true
 
 					if ap_heldName == "telepearl" then
-						print("[AutoPearl] already holding pearl -> fire only")
 						apDoPearl(ap_pearlInv)
 						ap_lastFire = os.clock()
 						ap_busy = false
@@ -9853,11 +9854,9 @@ end
 					end
 
 					ap_oldInv = ap_myInv:FindFirstChild(ap_heldName)
-					print("[AutoPearl] SWAP -> pearl (was holding:", tostring(ap_heldName), ")")
 					if ap_setInv then
 						pcall(function() ap_setInv:InvokeServer({ hand = ap_pearlInv }) end)
 					else
-						print("[AutoPearl] !! no setInv remote -> cannot swap hand")
 					end
 
 					ap_fired = apDoPearl(ap_pearlInv)
@@ -9865,8 +9864,6 @@ end
 					if ap_oldInv and ap_setInv then
 						pcall(function() ap_setInv:InvokeServer({ hand = ap_oldInv }) end)
 					end
-					print("[AutoPearl] RESTORED hand to:", tostring(ap_heldName), "| fired:", tostring(ap_fired))
-
 					ap_lastFire = os.clock()
 					ap_busy = false
 					ap_voidPrinted = false
@@ -11541,23 +11538,19 @@ end
 
 	kaliyahLoadRemotes = function()
 		if kaliyahData.abilityRemote and kaliyahData.stacksRemote then 
-			print("[Kaliyah] Remotes already loaded.")
 			return true 
 		end
 
-		print("[Kaliyah] Attempting to load remotes...")
 
 		pcall(function()
 			eventsFolder = ReplicatedStorage:WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events", 5)
 			kaliyahData.abilityRemote = eventsFolder:WaitForChild("useAbility", 5)
-			print("[Kaliyah] Loaded useAbility remote!")
 		end)
 
 		-- FIXED: Load the raw RemoteEvent directly from _NetManaged instead of using the Promise-based Client:Get()
 		pcall(function()
 			netManaged = ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@rbxts", 5):WaitForChild("net", 5):WaitForChild("out", 5):WaitForChild("_NetManaged", 5)
 			kaliyahData.stacksRemote = netManaged:WaitForChild("UpdateDragonSlayerStacks", 5)
-			print("[Kaliyah] Loaded UpdateDragonSlayerStacks remote!")
 		end)
 
 		if not kaliyahData.abilityRemote then warn("[Kaliyah] FAILED to load useAbility remote!") end
@@ -11664,7 +11657,6 @@ end
 		if now - kaliyahData.lastPunch < 0.05 then return end
 		kaliyahData.lastPunch = now
 
-		print("[Kaliyah] Firing punch remote!")
 		kaliyahPlayPunchAnim()
 
 		pcall(function()
@@ -11695,7 +11687,6 @@ end
 	kaliyahSetupWithRequire = function()
 		knit = kaliyahGetKnit()
 		if not knit or not knit.Controllers then 
-			print("[Kaliyah] KnitClient or Controllers not found. Cooldown tracking disabled.")
 			return false 
 		end
 
@@ -11744,7 +11735,6 @@ end
 		end
 
 		if not kaliyahData.stacksConnection then
-			print("[Kaliyah] Hooking into UpdateDragonSlayerStacks...")
 			kaliyahData.stacksConnection = kaliyahData.stacksRemote.OnClientEvent:Connect(function(data)
 				-- entire callback wrapped so nothing from our side can ever error
 				pcall(function()
@@ -11775,7 +11765,6 @@ end
 
 					stacks = tonumber(data.stacks) or 0
 
-					print("[Kaliyah] Stack update for UserID " .. targetUserId .. ": " .. stacks .. " stacks")
 
 					if stacks == 0 then
 						kaliyahData.targetStacks[targetUserId] = nil
@@ -11794,7 +11783,6 @@ end
 					end
 				end)
 			end)
-			print("[Kaliyah] Successfully hooked into stack updates!")
 		end
 
 		if canRequire then
@@ -11815,7 +11803,6 @@ end
 		elseif val == "3 Stacks" then
 			kaliyahSettings.punchAtStacks = 3
 		end
-		print("[Kaliyah] Punch threshold set to: " .. kaliyahSettings.punchAtStacks)
 	end)
 
 	AutoKaliyah:CreateSlider("Punch Range", 1, 1000, 15, function(val)
@@ -13743,9 +13730,7 @@ end
 				antiLassoConnections["physics"] = HRP.ChildAdded:Connect(function(child)
 					if loops["anti lasso"] == true then
 						if child:IsA("BodyMover") or child:IsA("LinearVelocity") or child:IsA("AlignPosition") or child:IsA("VectorForce") or child:IsA("BodyVelocity") then
-							-- Only destroy the physics if our chance roll succeeded and we are actively defending
 							if isBeingLassoed then
-								print("[Anti-Lassy] Detected pull physics added to character, destroying it!")
 								child:Destroy()
 							end
 						end
@@ -13768,7 +13753,6 @@ end
 				roll = math.random(1, 100)
 
 				if roll <= chance then
-					print("[Anti-Lassy] Lasso hooked! Roll: " .. roll .. "/" .. chance .. ". Activating defense...")
 
 					CollectionService:RemoveTag(hitEntity, "LassoHooked")
 
@@ -13786,7 +13770,6 @@ end
 					if hrp and not isBeingLassoed then
 						isBeingLassoed = true
 						safeCFrame = hrp.CFrame
-						print("[Anti-Lassy] Locking CFrame for 1.5s to block the server pull...")
 
 						connectionName = "AntiLassoLock"
 						startTime = os.clock()
@@ -13799,12 +13782,10 @@ end
 							else
 								G.Services.RunService:UnbindFromRenderStep(connectionName)
 								isBeingLassoed = false
-								print("[Anti-Lassy] Defense sequence complete. You are free to move.")
 							end
 						end)
 					end
 				else
-					print("[Anti-Lassy] Lasso hooked you, but chance roll failed (" .. roll .. " > " .. chance .. "). Letting it pull.")
 				end
 			end
 		end)
@@ -15384,25 +15365,36 @@ end
 		hideHpBar()
 
 		if loops["nuker"] then
-			NukerConnection = G.Services.RunService.Heartbeat:Connect(function()
-				if not loops["nuker"] then return end
-				char = Player.Character
-				if not char or not char:FindFirstChild("HumanoidRootPart") then
-					updateNukerHighlight(nil)
-					updateCustomHpBar(nil)
-					return
+		NukerConnection = G.Services.RunService.Heartbeat:Connect(function()
+			if not loops["nuker"] then return end
+			char = Player.Character
+			if not char or not char:FindFirstChild("HumanoidRootPart") then
+				updateNukerHighlight(nil)
+				updateCustomHpBar(nil)
+				return
+			end
+			hrp = char.HumanoidRootPart
+			cam = G.Services.Workspace.CurrentCamera
+			if not cam then return end
+
+			-- CRITICAL FIX: Use a unique variable name so other modules don't overwrite it
+			nukerMode = Nuker.Values["Mode"] or "Blatant"
+
+			-- SAFETY CHECK: If the saved config somehow got corrupted to "On Hit" or something else, reset it
+			if nukerMode ~= "Blatant" and nukerMode ~= "Legit" then
+				nukerMode = "Blatant"
+				Nuker.Values["Mode"] = "Blatant"
+				if Nuker.UpdateFunctions and Nuker.UpdateFunctions["Mode"] then
+					pcall(function() Nuker.UpdateFunctions["Mode"]("Blatant") end)
 				end
-				hrp = char.HumanoidRootPart
-				cam = G.Services.Workspace.CurrentCamera
-				if not cam then return end
+			end
 
-				mode = Nuker.Values["Mode"] or "Blatant"
-				bedOnly = Nuker.Values["Bed Only"] or false
-				range = Nuker.Values["Break Range"] or 21
-				mineBlock = nil
+			bedOnly = Nuker.Values["Bed Only"] or false
+			range = Nuker.Values["Break Range"] or 21
+			mineBlock = nil
 
-				-- ============ LEGIT ============
-				if mode == "Legit" then
+			-- ============ LEGIT ============
+			if nukerMode == "Legit" then
 					lgParams = RaycastParams.new()
 					lgParams.FilterType = Enum.RaycastFilterType.Exclude
 					lgParams.FilterDescendantsInstances = {char}
@@ -16186,7 +16178,6 @@ end
 		if hrp.Position.Y - landY > NF_MINFALL then     
 			nf.engaged = true
 			nf.landY = landY
-			print("[NOFALL] locked landing Y =", math.floor(landY), "| drop =", math.floor(hrp.Position.Y - landY))
 		end
 	end
 
@@ -16210,7 +16201,6 @@ end
 			hrp.CFrame = CFrame.new(hrp.Position.X, nf.landY, hrp.Position.Z)   
 			pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)   
 			nf.engaged = false; nf.landY = nil
-			print("[NOFALL] snapped to Y =", math.floor(nfSnapY))
 		end
 	end
 
@@ -17755,8 +17745,8 @@ end
 
 		if not aad.dSum and aad_now - aad.sumAt > 1.5 then
 			aad.dSum = true
-			print("[AAD] tracked:", #aad.list, "| mode:", aad_mode, "| threat:", aad_hit, "| net:", aad.srcNet, "sync:", aad.srcSync, "scan:", aad.dScan)
-		end
+			
+				end
 
 		if aad_mode == "Blatant" then
 			if aad.state == "idle" then
@@ -20033,7 +20023,6 @@ end
 												if not ab_firePrinted then
 													ab_firePrinted = true
 													ab_pr2 = ab_hive:FindFirstChildOfClass("ProximityPrompt")
-													print("[AutoBee] DEPOSIT attempt ->", ab_hive.Name, "| isPart:", ab_hive:IsA("BasePart"), "| prompt:", ab_pr2 ~= nil, "| enabled:", ab_pr2 and ab_pr2.Enabled, "| held:", tostring(abHeldName()), "| dist:", math.floor(ab_dist), "| level:", ab_hive:GetAttribute("Level"))
 												end
 												ab_hiveProc[ab_hive] = ab_now
 												ab_mygen2 = ab_gen
@@ -20056,14 +20045,12 @@ end
 							elseif not ab_ownerPrinted then
 								ab_ownerPrinted = true
 								ab_u = ab_hive:GetAttribute("PlacedByUserId") or ab_hive:GetAttribute("PlacedByUserID")
-								print("[AutoBee] hive found but NOT owned by you -> owner uid attr:", tostring(ab_u), "| your uid:", Player.UserId, "| your team:", tostring(Player.Team))
 							end
 						end
 					end
 				end
 				if not ab_anyHive and not ab_diagInit then
 					ab_diagInit = true
-					print("[AutoBee] NO hives in tracked set yet (waiting on spawn signals)")
 				end
 			end
 		end)
@@ -20086,7 +20073,6 @@ end
 					end
 				end
 			end)
-			print("[AutoBee] init hives -> via tag:", ab_tagCount, "| via name search:", ab_nameCount, "| total tracked:", (function() local n=0 for _ in pairs(ab_hiveSet) do n=n+1 end return n end)())
 
 			ab_conns = {}
 			table.insert(ab_conns, ab_cs:GetInstanceAddedSignal("beehive"):Connect(function(m)
@@ -20318,7 +20304,6 @@ end
 					if gompyIsGhostObj(gd) and not gompy_esp_set[gd] then gompy_esp_set[gd] = true; gompy_nameCount = gompy_nameCount + 1 end
 				end
 			end)
-			print("[Gompy ESP] init -> via tag:", gompy_tagCount, "| via name:", gompy_nameCount)
 
 			gompy_conns = {}
 			table.insert(gompy_conns, gompy_cs:GetInstanceAddedSignal("ghost"):Connect(function(m)
@@ -20672,7 +20657,6 @@ end
 					end
 				end
 			end)
-			print("[Sheep ESP] init -> via tag:", sheep_tagCount, "| via folder:", sheep_nameCount)
 
 			sheep_conns = {}
 			table.insert(sheep_conns, sheep_cs:GetInstanceAddedSignal("SheepModel"):Connect(function(m)
@@ -21282,7 +21266,6 @@ end
 		loops["autostarpop"] = state
 		if not state then asp_gen = asp_gen + 1; return end
 		asp_myGen = asp_gen
-		print("[AutoStarPop] ON | ConsumeItem:", asp_consumeRemote ~= nil, "| SetInvItem:", asp_setInv ~= nil, "| anim:", asp_animType and asp_animType.STAR_ITEM_CONSUME ~= nil)
 		task.spawn(function()
 			while loops["autostarpop"] and asp_myGen == asp_gen do
 				task.wait(0.05)
@@ -21594,7 +21577,6 @@ end
 			return
 		end
 		va_myGen = va_gen
-		print("[VulcanAimbot] ON | AimTurret:", va_aimRemote ~= nil, "| BlockEngine:", va_blockEngine ~= nil, "| ClientStore:", va_clientStore ~= nil)
 		va_conn = G.Services.RunService.RenderStepped:Connect(function()
 			if not loops["vulcan aimbot"] or va_myGen ~= va_gen then return end
 
@@ -24503,7 +24485,6 @@ end
 
 		contractId = contract.contractId or contract.id
 		if not contractId then
-			print("[Featherware] Contract has no ID: " .. tostring(contract))
 			return
 		end
 
@@ -24645,7 +24626,6 @@ end
 		if not martinLoadRemote() then return end
 
 		martinData.lastFire = now
-		print("[Auto Martin] Firing cactus_fire!")
 
 		pcall(function()
 			martinData.abilityRemote:FireServer("cactus_fire")
@@ -24675,18 +24655,14 @@ end
 		return false
 	end
 
-	-- Method 1: Safe Hookmetamethod (Instant, only if canRequire is true and supported)
 	martinSetupHook = function()
 		if martinData.hookActive then return end
 		if not canRequire then return end
 		if not hookmetamethod or not getnamecallmethod or not checkcaller then return end
 
 		martinData.hookActive = true
-		print("[Auto Martin] Executor supports hooks. Using safe __namecall detection.")
 
 		martinData.oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-			-- CRITICAL: Always call the original function first and store the result
-			-- This ensures the game's combat system never breaks
 			local args = {...}
 			local result = martinData.oldNamecall(self, unpack(args))
 
@@ -24697,7 +24673,6 @@ end
 					if method == "FireServer" or method == "InvokeServer" then
 						remoteName = tostring(self)
 
-						-- Catches both melee swings connecting and projectiles landing
 						if remoteName == "SwordHit" or remoteName == "ProjectileHit" then
 							if loops["auto martin"] and martinSettings.mode == "On Hit" then
 								if martinCheckRange() then
@@ -25160,7 +25135,6 @@ end
 						dist = (hrp.Position - enemyHRP.Position).Magnitude
 						if dist <= range then
 							silasData.lastFire = now
-							print("[Auto Silas] Enemy in range (" .. math.floor(dist) .. " studs). Firing rebellion_shield!")
 							pcall(function()
 								silasData.abilityRemote:FireServer("rebellion_shield")
 							end)
@@ -25597,7 +25571,6 @@ end
 		if not hookmetamethod or not getnamecallmethod or not checkcaller then return end
 
 		zenoData.namecallHook = true
-		print("[Auto Zeno] Executor supports hooks. Using safe __namecall SwordHit/ProjectileHit detection.")
 
 		zenoData.oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
 			local args = {...}
@@ -25826,7 +25799,6 @@ end
 		if not warriorLoadRemote() then return end
 
 		warriorData.lastFire = now
-		print("[Auto Warrior] HP: " .. math.floor(hpPercent) .. "% (<" .. hpLimit .. "%) | Grit: " .. grit .. " (>=" .. gritLimit .. "). Firing warrior_strike!")
 
 		pcall(function()
 			warriorData.abilityRemote:FireServer("warrior_strike")
@@ -25966,7 +25938,6 @@ end
 			if spiritMeta then
 				if spiritMeta.gravitationalAcceleration then umaData.gravity = spiritMeta.gravitationalAcceleration end
 				if spiritMeta.launchVelocity then umaData.launchSpeed = spiritMeta.launchVelocity end
-				print("[Auto Uma] Meta loaded | gravity: " .. tostring(umaData.gravity) .. " | speed: " .. tostring(umaData.launchSpeed))
 			end
 		end)
 	end
@@ -27760,7 +27731,6 @@ end
 		if not hookmetamethod or not getnamecallmethod or not checkcaller then return end
 
 		lumenData.hookActive = true
-		print("[Auto Lumen] Executor supports hooks. Using safe __namecall SwordHit/ProjectileHit detection.")
 
 		lumenData.oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
 			local args = {...}
@@ -27998,7 +27968,6 @@ end
 			if not marinaLoadRemote() then return end
 
 			marinaData.lastFire = now
-			print("[Auto Marina] Enemy near jellyfish! Firing electrify_jellyfish!")
 
 			pcall(function()
 				marinaData.abilityRemote:FireServer("electrify_jellyfish")
@@ -28249,7 +28218,6 @@ end
 				if not lianLoadRemotes() then return end
 
 				lianData.lastUlt = now
-				print("[Auto Lian] " .. count .. " enemies in range (>= " .. reqCount .. "). Firing Dragon Sword Ult!")
 
 				lianPlayEffects(true)
 
@@ -28266,7 +28234,6 @@ end
 				if not lianLoadRemotes() then return end
 
 				lianData.lastFire = now
-				print("[Auto Lian] Enemy in range. Firing Dragon Sword!")
 
 				lianPlayEffects(false)
 
