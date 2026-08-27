@@ -16622,39 +16622,68 @@ end
 		for _, pabm_L in ipairs(PA_LOADOUTS) do PA_MANAGED[pabm_L.weapon] = true end
 	end
 
-	function paSolve(O, T, v, g)
-		pasol_d = T - O
-		pasol_R = math.sqrt(pasol_d.X*pasol_d.X + pasol_d.Z*pasol_d.Z)
-		if v <= 0 then return nil end
-		if g < 0.001 then
-			pasol_dist = pasol_d.Magnitude
-			if pasol_dist < 0.01 then return Vector3.new(0, v, 0), 0 end
-			return pasol_d.Unit * v, pasol_dist / v
-		end
-		if pasol_R < 0.5 then return Vector3.new(0, pasol_d.Y >= 0 and v or -v, 0), math.abs(pasol_d.Y)/v end
-		pasol_v2 = v*v
-		pasol_disc = pasol_v2*pasol_v2 - g*(g*pasol_R*pasol_R + 2*pasol_d.Y*pasol_v2)
-		if pasol_disc < 0 then return nil end
-		pasol_tanT = (pasol_v2 - math.sqrt(pasol_disc)) / (g*pasol_R)
-		pasol_cosT = 1 / math.sqrt(1 + pasol_tanT*pasol_tanT)
-		pasol_hDir = Vector3.new(pasol_d.X, 0, pasol_d.Z) * (1/pasol_R)
-		return pasol_hDir*(v*pasol_cosT) + Vector3.new(0, v*pasol_tanT*pasol_cosT, 0), pasol_R/(v*pasol_cosT)
+function paSolve(O, T, v, g)
+	local pasol_d = T - O
+	local pasol_R = math.sqrt(pasol_d.X*pasol_d.X + pasol_d.Z*pasol_d.Z)
+	if v <= 0 then return nil end
+
+	-- No gravity: straight line
+	if g < 0.001 then
+		local pasol_dist = pasol_d.Magnitude
+		if pasol_dist < 0.01 then return Vector3.new(0, v, 0), 0 end
+		return pasol_d.Unit * v, pasol_dist / v
 	end
 
-	function paAim(O, hrp, vel, v, g, life, pTgtG)
-		paa_T = hrp
-		paa_g = pTgtG or 0
-		paa_vt, paa_t = nil, 0
-		for paa_i = 1, 4 do
-			paa_vt, paa_t = paSolve(O, paa_T, v, g)
-			if not paa_vt or paa_t > (life or 3) then return nil end
-			paa_T = Vector3.new(
-				hrp.X + vel.X * paa_t,
-				hrp.Y + vel.Y * paa_t - 0.5 * paa_g * paa_t * paa_t,
-				hrp.Z + vel.Z * paa_t)
+	-- Nearly vertical: solve with gravity properly
+	if pasol_R < 0.01 then
+		local h = pasol_d.Y
+		if h >= 0 then
+			-- Upward: h = v*t - 0.5*g*t^2  =>  t = (v - sqrt(v^2 - 2*g*h)) / g
+			local disc = v*v - 2*g*h
+			if disc < 0 then return nil end
+			local t = (v - math.sqrt(disc)) / g
+			if t < 0.001 then t = 0.001 end
+			return Vector3.new(0, v, 0), t
+		else
+			-- Downward: 0.5*g*t^2 + v*t - |h| = 0  =>  t = (-v + sqrt(v^2 + 2*g*|h|)) / g
+			local absH = -h
+			local t = (-v + math.sqrt(v*v + 2*g*absH)) / g
+			if t < 0.001 then t = 0.001 end
+			return Vector3.new(0, -v, 0), t
 		end
-		return paa_vt, paa_t
 	end
+
+	-- General case (unchanged)
+	local pasol_v2 = v*v
+	local pasol_disc = pasol_v2*pasol_v2 - g*(g*pasol_R*pasol_R + 2*pasol_d.Y*pasol_v2)
+	if pasol_disc < 0 then return nil end
+	local pasol_tanT = (pasol_v2 - math.sqrt(pasol_disc)) / (g*pasol_R)
+	local pasol_cosT = 1 / math.sqrt(1 + pasol_tanT*pasol_tanT)
+	local pasol_hDir = Vector3.new(pasol_d.X, 0, pasol_d.Z) * (1/pasol_R)
+	return pasol_hDir*(v*pasol_cosT) + Vector3.new(0, v*pasol_tanT*pasol_cosT, 0), pasol_R/(v*pasol_cosT)
+end
+
+function paAim(O, hrp, vel, v, g, life, pTgtG)
+	local paa_T = hrp
+	local paa_g = pTgtG or 0
+	local paa_vt, paa_t = nil, 0
+	local paa_prevT = 0
+
+	for paa_i = 1, 8 do
+		paa_vt, paa_t = paSolve(O, paa_T, v, g)
+		if not paa_vt or paa_t > (life or 3) then return nil end
+
+		-- Early exit if converged
+		if paa_i > 1 and math.abs(paa_t - paa_prevT) < 0.002 then break end
+		paa_prevT = paa_t
+
+		paa_T = Vector3.new(
+			hrp.X + vel.X * paa_t,
+			hrp.Y + vel.Y * paa_t - 0.5 * paa_g * paa_t * paa_t,
+			hrp.Z + vel.Z * paa_t)
+	end
+	return paa_vt, paa_t
+end
 
 	function paHasLOS(origin, model, rootPart)
 		palos_char = Players.LocalPlayer.Character
