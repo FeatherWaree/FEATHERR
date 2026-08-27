@@ -3232,7 +3232,6 @@ end
 		end
 
 		mod.UpdateFunctions[dName] = function(forceVal)
-			-- CRITICAL FIX: Ensure forced values for multiSelect are tables
 			if multiSelect then
 				if type(forceVal) == "table" then
 					mod.Values[dName] = forceVal
@@ -3241,8 +3240,23 @@ end
 				else
 					mod.Values[dName] = {}
 				end
+				if type(mod.Values[dName]) ~= "table" then mod.Values[dName] = {} end
 			else
-				mod.Values[dName] = forceVal
+				-- CRITICAL FIX: Validate that the forced value is actually in the options list
+				local isValidOption = false
+				for _, opt in ipairs(options) do
+					if tostring(opt) == tostring(forceVal) then
+						isValidOption = true
+						break
+					end
+				end
+
+				if isValidOption then
+					mod.Values[dName] = forceVal
+				else
+					-- If the saved config is corrupted (e.g., "On Hit"), reset to the first valid option
+					mod.Values[dName] = options[1]
+				end
 			end
 
 			_G.SavedConfig[settingID] = mod.Values[dName]
@@ -16653,10 +16667,11 @@ end
 		return palos_hit == nil
 	end
 
-	function paConsider(model, h, v, myPos)
-		if not paHasLOS(myPos, model, h) then return end
-		local mode = ProjectileAura.Values["Mode"] or "Blatant"
-		if mode == "Legit" then
+function paConsider(model, h, v, myPos)
+	if not paHasLOS(myPos, model, h) then return end
+	considerMode = ProjectileAura.Values["Mode"] or "Blatant"
+	if considerMode ~= "Blatant" and considerMode ~= "Legit" then considerMode = "Blatant" end
+	if considerMode == "Legit" then
 			fovVal = ProjectileAura.Values["FOV"] or 150
 			fovAng = 5 + (fovVal / 1000) * 175
 			cosTh = math.cos(math.rad(fovAng))
@@ -16837,9 +16852,17 @@ end
 			while loops["projectile aura"] do
 				if paSavedHand and paLastShot and tick() - paLastShot > 0.35 then paRestoreHand() end
 
-				char = Players.LocalPlayer.Character
-				hum = char and char:FindFirstChildOfClass("Humanoid")
-				local mode = ProjectileAura.Values["Mode"] or "Blatant"
+			char = Players.LocalPlayer.Character
+			hum = char and char:FindFirstChildOfClass("Humanoid")
+			PAmode = ProjectileAura.Values["Mode"] or "Blatant"
+
+			if PAmode ~= "Blatant" and PAmode ~= "Legit" then
+				PAmode = "Blatant"
+				ProjectileAura.Values["Mode"] = "Blatant"
+				if ProjectileAura.UpdateFunctions and ProjectileAura.UpdateFunctions["Mode"] then
+					pcall(function() ProjectileAura.UpdateFunctions["Mode"]("Blatant") end)
+				end
+			end
 
 				if not (ProjectileAura.Values["Target Players"] or ProjectileAura.Values["Target NPCs/Dummies"]) then
 					if isCharging then
@@ -16896,7 +16919,7 @@ end
 							pa_lead  = Vector3.new(pa_vel.X, pa_leadY, pa_vel.Z)
 							if pa_lead.Magnitude > 200 then pa_lead = pa_lead.Unit * 200 end
 
-							if mode == "Legit" then
+						if PAmode == "Legit" then
 								heldName = paGetHeldName()
 								currentLoadout = nil
 								if heldName then
