@@ -3387,15 +3387,19 @@ end
 		function mod:CreateColorPicker(cName, defaultColor, cCallback)
 			local settingID = uniquePrefix .. "_" .. cName
 
-			if _G.SavedConfig[settingID] ~= nil then
-				local savedRGB = _G.SavedConfig[settingID]
-
-				defaultColor = Color3.fromRGB(
-					savedRGB.R or 255,
-					savedRGB.G or 255,
-					savedRGB.B or 255
-				)
+		if _G.SavedConfig[settingID] ~= nil then
+			local savedRGB = _G.SavedConfig[settingID]
+			
+			local r = savedRGB.R or 1
+			local g = savedRGB.G or 1
+			local b = savedRGB.B or 1
+			
+			if r <= 1 and g <= 1 and b <= 1 then
+				defaultColor = Color3.fromRGB(r * 255, g * 255, b * 255)
 			else
+				defaultColor = Color3.fromRGB(r, g, b)
+			end
+		else
 				_G.SavedConfig[settingID] = {
 					R = math.floor(defaultColor.R * 255),
 					G = math.floor(defaultColor.G * 255),
@@ -14581,11 +14585,12 @@ end
 	trackingConnection = nil
 
 
-	local function applyTracer(obj, isPreview)
-		if not isPreview and not VALID_PROJECTILES[obj.Name] then return end
-		-- Removed task.spawn to apply instantly before the visual renders
+	function applyTracer(obj, isPreview, forceApply)
+		if not forceApply and not isPreview and not VALID_PROJECTILES[obj.Name] then return end
+
 		local handle = obj:FindFirstChild("Handle") or obj
 		if not handle then return end
+
 
 		local function getEffect(target, className)
 			if target:IsA(className) then return target end
@@ -16713,49 +16718,147 @@ function paConsider(model, h, v, myPos)
 		return pap_best, pap_bh, pap_bv
 	end
 
-	function paSpawnVisual(pProj, pPm, pO, pVel, pG)
-		if #PA_VIS >= PA_MAX_VIS then return end
-		pas_modelName = (pPm and pPm.projectileModel) or pProj
-		pas_srcRoot = paItems and paItems:FindFirstChild(pas_modelName)
-		if not pas_srcRoot then return end
-		if pas_srcRoot:IsA("Accessory") then
-			pas_src = pas_srcRoot:FindFirstChild("Handle")
-		else
-			pas_src = pas_srcRoot
-		end
-		if not pas_src then return end
-		pas_clone = pas_src:Clone()
-		pas_clone.Parent = G.Services.Workspace
-		if pas_clone:IsA("BasePart") then
-			pas_mover = pas_clone; pas_isModel = false
-		elseif pas_clone:IsA("Model") then
-			pas_isModel = true
-			pas_mover = pas_clone.PrimaryPart
-			if not pas_mover then
-				pas_clone.PrimaryPart = pas_clone:FindFirstChildWhichIsA("BasePart")
-				pas_mover = pas_clone.PrimaryPart
-			end
-		else
-			pas_clone:Destroy()
-			return
-		end
-		if not pas_mover then pas_clone:Destroy() return end
-		if pas_mover:IsA("BasePart") then
-			pas_mover.Anchored = true; pas_mover.CanCollide = false; pas_mover.CanQuery = false; pas_mover.CanTouch = false
-		end
-		pas_dir = pVel.Magnitude > 0 and pVel.Unit or Vector3.new(0,1,0)
-		pas_fr = (pPm and pPm.flightRotation) or Vector3.new(0,0,0)
-		pas_fix = CFrame.new()
-		if paIsSpearVisual(pProj) and pas_mover:IsA("BasePart") then
-			pas_sz = pas_mover.Size
-			if pas_sz.X >= pas_sz.Y and pas_sz.X >= pas_sz.Z then pas_fix = paAxisFix(Vector3.new(1,0,0))
-			elseif pas_sz.Y >= pas_sz.Z then pas_fix = paAxisFix(Vector3.new(0,1,0))
-			else pas_fix = paAxisFix(Vector3.new(0,0,1)) end
-		end
-		pas_cf = CFrame.lookAt(pO, pO + pas_dir) * pas_fix * CFrame.Angles(pas_fr.X, pas_fr.Y, pas_fr.Z)
-		if pas_isModel then pas_clone:PivotTo(pas_cf) else pas_mover.CFrame = pas_cf end
-		table.insert(PA_VIS, { obj = pas_clone, mover = pas_mover, isModel = pas_isModel, O = pO, V = pVel, g = pG, fr = pas_fr, t0 = tick(), life = (pPm and pPm.lifetimeSec) or 2 })
+function paSpawnVisual(pProj, pPm, pO, pVel, pG)
+	if #PA_VIS >= PA_MAX_VIS then return end
+	pas_modelName = (pPm and pPm.projectileModel) or pProj
+	pas_srcRoot = paItems and paItems:FindFirstChild(pas_modelName)
+	if not pas_srcRoot then return end
+
+	if pas_srcRoot:IsA("Accessory") then
+		pas_src = pas_srcRoot:FindFirstChild("Handle")
+	else
+		pas_src = pas_srcRoot
 	end
+	if not pas_src then return end
+
+	pas_clone = pas_src:Clone()
+	pas_clone.Parent = G.Services.Workspace
+
+	if pas_clone:IsA("BasePart") then
+		pas_mover = pas_clone; pas_isModel = false
+	elseif pas_clone:IsA("Model") then
+		pas_isModel = true
+		pas_mover = pas_clone.PrimaryPart
+		if not pas_mover then
+			pas_clone.PrimaryPart = pas_clone:FindFirstChildWhichIsA("BasePart")
+			pas_mover = pas_clone.PrimaryPart
+		end
+	else
+		pas_clone:Destroy()
+		return
+	end
+
+	if not pas_mover then pas_clone:Destroy() return end
+
+	if pas_mover:IsA("BasePart") then
+		pas_mover.Anchored = true
+		pas_mover.CanCollide = false
+		pas_mover.CanQuery = false
+		pas_mover.CanTouch = false
+	end
+
+	-- ============================================================
+	-- CRITICAL FIX: FORCE TRAIL COLOR ON CLONED PROJECTILES
+	-- ============================================================
+	-- ============================================================
+	-- CRITICAL FIX: FORCE TRAIL COLOR ON CLONED PROJECTILES
+	-- ============================================================
+	if loops["projectile tracers"] then
+		targetPart = pas_clone:FindFirstChild("Handle") or pas_mover
+
+		if targetPart then
+			-- 1. SAFELY CONVERT COLOR (Handles Color3, {R,G,B} tables, and nil)
+			rawColor = ProjectileTracers.Values["Color"]
+			safeColor = Color3.fromRGB(255, 255, 255) -- Default white
+
+			if typeof(rawColor) == "Color3" then
+				safeColor = rawColor
+			elseif type(rawColor) == "table" then
+				-- Config saves Color3 as {R=0-1, G=0-1, B=0-1}
+				local r = tonumber(rawColor.R) or 1
+				local g = tonumber(rawColor.G) or 1
+				local b = tonumber(rawColor.B) or 1
+				-- Check if values are 0-1 floats or 0-255 integers
+				if r <= 1 and g <= 1 and b <= 1 then
+					safeColor = Color3.fromRGB(r * 255, g * 255, b * 255)
+				else
+					safeColor = Color3.fromRGB(r, g, b)
+				end
+			end
+
+			glowEnabled = ProjectileTracers.Values["Glow"]
+			glowIntensity = tonumber(ProjectileTracers.Values["Glow Intensity"]) or 1
+
+			-- 2. FIND THE TRAIL
+			trail = targetPart:FindFirstChildWhichIsA("Trail")
+
+			if trail then
+				-- FORCE APPLY: Strip texture so solid color shows, and set ColorSequence
+				trail.Texture = "" 
+				trail.Color = ColorSequence.new(safeColor)
+				trail.LightEmission = glowEnabled and glowIntensity or 0
+				trail.LightInfluence = glowEnabled and 0 or 1
+				trail.Transparency = NumberSequence.new(0, 1)
+				trail.Enabled = true
+			else
+				-- 3. CREATE TRAIL IF MISSING
+				a0 = targetPart:FindFirstChild("TrailAttachment0") or targetPart:FindFirstChild("Attachment0")
+				a1 = targetPart:FindFirstChild("TrailAttachment1") or targetPart:FindFirstChild("Attachment1")
+
+				if not a0 then
+					a0 = Instance.new("Attachment")
+					a0.Name = "TrailAttachment0"
+					a0.Position = Vector3.new(0, 0, 0)
+					a0.Parent = targetPart
+				end
+				if not a1 then
+					a1 = Instance.new("Attachment")
+					a1.Name = "TrailAttachment1"
+					a1.Position = Vector3.new(0, 0, -1.5)
+					a1.Parent = targetPart
+				end
+
+				newTrail = Instance.new("Trail")
+				newTrail.Attachment0 = a0
+				newTrail.Attachment1 = a1
+				newTrail.Texture = ""
+				newTrail.Color = ColorSequence.new(safeColor)
+				newTrail.LightEmission = glowEnabled and glowIntensity or 0
+				newTrail.Lifetime = 0.4
+				newTrail.WidthScale = NumberSequence.new(1, 0)
+				newTrail.Transparency = NumberSequence.new(0, 1)
+				newTrail.Enabled = true
+				newTrail.Parent = targetPart
+			end
+
+			-- 4. COLOR THE HANDLE/PART AND MAKE NEON
+			if targetPart:IsA("BasePart") then
+				targetPart.Color = safeColor
+				if glowEnabled then
+					targetPart.Material = Enum.Material.Neon
+				end
+			end
+		end
+	end
+	-- ============================================================
+	-- ============================================================
+
+	pas_dir = pVel.Magnitude > 0 and pVel.Unit or Vector3.new(0,1,0)
+	pas_fr = (pPm and pPm.flightRotation) or Vector3.new(0,0,0)
+	pas_fix = CFrame.new()
+
+	if paIsSpearVisual(pProj) and pas_mover:IsA("BasePart") then
+		pas_sz = pas_mover.Size
+		if pas_sz.X >= pas_sz.Y and pas_sz.X >= pas_sz.Z then pas_fix = paAxisFix(Vector3.new(1,0,0))
+		elseif pas_sz.Y >= pas_sz.Z then pas_fix = paAxisFix(Vector3.new(0,1,0))
+		else pas_fix = paAxisFix(Vector3.new(0,0,1)) end
+	end
+
+	pas_cf = CFrame.lookAt(pO, pO + pas_dir) * pas_fix * CFrame.Angles(pas_fr.X, pas_fr.Y, pas_fr.Z)
+	if pas_isModel then pas_clone:PivotTo(pas_cf) else pas_mover.CFrame = pas_cf end
+
+	table.insert(PA_VIS, { obj = pas_clone, mover = pas_mover, isModel = pas_isModel, O = pO, V = pVel, g = pG, fr = pas_fr, t0 = tick(), life = (pPm and pPm.lifetimeSec) or 2 })
+end
 
 	function paDoShot(pL, pO, pSpawnO, pVel, pT, pTgt, pG, pProj, pPm, pFid, pSid)
 		pae_curName = paGetHeldName()
