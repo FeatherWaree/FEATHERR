@@ -16337,6 +16337,7 @@ end
 	end)
 
 	PA_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	PA_NET_LATENCY = 0.07125 -- seconds; tune up if shots still land behind, down if they overshoot
 	PA_VIS, PA_VIS_CONN = {}, nil
 	PA_LOADOUTS, PA_REBUILT = {}, 0
 	PA_MANAGED, paSavedHand, paLastShot = {}, nil, 0
@@ -16626,34 +16627,26 @@ function paSolve(O, T, v, g)
 	local pasol_d = T - O
 	local pasol_R = math.sqrt(pasol_d.X*pasol_d.X + pasol_d.Z*pasol_d.Z)
 	if v <= 0 then return nil end
-
-	-- No gravity: straight line
 	if g < 0.001 then
 		local pasol_dist = pasol_d.Magnitude
 		if pasol_dist < 0.01 then return Vector3.new(0, v, 0), 0 end
 		return pasol_d.Unit * v, pasol_dist / v
 	end
-
-	-- Nearly vertical: solve with gravity properly
 	if pasol_R < 0.01 then
 		local h = pasol_d.Y
 		if h >= 0 then
-			-- Upward: h = v*t - 0.5*g*t^2  =>  t = (v - sqrt(v^2 - 2*g*h)) / g
 			local disc = v*v - 2*g*h
 			if disc < 0 then return nil end
 			local t = (v - math.sqrt(disc)) / g
 			if t < 0.001 then t = 0.001 end
 			return Vector3.new(0, v, 0), t
 		else
-			-- Downward: 0.5*g*t^2 + v*t - |h| = 0  =>  t = (-v + sqrt(v^2 + 2*g*|h|)) / g
 			local absH = -h
 			local t = (-v + math.sqrt(v*v + 2*g*absH)) / g
 			if t < 0.001 then t = 0.001 end
 			return Vector3.new(0, -v, 0), t
 		end
 	end
-
-	-- General case (unchanged)
 	local pasol_v2 = v*v
 	local pasol_disc = pasol_v2*pasol_v2 - g*(g*pasol_R*pasol_R + 2*pasol_d.Y*pasol_v2)
 	if pasol_disc < 0 then return nil end
@@ -16889,34 +16882,68 @@ function paSpawnVisual(pProj, pPm, pO, pVel, pG)
 	table.insert(PA_VIS, { obj = pas_clone, mover = pas_mover, isModel = pas_isModel, O = pO, V = pVel, g = pG, fr = pas_fr, t0 = tick(), life = (pPm and pPm.lifetimeSec) or 2 })
 end
 
-	function paDoShot(pL, pO, pSpawnO, pVel, pT, pTgt, pG, pProj, pPm, pFid, pSid)
-		pae_curName = paGetHeldName()
-		pae_curInst = pae_curName and paInv and paInv:FindFirstChild(pae_curName) or nil
-		if pae_curInst and not paIsManaged(pae_curInst) then paSavedHand = pae_curInst end
-		if pae_curInst ~= pL.weapon and paSetInv then
-			pcall(function() paSetInv:InvokeServer({ hand = pL.weapon }) end)
-		end
-		pae_draw = (pL.kind == "throw") and (pL.maxCharge or 0) or PA_FULL_DRAW
-		paf_ok = pcall(function()
-			return paFire:InvokeServer(pL.weapon, pL.ammo, pL.projectile,
-				vec3(pO.X, pO.Y, pO.Z),
-				vec3(pSpawnO.X, pSpawnO.Y, pSpawnO.Z),
-				vec3(pVel.X, pVel.Y, pVel.Z),
-				pFid, { shotId = pSid, drawDurationSec = pae_draw },
-				G.Services.Workspace:GetServerTimeNow())
-		end)
-		if paf_ok then
-			paLastShot = tick()
-			paf_tr = paPlayAnim(pL.fireAnim)
-			if paf_tr and paf_tr.Length then paFireAnimDone = tick() + paf_tr.Length end
-			paPlaySound(pL.launchSnd)
-			for paf_k = 1, #PA_HIT_TAPS do
-				paf_at = math.max(0, math.min(pT + PA_HIT_TAPS[paf_k], 3))
-				task.delay(paf_at, function() pcall(function() paHit:FireServer(pFid, pTgt) end) end)
-			end
-			paSpawnVisual(pProj, pPm, pSpawnO, pVel, pG)
+function paDoShot(pL, pO, pSpawnO, pVel, pT, pTgt, pG, pProj, pPm, pFid, pSid)
+	pae_curName = paGetHeldName()
+	pae_curInst = pae_curName and paInv and paInv:FindFirstChild(pae_curName) or nil
+	if pae_curInst and not paIsManaged(pae_curInst) then paSavedHand = pae_curInst end
+	if pae_curInst ~= pL.weapon and paSetInv then
+		pcall(function() paSetInv:InvokeServer({ hand = pL.weapon }) end)
+	end
+
+	-- ======= RE-AIM WITH FRESH DATA =======
+	-- The hand swap above may have yielded 50-200ms.
+	-- Re-read target position/velocity so we aim where they ARE, not where they WERE.
+	local pae_freshHrp = typeof(pTgt) == "Instance" and pTgt.Parent and pTgt:FindFirstChild("HumanoidRootPart")
+	local pae_freshChar = Players.LocalPlayer.Character
+	local pae_freshMyPart = pae_freshChar and pae_freshChar:FindFirstChild("HumanoidRootPart")
+	if pae_freshHrp and pae_freshMyPart then
+		local pae_freshHum = pTgt:FindFirstChildOfClass("Humanoid")
+		if pae_freshHum and pae_freshHum.Health > 0 then
+			local pae_freshMyPos = pae_freshMyPart.Position
+			local pae_freshSpawnO = pae_freshMyPos - PA_HAND_OFFSET
+			local pae_freshVel = pae_freshHrp.AssemblyLinearVelocity or pae_freshHrp.Velocity or Vector3.zero
+
+			local pae_isAir = (pae_freshHum.FloorMaterial == Enum.Material.Air) or math.abs(pae_freshVel.Y) > 2
+			local pae_leadY = pae_isAir and pae_freshVel.Y or 0
+			local pae_tgtG = pae_isAir and (G.Services.Workspace.Gravity or 196.2) or 0
+			local pae_lead = Vector3.new(pae_freshVel.X, pae_leadY, pae_freshVel.Z)
+			if pae_lead.Magnitude > 200 then pae_lead = pae_lead.Unit * 200 end
+
+			local pae_launchVel = (pPm and pPm.launchVelocity) or 100
+			local pae_life = (pPm and pPm.lifetimeSec) or 3
+
+			local pae_newVt, pae_newT = paAim(pae_freshSpawnO, pae_freshHrp.Position, pae_lead, pae_launchVel, pG, pae_life, pae_tgtG)
+			if pae_newVt then
+				pO = pae_freshMyPos
+				pSpawnO = pae_freshSpawnO
+				pVel = pae_newVt
+				pT = pae_newT
+			end 
 		end
 	end
+	-- ======= END RE-AIM =======
+
+	pae_draw = (pL.kind == "throw") and (pL.maxCharge or 0) or PA_FULL_DRAW
+	paf_ok = pcall(function()
+		return paFire:InvokeServer(pL.weapon, pL.ammo, pL.projectile,
+			vec3(pO.X, pO.Y, pO.Z),
+			vec3(pSpawnO.X, pSpawnO.Y, pSpawnO.Z),
+			vec3(pVel.X, pVel.Y, pVel.Z),
+			pFid, { shotId = pSid, drawDurationSec = pae_draw },
+			G.Services.Workspace:GetServerTimeNow())
+	end)
+	if paf_ok then
+		paLastShot = tick()
+		paf_tr = paPlayAnim(pL.fireAnim)
+		if paf_tr and paf_tr.Length then paFireAnimDone = tick() + paf_tr.Length end
+		paPlaySound(pL.launchSnd)
+		for paf_k = 1, #PA_HIT_TAPS do
+			paf_at = math.max(0, math.min(pT + PA_HIT_TAPS[paf_k], 3))
+			task.delay(paf_at, function() pcall(function() paHit:FireServer(pFid, pTgt) end) end)
+		end
+		paSpawnVisual(pProj, pPm, pSpawnO, pVel, pG)
+	end
+end
 
 	function paFireShot(L, O, spawnO, vel, t, target, g, projName, pm)
 		paf_fireId, paf_shotId = paGenId(), paGenId()
