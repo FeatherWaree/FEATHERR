@@ -21809,6 +21809,10 @@ end
 											rc_item:SetAttribute("ClientPickupAttemptTime", tick())
 											if pickup_remote then
 												pcall(function() pickup_remote:CallServer({ itemDrop = rc_item }) end)
+												local pickup = Instance.new("Sound")
+												pickup.SoundId = "rbxassetid://6768578304"
+												pickup.Volume = 1
+												pickup.Parent = workspace
 											end
 											rc_count = rc_count + 1
 										end
@@ -21908,11 +21912,16 @@ end
 										if qc_lastAttempt == nil or (qc_now - qc_lastAttempt > 0.1) then
 											qc_item:SetAttribute("ClientPickupAttemptTime", qc_now)
 
-											-- Invoke the server using your exact specified path structure
 											if qc_pickupRemote then
 												task.spawn(function()
 													pcall(function()
 														qc_pickupRemote:InvokeServer({ itemDrop = qc_item })
+														local pickupsound = Instance.new("Sound")
+														pickupsound.SoundId = "rbxassetid://6768578304"
+														pickupsound.Volume = 1
+														pickupsound.Parent = workspace
+
+														pickupsound:Play()
 													end)
 												end)
 											end
