@@ -7850,48 +7850,60 @@ end
 			end
 
 			-- 5. VALIDATION CHECKS
-			if distance > reach then return end
-			if math.abs(targetHRP.Position.Y - rootPart.Position.Y) > reach + 2 then return end
-			if Killaura.Values["Wall Check"] and not kaCanSee(besttarget) then return end
-			if not isInFOV(rootPart, targetHRP, tonumber(Killaura.Values["Angle Check"]) or 180) then return end
+		-- 5. VALIDATION CHECKS
+		if distance > reach then return end
+		if math.abs(targetHRP.Position.Y - rootPart.Position.Y) > reach + 2 then return end
+		if Killaura.Values["Wall Check"] and not kaCanSee(besttarget) then return end
+		if not isInFOV(rootPart, targetHRP, tonumber(Killaura.Values["Angle Check"]) or 180) then return end
 
-			local isClicking = (typeof(clicking) == "boolean" and clicking) or (typeof(mouse1down) == "boolean" and mouse1down) or false
-			if Killaura.Values["Manual Swing"] and not isClicking then return end
+		local isClicking = (typeof(clicking) == "boolean" and clicking) or (typeof(mouse1down) == "boolean" and mouse1down) or false
+		if Killaura.Values["Manual Swing"] and not isClicking then return end
 
-			local invFolder = game.ReplicatedStorage:FindFirstChild("Inventories") and game.ReplicatedStorage.Inventories:FindFirstChild(Player.Name)
-			local isSword = swords and table.find(swords, heldName)
+		local invFolder = game.ReplicatedStorage:FindFirstChild("Inventories") and game.ReplicatedStorage.Inventories:FindFirstChild(Player.Name)
+		local isSword = swords and table.find(swords, heldName)
+		local inventoryWeapon = nil
 
-			if not isSword then
-				if Killaura.Values["Require Sword Equipped"] then
-					return
-				else
-					if nowServerTime - lastEquipTime > 0.25 then
-						lastEquipTime = nowServerTime
-						task.spawn(function()
-							local bestSword = getBestEquippedSword(Player.Name)
-							if bestSword then
-								local swordInstance = typeof(bestSword) == "Instance" and bestSword or nil
-								if not swordInstance then
-									local swapInv = G.Services.RS:FindFirstChild("Inventories")
-									local playerInv = swapInv and swapInv:FindFirstChild(Player.Name)
-									swordInstance = playerInv and playerInv:FindFirstChild(tostring(bestSword))
-								end
-								if swordInstance then
-									SetInvItemRemote:InvokeServer({ hand = swordInstance })
-								end
-							end
-						end)
+		if not isSword then
+			if Killaura.Values["Require Sword Equipped"] then
+				return
+			else
+				local bestSword = getBestEquippedSword(Player.Name)
+				if bestSword then
+					local swordInstance = typeof(bestSword) == "Instance" and bestSword or nil
+					if not swordInstance then
+						local swapInv = G.Services.RS:FindFirstChild("Inventories")
+						local playerInv = swapInv and swapInv:FindFirstChild(Player.Name)
+						swordInstance = playerInv and playerInv:FindFirstChild(tostring(bestSword))
 					end
+
+					if swordInstance then
+						inventoryWeapon = swordInstance
+						-- Use a small debounce to prevent spamming the server while we wait for the visual swap
+						if nowServerTime - lastEquipTime > 0.1 then
+							lastEquipTime = nowServerTime
+							task.spawn(function()
+								pcall(function() SetInvItemRemote:InvokeServer({ hand = swordInstance }) end)
+							end)
+						end
+						-- CRITICAL FIX: We do NOT return here anymore.
+						-- We instantly proceed to attack using this sword on the exact same frame.
+					else
+						return
+					end
+				else
 					return
 				end
 			end
-
-			local inventoryWeapon = invFolder and invFolder:FindFirstChild(heldName)
+		else
+			-- If we already had a sword equipped, resolve it normally
+			inventoryWeapon = invFolder and invFolder:FindFirstChild(heldName)
 			if not inventoryWeapon then
 				inventoryWeapon = getBestEquippedSword(Player.Name)
 			end
+		end
 
-			if not loops["killaura"] then return end
+		if not loops["killaura"] then return end
+		if not inventoryWeapon then return end
 
 			-- 6. THE ACCUMULATOR TRIGGER
 			if accumulatedTime >= hitDelay then
