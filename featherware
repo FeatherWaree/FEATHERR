@@ -7685,32 +7685,48 @@ end
 				selectionRange = tonumber(Killaura.Values["Swing Range"]) or 50
 			end
 
-			if nowServerTime - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
-				lastTargetSearch = nowServerTime
-				local playertarget, playerdistance = nil, selectionRange
-				local npcdummytarget, npcdummydistance = nil, selectionRange
+		if nowServerTime - lastTargetSearch > 0.15 or not cachedBestTarget or not cachedBestTarget.Parent then
+			lastTargetSearch = nowServerTime
+			local playertarget, playerdistance = nil, selectionRange
+			local npcdummytarget, npcdummydistance = nil, selectionRange
 
-				for _, charModel in ipairs(EntityCache.Players or {}) do
-					local targetPlayer = Players:GetPlayerFromCharacter(charModel)
-					local isTeammate = (targetPlayer and Player.Team and targetPlayer.Team == Player.Team)
+			for _, charModel in ipairs(EntityCache.Players or {}) do
+				-- FIX 1: Better player detection (find by name if character link is missing)
+				local targetPlayer = Players:GetPlayerFromCharacter(charModel) or Players:FindFirstChild(charModel.Name)
 
-					if charModel ~= Player.Character and charModel.Parent and not isTeammate then
-						local tHRP = charModel:FindFirstChild("HumanoidRootPart")
-						local tHum = charModel:FindFirstChildOfClass("Humanoid")
-
-						if tHRP and tHum and tHum.Health > 0 then
-							local dist = (rootPart.Position - tHRP.Position).Magnitude
-							if dist < playerdistance then
-								playertarget = charModel
-								playerdistance = dist
-							end
-						end
+				-- FIX 2: Stronger teammate check (checks both Roblox Teams and game Attributes)
+				local isTeammate = false
+				if targetPlayer then
+					if Player.Team ~= nil and targetPlayer.Team == Player.Team then
+						isTeammate = true
+					elseif Player:GetAttribute("Team") ~= nil and targetPlayer:GetAttribute("Team") == Player:GetAttribute("Team") then
+						isTeammate = true
 					end
 				end
 
-				if Killaura.Values["Target NPCs/Dummies"] then
-					for _, npc in ipairs(EntityCache.NPCs or {}) do
-						if npc and npc.Parent then
+				if charModel ~= Player.Character and charModel.Parent and not isTeammate then
+					local tHRP = charModel:FindFirstChild("HumanoidRootPart")
+					local tHum = charModel:FindFirstChildOfClass("Humanoid")
+
+					if tHRP and tHum and tHum.Health > 0 then
+						local dist = (rootPart.Position - tHRP.Position).Magnitude
+						if dist < playerdistance then
+							playertarget = charModel
+							playerdistance = dist
+						end
+					end
+				end
+			end
+
+			if Killaura.Values["Target NPCs/Dummies"] then
+				for _, npc in ipairs(EntityCache.NPCs or {}) do
+					if npc and npc.Parent then
+						-- FIX 3: Don't target teammate's pets/clones that count as NPCs
+						local npcTeam = npc:GetAttribute("Team")
+						local myTeam = Player:GetAttribute("Team")
+						local isNpcTeammate = (npcTeam ~= nil and myTeam ~= nil and npcTeam == myTeam)
+
+						if not isNpcTeammate then
 							local tHRP = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
 							local tHum = npc:FindFirstChild("Humanoid")
 							if tHRP and tHum and tHum.Health > 0 then
@@ -7723,6 +7739,7 @@ end
 						end
 					end
 				end
+			end
 
 				local priority = Killaura.Values["Priority"]
 				local bountyTarget = nil
