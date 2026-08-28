@@ -16349,7 +16349,7 @@ end
 	end)
 
 	PA_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	PA_NET_LATENCY = 0.07125 -- seconds; tune up if shots still land behind, down if they overshoot
+	PA_NET_LATENCY = 0.085 -- seconds; tune up if shots still land behind, down if they overshoot
 	PA_VIS, PA_VIS_CONN = {}, nil
 	PA_LOADOUTS, PA_REBUILT = {}, 0
 	PA_MANAGED, paSavedHand, paLastShot = {}, nil, 0
@@ -16680,11 +16680,35 @@ function paSolve(O, T, v, g)
 end
 
 function paAim(O, hrp, vel, v, g, life, pTgtG)
-	local paa_T = hrp
-	local paa_g = pTgtG or 0
+	local paa_tgtG = pTgtG or 0
 	local paa_vt, paa_t = nil, 0
 	local paa_prevT = 0
 
+	-- 1. Find the floor level so we don't predict them falling through the ground
+	local floorY = -math.huge
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local filter = {Players.LocalPlayer.Character}
+	if hrp.Parent then table.insert(filter, hrp.Parent) end
+	rayParams.FilterDescendantsInstances = filter
+
+	-- Cast a ray 50 studs down from the target to find the floor
+	local rayHit = G.Services.Workspace:Raycast(hrp.Position, Vector3.new(0, -50, 0), rayParams)
+	if rayHit then
+		-- HRP is typically ~3 studs above the floor when standing
+		floorY = rayHit.Position.Y + 3 
+	end
+
+	-- 2. Start prediction from the latency-compensated position
+	local paa_T = Vector3.new(
+		hrp.X + vel.X * PA_NET_LATENCY,
+		hrp.Y + vel.Y * PA_NET_LATENCY - 0.5 * paa_tgtG * PA_NET_LATENCY * PA_NET_LATENCY,
+		hrp.Z + vel.Z * PA_NET_LATENCY
+	)
+	-- Clamp initial position to floor
+	if paa_T.Y < floorY then paa_T = Vector3.new(paa_T.X, floorY, paa_T.Z) end
+
+	-- 3. Iterative solver for perfect leading
 	for paa_i = 1, 8 do
 		paa_vt, paa_t = paSolve(O, paa_T, v, g)
 		if not paa_vt or paa_t > (life or 3) then return nil end
@@ -16693,11 +16717,20 @@ function paAim(O, hrp, vel, v, g, life, pTgtG)
 		if paa_i > 1 and math.abs(paa_t - paa_prevT) < 0.002 then break end
 		paa_prevT = paa_t
 
+		-- Total lead = network delay + flight time
+		local paa_totalT = PA_NET_LATENCY + paa_t
+		local nextY = hrp.Y + vel.Y * paa_totalT - 0.5 * paa_tgtG * paa_totalT * paa_totalT
+
+		-- CRITICAL: Clamp to floor level so we don't aim underground if they jumped
+		if nextY < floorY then nextY = floorY end
+
 		paa_T = Vector3.new(
-			hrp.X + vel.X * paa_t,
-			hrp.Y + vel.Y * paa_t - 0.5 * paa_g * paa_t * paa_t,
-			hrp.Z + vel.Z * paa_t)
+			hrp.X + vel.X * paa_totalT,
+			nextY,
+			hrp.Z + vel.Z * paa_totalT
+		)
 	end
+
 	return paa_vt, paa_t
 end
 
