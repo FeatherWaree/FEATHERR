@@ -1100,7 +1100,8 @@ end
 		["hitbox expander"] = false,
 		["transparency"] = false,
 		["player attach"] = false,
-		["beehive esp"] = false
+		["beehive esp"] = false,
+		["kit radar"] = false
 	}
 
 	--REMOTE EVENTS/FUNCTIONS--
@@ -5367,13 +5368,6 @@ end
 	end, true)
 	AutoMushRoom = Utility:CreateButton("Auto MushRoom", nil, true)
 	AutoMushRoom:CreateToggle("Bypass Dizzy Effect", false, nil)
-
-	AutoRaven = Utility:CreateButton("Auto Raven", nil, true)
-	AutoRaven:CreateDropdown("Priority", {"Player", "NPC/Dummy", "Nearest"}, "Player", nil)
-	AutoRaven:CreateToggle("Target Players", true, nil)
-	AutoRaven:CreateToggle("Target NPCs/Dummies", false, nil)
-	AutoRaven:CreateToggle("Require Raven Equipped", false, nil)
-
 	AutoConsume = Utility:CreateButton("Auto Consume", nil, true)
 
 	BedAlarm = Utility:CreateButton("Bed Alarm")
@@ -14330,11 +14324,6 @@ end
 			end
 		end
 
-		if loops["auto raven"] then
-			if child.Name == "raven" then
-
-			end
-		end
 	end)
 
 
@@ -30337,5 +30326,84 @@ AutoShoot.Callbacks.OnToggle = function(state)
 		if asConn then asConn:Disconnect(); asConn = nil end
 		asHideAimBeam()
 		asBusy = false
+	end
+end
+
+-- ============================================================
+--  KITS: KitRadar (Spawn Notifier)
+-- ============================================================
+KitRadar = Kits:CreateButton("Kit Radar", nil, true)
+
+krConns = {}
+krNetManaged = nil
+
+KitRadar.Callbacks.OnToggle = function(state)
+	loops["kit radar"] = state
+
+	-- Disconnect existing connections if toggled off or re-toggled
+	for _, conn in ipairs(krConns) do
+		pcall(function() conn:Disconnect() end)
+	end
+	krConns = {}
+
+	if state then
+		-- Resolve the NetManaged folder
+		if not krNetManaged then
+			pcall(function()
+				krNetManaged = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged")
+			end)
+		end
+
+		if not krNetManaged then
+			NotificationSystem.Notify("Kit Radar", "Failed to load remotes.", 3)
+			return
+		end
+
+		-- 1. BeeKeeper Hook (BeeSpawn)
+		pcall(function()
+			beeRemote = krNetManaged:WaitForChild("BeeSpawn", 5)
+			if beeRemote then
+				-- Hook into the OnClientEvent (FireClient)
+				conn = beeRemote.OnClientEvent:Connect(function(data)
+					if not loops["kit radar"] then return end
+					if typeof(data) == "table" and data.position then
+						NotificationSystem.Notify("BeeKeeper", "A bee has spawned!", 4)
+					end
+				end)
+				table.insert(krConns, conn)
+			end
+		end)
+
+		-- 2. Metal Detector Hook (CollectableEntitySpawn)
+		pcall(function()
+			metalRemote = krNetManaged:WaitForChild("CollectableEntitySpawn", 5)
+			if metalRemote then
+				conn = metalRemote.OnClientEvent:Connect(function(data)
+					if not loops["kit radar"] then return end
+					if typeof(data) == "table" and data.entityType == "hidden_metal" then
+						NotificationSystem.Notify("Metal Detector", "A metal has spawned!", 4)
+					end
+				end)
+				table.insert(krConns, conn)
+			end
+		end)
+
+		-- 3. ElderTree Hook (TreeOrbSpawn)
+		pcall(function()
+			elderRemote = krNetManaged:WaitForChild("TreeOrbSpawn", 5)
+			if elderRemote then
+				conn = elderRemote.OnClientEvent:Connect(function(data)
+					if not loops["kit radar"] then return end
+					if typeof(data) == "table" and data.position then
+						NotificationSystem.Notify("ElderTree", "An orb has spawned!", 4)
+					end
+				end)
+				table.insert(krConns, conn)
+			end
+		end)
+
+		NotificationSystem.Notify("Kit Radar", "Enabled. Watching for spawns...", 2)
+	else
+		NotificationSystem.Notify("Kit Radar", "Disabled.", 2)
 	end
 end
