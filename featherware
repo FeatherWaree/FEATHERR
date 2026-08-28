@@ -16705,12 +16705,21 @@ function paAim(O, hrp, vel, v, g, life, pTgtG)
 	local floorY = -math.huge
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+	-- Ignore ALL players and NPCs so the ray ONLY hits the map/terrain
 	local filter = {Players.LocalPlayer.Character}
-	if hrp.Parent then table.insert(filter, hrp.Parent) end
+	if EntityCache then
+		if EntityCache.Players then
+			for _, pChar in ipairs(EntityCache.Players) do table.insert(filter, pChar) end
+		end
+		if EntityCache.NPCs then
+			for _, nChar in ipairs(EntityCache.NPCs) do table.insert(filter, nChar) end
+		end
+	end
 	rayParams.FilterDescendantsInstances = filter
 
-	-- Cast a ray 50 studs down from the target to find the floor
-	local rayHit = G.Services.Workspace:Raycast(hrp.Position, Vector3.new(0, -50, 0), rayParams)
+	-- Cast a ray 50 studs down from the target's position (hrp is a Vector3 here)
+	local rayHit = G.Services.Workspace:Raycast(hrp, Vector3.new(0, -50, 0), rayParams)
 	if rayHit then
 		-- HRP is typically ~3 studs above the floor when standing
 		floorY = rayHit.Position.Y + 3 
