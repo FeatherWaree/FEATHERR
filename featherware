@@ -5498,156 +5498,8 @@ end
 	end)
 	SoundAmplifer:CreateToggle("Exclude Music", nil, false)
 
-	InteractionExpander = GameTab:CreateButton("Interaction Changer", nil, true)
-	InteractionExpander:CreateSlider("Distance", 0, 1000, 100, function(value)
-
-	end)
-	InteractionExpander:CreateSlider("Hold Duration", 0, 1, 0.05, nil, 0.01)
-
-	InteractionExpander.Callbacks.OnToggle = function(state)
-		loops["interaction expander"] = state
-	end
-
-SetSettings = GameTab:CreateButton("Set Settings", nil, true)
-
--- The remote endpoint
-setSettingsRemote = nil
-pcall(function()
-	setSettingsRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetSettings")
-end)
-
--- Mapping UI names to Server Argument keys
-settingsMap = {
-	["Auto Deposit"] = "enable_auto_deposit",
-	["Clan Invites"] = "clan_invites",
-	["Background Music Volume"] = "audio_music_volume",
-	["Global Chat Messages"] = "global_chat_system_messages",
-	["Shift Lock"] = "pc_shift_lock",
-	["Lock Camera"] = "lock_camaera", -- Note the typo in the game's code "lock_camaera"
-	["Resource Display"] = "show_resources_in_hud",
-	["Friend Spectating"] = "friendSpectating",
-	["Show Recommended Shop"] = "show_recommended_shop",
-	["Friend Notifications"] = "friendNotifications",
-	["Profile Visibility"] = "profile_visibility",
-	["Show Tips"] = "show_tips",
-	["Streamer Mode"] = "streamer_mode",
-	["Emote Volume"] = "audio_cosmetics_volume", -- Mapped to audio_cosmetics_volume based on your args
-	["FOV"] = "fov",
-	["On Screen Effects"] = "enable_on_screen_effects"
-}
-
-function forceUpdateSettings()
-	-- Check if the main "Set Settings" button is actually toggled ON
-	if not loops["set settings"] then return end
-
-	-- Re-find the remote just in case it wasn't loaded yet
-	if not setSettingsRemote then
-		pcall(function()
-			setSettingsRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetSettings")
-		end)
-	end
-
-	if not setSettingsRemote then 
-		NotificationSystem.Notify("Set Settings", "Remote not found!", 2)
-		return 
-	end
-
-	-- Build the full args table based on your complete snippet
-	argsTemplate = {
-		enable_auto_deposit = false,
-		graphics_contrast = 0,
-		graphics_shadows = true,
-		mobile_auto_bridge_button = true,
-		show_tips = true,
-		global_chat_system_messages = true,
-		audio_effects_volume = 1,
-		lock_camaera = false,
-		friendSpectating = false,
-		show_recommended_shop = false,
-		mobile_block_break_button = true,
-		profile_visibility = "public",
-		show_resources_in_hud = false,
-		mobile_projectile_button = true,
-		pictureMode = false,
-		audio_cosmetics_volume = 1,
-		ambient_lighting_brightness = 0,
-		graphics_ambient_light = true,
-		mobile_interact_button = true,
-		receive_gifts = false,
-		friendNotifications = false,
-		audio_ambience_volume = 1,
-		exposure_compensation = 0,
-		pc_shift_lock = false,
-		audio_gameplay_volume = 1,
-		audio_music_volume = 0,
-		mobileShiftLock = false,
-		clan_invites = false,
-		mobile_sword_hold = true,
-		audio_master_volume = 1,
-		streamer_mode = false,
-		fov = 80,
-		graphics_reflections = true,
-		enable_on_screen_effects = false,
-		audio_ui_volume = 1,
-		graphics_saturation = 0
-	}
-
-	-- Overwrite with current UI values
-	for uiName, argKey in pairs(settingsMap) do
-		val = SetSettings.Values[uiName]
-		if val ~= nil then
-			-- CRITICAL FIX: Handle Dropdown case sensitivity (Server expects lowercase)
-			if uiName == "Profile Visibility" then
-				if val == "Public" then val = "public"
-				elseif val == "Friends" then val = "friends"
-				elseif val == "Private" then val = "private" end
-			end
-
-			-- CRITICAL FIX: Ensure types are correct (boolean, number, string)
-			if typeof(val) == "boolean" or typeof(val) == "number" or typeof(val) == "string" then
-				argsTemplate[argKey] = val
-			end
-		end
-	end
-
-	-- Fire the remote
-	-- The game expects FireServer({table}), so we pass the table directly as the first argument.
-	pcall(function()
-		setSettingsRemote:FireServer(argsTemplate)
-	end)
-
-	NotificationSystem.Notify("Set Settings", "Settings updated!", 1)
-end
-
--- Create UI elements with explicit callbacks that call forceUpdateSettings
-SetSettings:CreateToggle("Auto Deposit", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Clan Invites", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Background Music Volume", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Global Chat Messages", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Shift Lock", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Lock Camera", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Resource Display", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Friend Spectating", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Show Recommended Shop", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Friend Notifications", false, function() forceUpdateSettings() end)
-SetSettings:CreateDropdown("Profile Visibility", {"Public", "Friends", "Private"}, "Public", function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Show Tips", false, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("Streamer Mode", false, function() forceUpdateSettings() end)
-SetSettings:CreateSlider("Emote Volume", 0, 2, 1, function() forceUpdateSettings() end)
-SetSettings:CreateSlider("FOV", 1, 360, 80, function() forceUpdateSettings() end)
-SetSettings:CreateToggle("On Screen Effects", false, function() forceUpdateSettings() end)
-
-SetSettings.Callbacks.OnToggle = function(state)
-	loops["set settings"] = state
-	if state then
-		-- When toggled ON, apply current settings immediately
-		forceUpdateSettings()
-	else
-		-- When toggled OFF, do nothing (settings remain as they were last sent)
-		NotificationSystem.Notify("Set Settings", "Disabled. Changes will not apply.", 2)
-	end
-end
 	AnimationSwitch = GameTab:CreateButton("Animation Disabler", nil, true)
+	
 	Headless = GameTab:CreateButton("Headless", nil, true)
 	Headless:CreateSlider("Transparency", 0, 1,1, function(state)
 		if cachedChar and loops["headless"] then
@@ -5675,7 +5527,6 @@ end
 		cs = game:GetService("CollectionService")
 	}
 
-	-- Load the remote
 	pcall(function()
 		ReplicatedStorage = G.Services.RS
 		netManaged = ReplicatedStorage:WaitForChild("rbxts_include", 5):WaitForChild("node_modules", 5):WaitForChild("@rbxts", 5):WaitForChild("net", 5):WaitForChild("out", 5):WaitForChild("_NetManaged", 5)
@@ -9121,136 +8972,6 @@ end
 	end
 
 
-	local function fireProjectile(projectileName, HRP, targetPart, itemRequired, target)
-		local origin = HRP.Position
-		if not targetPart or not Player.Character then return end
-
-		local targetHumanoid = target:FindFirstChild("Humanoid")
-		if not targetHumanoid or targetHumanoid.Health <= 0 then return end	
-
-		-- 1. Format the name to all lowercase
-		local formattedName = string.lower(tostring(projectileName))
-
-		-- 2. Look up the projectile data
-		local projectileData = ProjectileMeta[formattedName] 
-			or (ProjectileMeta.ProjectileMeta and ProjectileMeta.ProjectileMeta[formattedName])
-			or (ProjectileMeta.default and ProjectileMeta.default[formattedName])
-
-		if not projectileData then
-			warn("Could not find projectile data for: " .. formattedName)
-			return false
-		end
-
-		-- 3. Extract the specific speed and gravity (with fallbacks just in case)
-		local speed = projectileData.launchVelocity or 150
-		local customGravity = projectileData.gravitationalAcceleration or 196.2
-
-		local initialDistance = (targetPart.Position - origin).Magnitude
-
-		if initialDistance < 8 then
-			origin = origin + (HRP.CFrame.LookVector * 1.5)
-		end
-
-		local predictedPos = targetPart.Position
-		local flightTime = 0
-		local aimVector = Vector3.zero
-
-		-- 4. Check against the dynamic speed
-		if speed < 9999 then
-			local velocity = targetPart.AssemblyLinearVelocity or Vector3.zero
-
-			-- Pass the custom gravity into the firing solution
-			local calculatedAim, calcPos, calcTime = getFiringSolution(origin, targetPart.Position, velocity, speed, customGravity)
-
-			if not calculatedAim then
-				return false 
-			end
-
-			aimVector = calculatedAim
-			predictedPos = calcPos
-			flightTime = calcTime + 0.05 -- Adding a tiny buffer for network latency
-
-			if not isPathClear(origin, predictedPos, {Player.Character, target}) then
-				local alternatePos = predictedPos + Vector3.new(0, 1.5, 0)
-				if isPathClear(origin, alternatePos, {Player.Character, target}) then
-					predictedPos = alternatePos
-				else
-					return false 
-				end
-			end
-		else
-			-- Fallback for hitscan/instant weapons
-			flightTime = initialDistance / speed
-			local directionVector = (predictedPos - origin).Unit
-			aimVector = directionVector * speed
-		end
-
-		if targetPart.Name == "Head" then
-			predictedPos = predictedPos + Vector3.new(0, 1.2, 0) 
-		end
-
-		local ID = generateId()
-
-		-- We pass 'aimVector' directly as the third positional argument 
-		-- because it now contains the correct 3D velocity and upward pitch
-		local args = {
-			inventoriesFolder:FindFirstChild(Player.Name):FindFirstChild(tostring(itemRequired or projectileName)),
-			tostring(projectileName),
-			tostring(projectileName),
-			vector.create(origin.X, origin.Y, origin.Z),
-			vector.create(HRP.Position.X, HRP.Position.Y, HRP.Position.Z),
-			vector.create(aimVector.X, aimVector.Y, aimVector.Z), 
-			generateId(),
-			{shotId = ID, drawDurationSec = AutoShoot.Values["Shoot duration"]},
-			G.Services.Workspace:GetServerTimeNow()
-		}
-
-		spawnClientTracer(origin, predictedPos, speed)
-
-		task.spawn(function()
-			stopHoldAnimation()
-			local handItemLower = string.lower(handItemName)
-			if string.find(handItemLower, "crossbow") then playShootAnimation(CB_SHOOT_ANIMATION_ID)
-			elseif string.find(handItemLower, "bow") or string.find(handItemLower, "headhunter") then playShootAnimation(BOW_SHOOT_ANIMATION_ID)
-			elseif string.find(handItemLower, "frost_staff") or string.find(handItemLower, "spellbook") then playShootAnimation() end
-		end)
-
-		fireProjectileEvent:InvokeServer(unpack(args))
-
-		local hitArgs = {tostring(ID), G.Services.Workspace:WaitForChild(target.Name)}
-
-		-- Spoofing thread (updated to use the accurate aimVector)
-		task.spawn(function()
-			startTime = os.clock()
-			timeout = flightTime + 0.3
-			hitRegistered = false
-
-			while os.clock() - startTime < timeout do
-				task.wait() 
-
-				if not target or not target:FindFirstChild("Humanoid") or target.Humanoid.Health <= 0 then break end
-
-				local elapsedTime = os.clock() - startTime
-
-				-- Simulating the arrow's flight locally, now including gravity drop
-				local currentArrowPos = origin + (aimVector * elapsedTime) - Vector3.new(0, 0.5 * G.Services.Workspace.Gravity * elapsedTime^2, 0)
-				local actualTargetPos = targetPart.Position
-
-				if (currentArrowPos - actualTargetPos).Magnitude <= 5.5 then
-					G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("ProjectileHit"):FireServer(unpack(hitArgs))
-					hitRegistered = true
-					break
-				end
-			end
-
-			if not hitRegistered and target and target.Parent then
-				G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("ProjectileHit"):FireServer(unpack(hitArgs))
-			end
-		end)
-
-		return true 
-	end
-
 
 
 	local function findClosestPlr(radius, rootPart)
@@ -9832,7 +9553,7 @@ end
 
 	AutoPearl = Utility:CreateButton("Auto Pearl", nil, true)
 	AutoPearl:CreateSlider("Void range", 1, 250, 100, nil, 1)
-	AutoPearl:CreateSlider("Shoot Duration", 0, 1, 0.25, nil, 0.05)
+	AutoPearl:CreateSlider("Shoot Duration", 0.01, 1, 0.25, nil, 0.05)
 
 	function apGenId()
 		if type(paGenId) == "function" then return paGenId() end
@@ -23749,6 +23470,14 @@ end
 		onCharacterAdded(character)
 		updateVelocityCache()
 		CachePhaseParts(character)
+		
+		if loops["transparency"] then
+			if character  then
+				if character:GetAttribute("Transparency") then
+					character:SetAttribute("Transparency", Transparency.Values["Amount"])
+				end
+			end
+		end
 
 		-- 2. Auto Buy Inventory Update (Specific Timing)
 		task.wait(0.2)
@@ -29820,51 +29549,13 @@ end)
 	transpConn = nil
 	transpCharConn = nil
 
-	function transpApplyPart(part)
-		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Name ~= "FW_Cape" then
-			part.LocalTransparencyModifier = Transparency.Values["Amount"] or 0.5
-		end
-	end
-
-	function transpApplyAll(targetChar)
-		for _, desc in ipairs(targetChar:GetDescendants()) do
-			transpApplyPart(desc)
-		end
-	end
 
 	Transparency.Callbacks.OnToggle = function(state)
 		loops["transparency"] = state
-		if state then
-			if game:GetService("Players").LocalPlayer.Character then
-				transpApplyAll(game:GetService("Players").LocalPlayer.Character)
-				if transpConn then transpConn:Disconnect() end
-
-				-- task.defer beats Roblox's internal tool initialization so weapons stay transparent
-				transpConn = game:GetService("Players").LocalPlayer.Character.DescendantAdded:Connect(function(desc)
-					task.defer(transpApplyPart, desc)
-				end)
-			end
-
-			if not transpCharConn then
-				transpCharConn = game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(newChar)
-					if not loops["transparency"] then return end
-					task.wait(0.05)
-					transpApplyAll(newChar)
-					if transpConn then transpConn:Disconnect() end
-					transpConn = newChar.DescendantAdded:Connect(function(desc)
-						task.defer(transpApplyPart, desc)
-					end)
-				end)
-			end
-		else
-			if transpConn then transpConn:Disconnect(); transpConn = nil end
-			if transpCharConn then transpCharConn:Disconnect(); transpCharConn = nil end
-
-			if game:GetService("Players").LocalPlayer.Character then
-				for _, desc in ipairs(game:GetService("Players").LocalPlayer.Character:GetDescendants()) do
-					if desc:IsA("BasePart") then
-						desc.LocalTransparencyModifier = 0
-					end
+			if loops["transparency"] then
+			if cachedChar then
+				if cachedChar:GetAttribute("Transparency") then
+					cachedChar:SetAttribute("Transparency", Transparency.Values["Amount"])
 				end
 			end
 		end
@@ -30274,3 +29965,377 @@ end)
 			table.clear(beehiveEspCache)
 		end
 	end
+
+-- ============================================================
+--  COMBAT: AutoShoot (Sword + Projectile Combo)
+-- ============================================================
+AutoShoot = Combat:CreateButton("Auto Shoot", nil, true)
+AutoShoot:CreateToggle("Enabled", true, nil)
+AutoShoot:CreateDropdown("Projectiles", {"wood_crossbow", "headhunter"}, "headhunter", nil, true)
+AutoShoot:CreateSlider("Headshot Chance %", 0, 100, 50, nil, 5)
+
+asConn = nil
+asBusy = false
+asLastShot = 0
+asSavedSword = nil
+asCurrentLoadout = nil
+asNextCooldown = 0.3
+asBusyTimestamp = 0 -- Safety timestamp to prevent stuck busy flag
+
+-- Legit Aim Beam Setup
+asAimFolder = nil
+asAimPart1 = nil
+asAimPart2 = nil
+asAimAttach1 = nil
+asAimAttach2 = nil
+asAimBeam = nil
+
+function asSetupAimBeam()
+	if asAimFolder then return end
+	asAimFolder = Instance.new("Folder")
+	asAimFolder.Name = "AutoShoot_Targeting"
+	asAimFolder.Parent = G.Services.Workspace
+
+	asAimPart1 = Instance.new("Part")
+	asAimPart1.Transparency = 1
+	asAimPart1.CanCollide = false
+	asAimPart1.Anchored = true
+	asAimPart1.Parent = asAimFolder
+
+	asAimPart2 = Instance.new("Part")
+	asAimPart2.Transparency = 1
+	asAimPart2.CanCollide = false
+	asAimPart2.Anchored = true
+	asAimPart2.Parent = asAimFolder
+
+	asAimAttach1 = Instance.new("Attachment")
+	asAimAttach1.Parent = asAimPart1
+
+	asAimAttach2 = Instance.new("Attachment")
+	asAimAttach2.Parent = asAimPart2
+
+	asAimBeam = Instance.new("Beam")
+	asAimBeam.Attachment0 = asAimAttach1
+	asAimBeam.Attachment1 = asAimAttach2
+	asAimBeam.FaceCamera = true
+	asAimBeam.Segments = 300
+	asAimBeam.Brightness = 1
+	asAimBeam.Color = ColorSequence.new(Color3.fromRGB(255, 229, 127))
+	asAimBeam.Transparency = NumberSequence.new(0)
+	asAimBeam.Width0 = 0.08
+	asAimBeam.Width1 = 0.08
+	asAimBeam.CurveSize0 = 0
+	asAimBeam.CurveSize1 = 0
+	asAimBeam.Parent = asAimFolder
+end
+
+function asGetLaunchPosition()
+	char = Player.Character
+	if not char then return nil end
+	hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return nil end
+
+	tool = char:FindFirstChildWhichIsA("Tool")
+	originCFrame = hrp.CFrame
+
+	if tool then
+		handle = tool:FindFirstChild("Handle")
+		if handle then
+			bulletOrigin = handle:FindFirstChild("BulletOrigin")
+			if bulletOrigin and bulletOrigin:IsA("Attachment") then
+				originCFrame = bulletOrigin.WorldCFrame
+			else
+				originCFrame = handle.CFrame
+			end
+		end
+	else
+		cam = G.Services.Workspace.CurrentCamera
+		if cam then originCFrame = cam.CFrame end
+	end
+
+	local offsetPos = originCFrame * Vector3.new(0.8, -0.6, 0)
+	return offsetPos
+end
+
+function asShowAimBeam(origin, velocity, gravity, life)
+	if not asAimBeam then asSetupAimBeam() end
+	if not origin then return end
+
+	local halfLife = life / 2
+	local midPos = Vector3.new(velocity.X * halfLife + origin.X, -0.5 * gravity * halfLife^2 + velocity.Y * halfLife + origin.Y, velocity.Z * halfLife + origin.Z)
+	local endPos = Vector3.new(velocity.X * life + origin.X, -0.5 * gravity * life^2 + velocity.Y * life + origin.Y, velocity.Z * life + origin.Z)
+
+	local ctrl1 = (midPos - origin * 0.25 - endPos * 0.25) * 2
+	local p1 = ctrl1 * 0.6666666666666666 + origin * 0.3333333333333333
+	local p2 = ctrl1 * 0.6666666666666666 + endPos * 0.3333333333333333
+
+	asAimPart1.CFrame = CFrame.new(origin, p1) * CFrame.Angles(0, math.rad(90), 0)
+	asAimPart2.CFrame = CFrame.new(endPos, p2) * CFrame.Angles(0, math.rad(-90), 0)
+
+	asAimBeam.CurveSize0 = (p1 - asAimPart1.Position).Magnitude
+	asAimBeam.CurveSize1 = (p2 - asAimPart2.Position).Magnitude
+	asAimBeam.Width1 = 0.08 + 0.08 * ((asAimPart1.Position - asAimPart2.Position).Magnitude / 100)
+	asAimBeam.Enabled = true
+end
+
+function asHideAimBeam()
+	if asAimBeam then asAimBeam.Enabled = false end
+end
+
+function asGetProjectileLoadout()
+	char = Player.Character
+	if not char then return nil end
+
+	inv = G.Services.RS:FindFirstChild("Inventories") and G.Services.RS.Inventories:FindFirstChild(Player.Name)
+	if not inv then return nil end
+
+	allowedProjs = AutoShoot.Values["Projectiles"] or {"headhunter", "wood_crossbow"}
+	table.sort(allowedProjs, function(a, b)
+		if a == "headhunter" then return true end
+		if b == "headhunter" then return false end
+		return a < b
+	end)
+
+	for _, projName in ipairs(allowedProjs) do
+		projItem = inv:FindFirstChild(projName)
+		if projItem and (projItem:GetAttribute("Amount") or 0) > 0 then
+			arrowItem = inv:FindFirstChild("wood_arrow") or inv:FindFirstChild("arrow") or inv:FindFirstChild("headhunter_arrow")
+			if arrowItem and (arrowItem:GetAttribute("Amount") or 0) > 0 then
+				if paResolve then
+					loadout = paResolve(projName, projItem)
+					if loadout then
+						loadout.ammo = arrowItem.Name
+						loadout.ammoInst = arrowItem
+						return loadout
+					end
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+-- CRITICAL FIX: Use Killaura's Wall Check logic
+function asCanSee(targetModel)
+	if canRequire and kaSwordController and kaEntityUtil and targetModel then
+		local kaPart = targetModel:FindFirstChild("HumanoidRootPart") or targetModel.PrimaryPart
+		if kaPart then
+			local kaEntity = kaEntityUtil:getEntity(kaPart)
+			if kaEntity then
+				local kaVisible = kaSwordController:canSee(kaEntity)
+				if kaVisible then return true end
+			end
+		end
+	end
+
+	local kaChar = Player.Character
+	local kaHrp = kaChar and kaChar:FindFirstChild("HumanoidRootPart")
+	if not kaHrp or not targetModel then return false end
+
+	local tPart = targetModel:FindFirstChild("HumanoidRootPart") or targetModel.PrimaryPart
+	if not tPart then return false end
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {kaChar, targetModel}
+	rayParams.IgnoreWater = true
+
+	local hit = G.Services.Workspace:Raycast(kaHrp.Position, tPart.Position - kaHrp.Position, rayParams)
+	return hit == nil
+end
+
+-- CRITICAL FIX: First Person Check
+function asIsFirstPerson()
+	char = Player.Character
+	if not char then return false end
+	head = char:FindFirstChild("Head")
+	if not head then return false end
+	cam = G.Services.Workspace.CurrentCamera
+	if not cam then return false end
+	return (cam.CFrame.Position - head.Position).Magnitude < 1.5
+end
+
+function asDoShoot(target, swordInst)
+	-- SAFETY: If busy flag is stuck for more than 2 seconds, force reset it
+	if asBusy and (tick() - asBusyTimestamp > 2) then
+		asBusy = false
+	end
+
+	if asBusy then return end
+
+	-- 1. PRE-CHECKS (Before swapping inventory)
+	if not asIsFirstPerson() then return end -- First Person Only
+
+	tHum = target:FindFirstChildOfClass("Humanoid")
+	if not tHum or tHum.Health <= 0 then return end -- Dead check
+
+	myHRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	tHRP = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+	if not myHRP or not tHRP then return end
+
+	-- Teammate check
+	targetPlayer = Players:GetPlayerFromCharacter(target)
+	if targetPlayer and Player.Team and targetPlayer.Team == Player.Team then return end
+
+	-- Wall check (Using KA logic)
+	if not asCanSee(target) then return end
+
+	-- Angle check (180° forward cone using Camera)
+	cam = G.Services.Workspace.CurrentCamera
+	camDir = cam and cam.CFrame.LookVector or myHRP.CFrame.LookVector
+	toTarget = (tHRP.Position - myHRP.Position).Unit
+	angle = math.acos(math.clamp(camDir:Dot(toTarget), -1, 1))
+
+	if angle > math.rad(90) then return end -- Looking away
+
+	-- 2. ALL CHECKS PASSED - Proceed with swap and shoot
+	asBusy = true
+	asBusyTimestamp = tick() -- Record start time
+
+	-- Safety wrapper to ensure asBusy is always reset
+	pcall(function()
+		loadout = asGetProjectileLoadout()
+		if not loadout then 
+			asBusy = false 
+			return 
+		end
+
+		asCurrentLoadout = loadout
+		asSavedSword = swordInst
+
+		-- Swap to projectile
+		if paSetInv then
+			pcall(function() paSetInv:InvokeServer({ hand = loadout.weapon }) end)
+		end
+
+		task.wait(0.05)
+
+		-- Re-verify target is still valid after the small wait
+		if not target.Parent or not tHum or tHum.Health <= 0 then
+			if asSavedSword and paSetInv then pcall(function() paSetInv:InvokeServer({ hand = asSavedSword }) end) end
+			asBusy = false
+			return
+		end
+
+		tHead = target:FindFirstChild("Head")
+
+		-- Headshot Logic
+		targetPos = tHRP.Position
+		if loadout.weapon.Name == "headhunter" and tHead then
+			chance = tonumber(AutoShoot.Values["Headshot Chance %"]) or 50
+			if math.random(1, 100) <= chance then
+				targetPos = tHead.Position + Vector3.new(0, 0.5, 0)
+			end
+		end
+
+		origin = asGetLaunchPosition() or (myHRP.Position - Vector3.new(0, 2, 0))
+
+		pm = PA_PROJ_META[loadout.projectile] or PA_PROJ_META[loadout.weapon.Name] or {}
+		launchVel = pm.launchVelocity or 100
+		grav = pm.gravitationalAcceleration or 196.2
+		life = pm.lifetimeSec or 3
+
+		vt, t = paAim(origin, targetPos, Vector3.zero, launchVel, grav, life, 0)
+		if not vt then
+			dir = (targetPos - origin).Unit
+			vt = dir * launchVel
+			t = (targetPos - origin).Magnitude / launchVel
+		end
+
+		asShowAimBeam(origin, vt, grav, math.min(t, life))
+
+		fireId = paGenId and paGenId() or tostring(math.random(100000, 999999))
+		shotId = paGenId and paGenId() or tostring(math.random(100000, 999999))
+
+		if paFire then
+			pcall(function()
+				paFire:InvokeServer(
+					loadout.weapon, 
+					loadout.ammo, 
+					loadout.projectile, 
+					vec3(origin.X, origin.Y, origin.Z),
+					vec3(origin.X, origin.Y, origin.Z),
+					vec3(vt.X, vt.Y, vt.Z),
+					fireId, 
+					{ shotId = shotId, drawDurationSec = 0 },
+					G.Services.Workspace:GetServerTimeNow()
+				)
+			end)
+		end
+
+		if paPlayAnim and loadout.fireAnim then
+			paPlayAnim(loadout.fireAnim, false)
+		end
+
+		if paPlaySound and loadout.launchSnd then
+			paPlaySound(loadout.launchSnd)
+		end
+
+		asHideAimBeam()
+
+		-- Swap back to sword
+		if asSavedSword and paSetInv then
+			pcall(function() paSetInv:InvokeServer({ hand = asSavedSword }) end)
+		end
+
+		baseDelay = loadout.fireDelay or 0.3
+		randomExtra = math.random(5, 10) / 100
+		asNextCooldown = baseDelay + randomExtra
+	end)
+
+	asBusy = false
+end
+
+AutoShoot.Callbacks.OnToggle = function(state)
+	loops["auto shoot"] = state
+	if state then
+		asSetupAimBeam()
+		if not asConn then
+			asConn = G.Services.RunService.Heartbeat:Connect(function()
+				if not loops["auto shoot"] or not AutoShoot.Values["Enabled"] then return end
+
+				-- SAFETY: If busy flag is stuck for more than 2 seconds, force reset it
+				if asBusy and (tick() - asBusyTimestamp > 2) then
+					asBusy = false
+				end
+
+				if asBusy then return end
+
+				now = tick()
+				if now - asLastShot < asNextCooldown then return end
+
+				if loops["killaura"] and currentKaTarget and currentKaTarget.Parent then
+					char = Player.Character
+					if not char then return end
+
+					myHRP = char:FindFirstChild("HumanoidRootPart")
+					tHRP = currentKaTarget:FindFirstChild("HumanoidRootPart") or currentKaTarget.PrimaryPart
+					tHum = currentKaTarget:FindFirstChildOfClass("Humanoid")
+
+					if myHRP and tHRP and tHum and tHum.Health > 0 then
+						dist = (myHRP.Position - tHRP.Position).Magnitude
+						reach = tonumber(Killaura.Values["Reach"]) or 12.4
+
+						if dist <= reach + 2 then
+							handItem = char:FindFirstChild("HandInvItem")
+							if not handItem or not handItem.Value then return end
+
+							heldName = typeof(handItem.Value) == "Instance" and handItem.Value.Name or tostring(handItem.Value)
+							isSword = swords and table.find(swords, heldName)
+
+							if isSword then
+								asLastShot = now
+								task.spawn(asDoShoot, currentKaTarget, handItem.Value)
+							end
+						end
+					end
+				end
+			end)
+		end
+	else
+		if asConn then asConn:Disconnect(); asConn = nil end
+		asHideAimBeam()
+		asBusy = false
+	end
+end
