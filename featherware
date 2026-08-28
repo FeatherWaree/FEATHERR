@@ -5508,55 +5508,145 @@ end
 		loops["interaction expander"] = state
 	end
 
-	SetSettings = GameTab:CreateButton("Set Settings", nil, true)
-	SetSettings:CreateToggle("Auto Deposit", nil, false)
-	SetSettings:CreateToggle("Clan Invites", nil, false)
-	SetSettings:CreateToggle("Background Music Volume", nil, false)
-	SetSettings:CreateToggle("Global Chat Messages", nil, false)
-	SetSettings:CreateToggle("Shift Lock", nil, false)
-	SetSettings:CreateToggle("Lock Camera", nil, false)
-	SetSettings:CreateToggle("Resource Display", nil, false)
-	SetSettings:CreateToggle("Friend Spectating", nil, false)
-	SetSettings:CreateToggle("Show Recommended Shop", nil, false)
-	SetSettings:CreateToggle("Friend Notifications", nil, false)
-	SetSettings:CreateDropdown("Profile Visibility", {"Public", "Friends", "Private"}, "Public", nil, true)
-	SetSettings:CreateToggle("Show Tips", nil, false)
-	SetSettings:CreateToggle("Background Music Volume", nil, false)
-	SetSettings:CreateToggle("Streamer Mode", nil, false)
-	SetSettings:CreateSlider("Emote Volume", 0, 2, 1)
-	SetSettings:CreateSlider("FOV", 1, 360, 200)
-	SetSettings:CreateToggle("On Screen Effects", nil, false)
+SetSettings = GameTab:CreateButton("Set Settings", nil, true)
 
-	local args = {
-		{
-			enable_auto_deposit = true,
-			clan_invites = true,
-			mobile_auto_bridge_button = true,
-			backgroundMusicVolumeGame = 1,
-			global_chat_system_messages = true,
-			pc_shift_lock = false,
-			lock_camaera = false,
-			show_resources_in_hud = true,
-			friendSpectating = true,
-			mobile_interact_button = true,
-			show_recommended_shop = true,
-			mobile_block_break_button = true,
-			friendNotifications = false,
-			mobileShiftLock = false,
-			profile_visibility = "public",
-			show_tips = true,
-			backgroundMusicVolume = 0.5,
-			streamer_mode = false,
-			emote_volume = 1,
-			fov = 80,
-			mobile_sword_hold = true,
-			mobile_projectile_button = true,
-			pictureMode = false,
-			enable_on_screen_effects = true
-		}
+-- The remote endpoint
+setSettingsRemote = nil
+pcall(function()
+	setSettingsRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetSettings")
+end)
+
+-- Mapping UI names to Server Argument keys
+settingsMap = {
+	["Auto Deposit"] = "enable_auto_deposit",
+	["Clan Invites"] = "clan_invites",
+	["Background Music Volume"] = "audio_music_volume",
+	["Global Chat Messages"] = "global_chat_system_messages",
+	["Shift Lock"] = "pc_shift_lock",
+	["Lock Camera"] = "lock_camaera", -- Note the typo in the game's code "lock_camaera"
+	["Resource Display"] = "show_resources_in_hud",
+	["Friend Spectating"] = "friendSpectating",
+	["Show Recommended Shop"] = "show_recommended_shop",
+	["Friend Notifications"] = "friendNotifications",
+	["Profile Visibility"] = "profile_visibility",
+	["Show Tips"] = "show_tips",
+	["Streamer Mode"] = "streamer_mode",
+	["Emote Volume"] = "audio_cosmetics_volume", -- Mapped to audio_cosmetics_volume based on your args
+	["FOV"] = "fov",
+	["On Screen Effects"] = "enable_on_screen_effects"
+}
+
+function forceUpdateSettings()
+	-- Check if the main "Set Settings" button is actually toggled ON
+	if not loops["set settings"] then return end
+
+	-- Re-find the remote just in case it wasn't loaded yet
+	if not setSettingsRemote then
+		pcall(function()
+			setSettingsRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetSettings")
+		end)
+	end
+
+	if not setSettingsRemote then 
+		NotificationSystem.Notify("Set Settings", "Remote not found!", 2)
+		return 
+	end
+
+	-- Build the full args table based on your complete snippet
+	argsTemplate = {
+		enable_auto_deposit = false,
+		graphics_contrast = 0,
+		graphics_shadows = true,
+		mobile_auto_bridge_button = true,
+		show_tips = true,
+		global_chat_system_messages = true,
+		audio_effects_volume = 1,
+		lock_camaera = false,
+		friendSpectating = false,
+		show_recommended_shop = false,
+		mobile_block_break_button = true,
+		profile_visibility = "public",
+		show_resources_in_hud = false,
+		mobile_projectile_button = true,
+		pictureMode = false,
+		audio_cosmetics_volume = 1,
+		ambient_lighting_brightness = 0,
+		graphics_ambient_light = true,
+		mobile_interact_button = true,
+		receive_gifts = false,
+		friendNotifications = false,
+		audio_ambience_volume = 1,
+		exposure_compensation = 0,
+		pc_shift_lock = false,
+		audio_gameplay_volume = 1,
+		audio_music_volume = 0,
+		mobileShiftLock = false,
+		clan_invites = false,
+		mobile_sword_hold = true,
+		audio_master_volume = 1,
+		streamer_mode = false,
+		fov = 80,
+		graphics_reflections = true,
+		enable_on_screen_effects = false,
+		audio_ui_volume = 1,
+		graphics_saturation = 0
 	}
-	G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetSettings"):FireServer(unpack(args))
 
+	-- Overwrite with current UI values
+	for uiName, argKey in pairs(settingsMap) do
+		val = SetSettings.Values[uiName]
+		if val ~= nil then
+			-- CRITICAL FIX: Handle Dropdown case sensitivity (Server expects lowercase)
+			if uiName == "Profile Visibility" then
+				if val == "Public" then val = "public"
+				elseif val == "Friends" then val = "friends"
+				elseif val == "Private" then val = "private" end
+			end
+
+			-- CRITICAL FIX: Ensure types are correct (boolean, number, string)
+			if typeof(val) == "boolean" or typeof(val) == "number" or typeof(val) == "string" then
+				argsTemplate[argKey] = val
+			end
+		end
+	end
+
+	-- Fire the remote
+	-- The game expects FireServer({table}), so we pass the table directly as the first argument.
+	pcall(function()
+		setSettingsRemote:FireServer(argsTemplate)
+	end)
+
+	NotificationSystem.Notify("Set Settings", "Settings updated!", 1)
+end
+
+-- Create UI elements with explicit callbacks that call forceUpdateSettings
+SetSettings:CreateToggle("Auto Deposit", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Clan Invites", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Background Music Volume", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Global Chat Messages", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Shift Lock", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Lock Camera", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Resource Display", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Friend Spectating", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Show Recommended Shop", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Friend Notifications", false, function() forceUpdateSettings() end)
+SetSettings:CreateDropdown("Profile Visibility", {"Public", "Friends", "Private"}, "Public", function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Show Tips", false, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("Streamer Mode", false, function() forceUpdateSettings() end)
+SetSettings:CreateSlider("Emote Volume", 0, 2, 1, function() forceUpdateSettings() end)
+SetSettings:CreateSlider("FOV", 1, 360, 80, function() forceUpdateSettings() end)
+SetSettings:CreateToggle("On Screen Effects", false, function() forceUpdateSettings() end)
+
+SetSettings.Callbacks.OnToggle = function(state)
+	loops["set settings"] = state
+	if state then
+		-- When toggled ON, apply current settings immediately
+		forceUpdateSettings()
+	else
+		-- When toggled OFF, do nothing (settings remain as they were last sent)
+		NotificationSystem.Notify("Set Settings", "Disabled. Changes will not apply.", 2)
+	end
+end
 	AnimationSwitch = GameTab:CreateButton("Animation Disabler", nil, true)
 	Headless = GameTab:CreateButton("Headless", nil, true)
 	Headless:CreateSlider("Transparency", 0, 1,1, function(state)
@@ -16204,65 +16294,151 @@ end
 
 		toggleAirSwim(loops["swim"])
 	end
-	NF_SNAP    = 4  
-	NF_MINFALL = 6 
+nofall = { on = false, conn = nil }
+nfTrackedVel = 0
+nfGroundHitRemote = nil
+nfStateChangedConns = {}
+nfCharAddedConn = nil
 
-	nofall = { on = false, conn = nil }
-	nf = { engaged = false, landY = nil }
-
-	function nfRayGround(hrp)
-		rp = RaycastParams.new()
-		rp.FilterType = Enum.RaycastFilterType.Exclude
-		if Player.Character then rp.FilterDescendantsInstances = { Player.Character } end
-		hit = G.Services.Workspace:Raycast(hrp.Position, Vector3.new(0, -1000, 0), rp)
-		return hit and hit.Position.Y or nil
+-- Resolve the GroundHit remote used by Bedwars to register landing
+pcall(function()
+	-- Try to find the KnitClient and the GroundHit remote
+	if not KnitClient then
+		KnitClient = require(G.Services.RS.rbxts_include.node_modules["@easy-games"].knit.src).KnitClient
 	end
 
-	function nfTryEngage(hrp, hum)
-		G = nfRayGround(hrp)
-		if not G then return end
-		feetOff = (hrp.Size.Y / 2) + (hum.HipHeight or 2)      
-		landY = G + feetOff
-		if hrp.Position.Y - landY > NF_MINFALL then     
-			nf.engaged = true
-			nf.landY = landY
+	-- The remote is usually inside the ReplicatedStorage net folder
+	NetFolder = G.Services.RS:FindFirstChild("rbxts_include") and G.Services.RS.rbxts_include:FindFirstChild("node_modules") and G.Services.RS.rbxts_include.node_modules:FindFirstChild("@rbxts") and G.Services.RS.rbxts_include.node_modules["@rbxts"]:FindFirstChild("net") and G.Services.RS.rbxts_include.node_modules["@rbxts"].net:FindFirstChild("out") and G.Services.RS.rbxts_include.node_modules["@rbxts"].net.out:FindFirstChild("_NetManaged")
+
+	if NetFolder then
+		nfGroundHitRemote = NetFolder:FindFirstChild("GroundHit")
+	end
+
+	-- Fallback: If the remote name is different, search the Events folder
+	if not nfGroundHitRemote then
+		EventsFolder = G.Services.RS:FindFirstChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events")
+		if EventsFolder then
+			nfGroundHitRemote = EventsFolder:FindFirstChild("GroundHit")
+		end
+	end
+end)
+
+function nfDisableStateConnections()
+	for _, conn in ipairs(nfStateChangedConns) do
+		pcall(function() conn:Disable() end)
+	end
+	nfStateChangedConns = {}
+end
+
+function nfEnableStateConnections(hum)
+	nfDisableStateConnections()
+	if getconnections then
+		for _, v in ipairs(getconnections(hum.StateChanged)) do
+			table.insert(nfStateChangedConns, v)
+			pcall(function() v:Disable() end)
+		end
+	end
+end
+
+function nofallLoop()
+	if not nofall.on then return end
+	if loops["fly"] or loops["swim"] then return end
+
+	char = Player.Character
+	hrp = char and char:FindFirstChild("HumanoidRootPart")
+	hum = char and char:FindFirstChildOfClass("Humanoid")
+
+	if not hrp or not hum or hum.Health <= 0 then 
+		nfTrackedVel = 0
+		return 
+	end
+
+	-- Get the Damage Percentage from the slider (0 to 100)
+	damagePct = tonumber(NoFall.Values["Damage Percent"]) or 0
+
+	-- CatVape Logic: threshold = -(45 + (Damage.Value * 0.75))
+	-- If Damage is 0%, threshold is -45 (save from all falls).
+	-- If Damage is 100%, threshold is -120 (only save from extreme falls).
+	threshold = -(45 + (damagePct * 0.75))
+
+	velo = hrp.AssemblyLinearVelocity
+
+	-- Check if we are falling faster than the threshold
+	if nfTrackedVel < threshold then
+		-- 1. Force the Humanoid state to Landed so the client doesn't apply damage
+		pcall(function() hum:ChangeState(Enum.HumanoidStateType.Landed) end)
+
+		-- 2. Briefly set velocity to a safe landing speed (2.5), then restore it
+		-- This tricks the client physics into thinking we landed softly without changing gravity
+		originalVelo = velo
+		pcall(function() hrp.AssemblyLinearVelocity = Vector3.new(velo.X, 2.5, velo.Z) end)
+
+		-- Wait a tiny bit for the state change to register (CatVape uses PreRender:Wait())
+		G.Services.RunService.PreRender:Wait()
+
+		-- Restore original velocity so we don't float or lose momentum
+		pcall(function() hrp.AssemblyLinearVelocity = originalVelo end)
+
+		-- 3. Fire the GroundHit remote to tell the server we landed safely
+		if nfGroundHitRemote then
+			pcall(function()
+				-- The remote expects: (nil, velocityVector, serverTime)
+				nfGroundHitRemote:FireServer(nil, Vector3.new(0, nfTrackedVel, 0), G.Services.Workspace:GetServerTimeNow())
+			end)
 		end
 	end
 
-	function nofallLoop()
-		if not nofall.on then return end
-		if loops["fly"] or loops["swim"] then return end
-		char = Player.Character
-		hrp  = char and char:FindFirstChild("HumanoidRootPart")
-		hum  = char and char:FindFirstChildOfClass("Humanoid")
-		if not hrp or not hum or hum.Health <= 0 then nf.engaged = false; nf.landY = nil; return end
+	-- Track the Y velocity for the next frame
+	nfTrackedVel = velo.Y
+end
 
-		air = (hum.FloorMaterial == Enum.Material.Air)
-		if not air then 
-			nf.engaged = false; nf.landY = nil; return
+NoFall = Combat:CreateButton("No Fall", nil, true)
+NoFall:CreateSlider("Damage Percent", 0, 100, 0, nil, 1)
+
+NoFall.Callbacks.OnToggle = function(state)
+	loops["nofall"] = state
+	nofall.on = state
+	nfTrackedVel = 0
+
+	if state then
+		-- Enable the loop using PostSimulation (exactly like CatVape)
+		if not nofall.conn then 
+			nofall.conn = G.Services.RunService.PostSimulation:Connect(nofallLoop) 
 		end
 
-		if not nf.engaged then
-			nfTryEngage(hrp, hum)   
-		elseif nf.landY and hrp.Position.Y <= nf.landY + NF_SNAP then
-			nfSnapY = nf.landY
-			hrp.CFrame = CFrame.new(hrp.Position.X, nf.landY, hrp.Position.Z)   
-			pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)   
-			nf.engaged = false; nf.landY = nil
+		-- Disable StateChanged connections to prevent default fall damage logic
+		if Player.Character and Player.Character:FindFirstChildOfClass("Humanoid") then
+			nfEnableStateConnections(Player.Character:FindFirstChildOfClass("Humanoid"))
+		end
+
+		-- Re-enable connections when character respawns
+		if nfCharAddedConn then nfCharAddedConn:Disconnect() end
+		nfCharAddedConn = Player.CharacterAdded:Connect(function(newChar)
+			if not loops["nofall"] then return end
+			newHum = newChar:WaitForChild("Humanoid", 5)
+			if newHum then
+				task.wait(0.5) -- Wait for animator to load
+				if loops["nofall"] then
+					nfEnableStateConnections(newHum)
+				end
+			end
+		end)
+	else
+		-- Disconnect the loop
+		if nofall.conn then 
+			nofall.conn:Disconnect()
+			nofall.conn = nil 
+		end
+
+		-- Re-enable StateChanged connections
+		nfDisableStateConnections()
+
+		if nfCharAddedConn then 
+			nfCharAddedConn:Disconnect()
+			nfCharAddedConn = nil
 		end
 	end
-
-	NoFall = Combat:CreateButton("No Fall", nil, true)
-	NoFall.Callbacks.OnToggle = function(state)
-		loops["nofall"] = state
-		nofall.on = state
-		nf.engaged = false; nf.landY = nil
-		if state then
-			if not nofall.conn then nofall.conn = G.Services.RunService.Heartbeat:Connect(nofallLoop) end
-		else
-			if nofall.conn then nofall.conn:Disconnect(); nofall.conn = nil end
-		end
-	end
+end
 
 	-- clean up a previous (flingy) version if this block is re-executed
 	pcall(function() if spin and spin.thread then task.cancel(spin.thread) end end)
@@ -22320,221 +22496,332 @@ end
 		if state then nsApply() else nsRestore() end
 	end
 
-	-- ============================================================
-	--  MOVEMENT: Scaffold
-	-- ============================================================
-	-- Scaffold Module
-	Scaffold = Movement:CreateButton("Scaffold", nil, true)
-	Scaffold:CreateToggle("Tower", false, nil)
-	Scaffold:CreateToggle("Expand", false, nil)
-	Scaffold:CreateToggle("Safe Walk", true, nil)
-	Scaffold:CreateToggle("Sprint", false, nil)
-	Scaffold:CreateToggle("Show Counter", true, nil)
+-- ============================================================
+--  MOVEMENT: Scaffold (Void FPS Fix + Visual Fix)
+-- ============================================================
+Scaffold = Movement:CreateButton("Scaffold", nil, true)
+Scaffold:CreateToggle("Tower", true, nil)
+Scaffold:CreateToggle("Downwards", true, nil)
+Scaffold:CreateToggle("Diagonal", true, nil)
+Scaffold:CreateToggle("Limit to items", false, nil)
+Scaffold:CreateToggle("Require mouse down", false, nil)
+Scaffold:CreateToggle("Visual", false, nil)
+Scaffold:CreateToggle("Block Count", false, nil)
+Scaffold:CreateSlider("Expand", 1, 6, 3, nil, 1)
 
-	-- Massive list of all block types in the game
-	scaffoldBlockList = {
-		"wool_white", "wool_orange", "wool_magenta", "wool_light_blue", "wool_yellow", "wool_lime", "wool_pink", "wool_gray", "wool_light_gray", "wool_cyan", "wool_purple", "wool_blue", "wool_brown", "wool_green", "wool_red", "wool_black",
-		"oak_plank", "birch_plank", "spruce_plank", "acacia_plank", "dark_oak_plank", "jungle_plank",
-		"stone_bricks", "cracked_stone_bricks", "mossy_stone_bricks", "obsidian", "end_stone", "prismarine", "nether_brick", "red_nether_brick", "quartz_block", "purpur_block", "sponge", "wet_sponge", "glowstone", "sea_lantern", "glass", "stained_glass_white", "stained_glass_black"
-	}
-	Scaffold:CreateDropdown("Block Type", scaffoldBlockList, "wool_white", nil)
+-- Visuals setup
+scaffoldVisualBlock = nil
+scaffoldVisualTween = nil
+scaffoldVisualPos = nil
+scaffoldLabel = nil
+scaffoldLastPos = Vector3.zero
+scaffoldAdjacent = {}
+scaffoldConn = nil
+scaffoldPlaceRemote = nil
 
-	-- Ensure the block placement remote is loaded
-	if not sm_placeRemote then
-		pcall(function()
-			local net = replicatedStorage:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("block-engine"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged")
-			sm_placeRemote = net:WaitForChild("PlaceBlock")
-		end)
-	end
-
-	-- Counter Label Setup
-	scaffoldCounterLabel = nil
-
-	sc_lastPlace = 0
-	sc_lastGrid = nil
-	sc_hbConn = nil
-	sc_raycast = RaycastParams.new()
-	sc_raycast.FilterType = Enum.RaycastFilterType.Exclude
-
-
-	function scaffoldGetBlockCount(blockType)
-		local inv = replicatedStorage:FindFirstChild("Inventories")
-		if not inv then return 0 end
-		local playerInv = inv:FindFirstChild(Player.Name)
-		if not playerInv then return 0 end
-		local item = playerInv:FindFirstChild(blockType)
-		if not item then return 0 end
-		return item:GetAttribute("Amount") or 0
-	end
-
-	function scaffoldUpdateCounter()
-		if not Scaffold.Values["Show Counter"] then
-			if scaffoldCounterLabel then scaffoldCounterLabel.Visible = false end
-			return
-		end
-
-		if not scaffoldCounterLabel then
-			scaffoldCounterLabel = Instance.new("TextLabel")
-			scaffoldCounterLabel.Name = "ScaffoldCounter"
-			scaffoldCounterLabel.Size = UDim2.new(0, 220, 0, 40)
-			scaffoldCounterLabel.Position = UDim2.new(0.5, -110, 0.6, 0) -- Middle, slightly lower
-			scaffoldCounterLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-			scaffoldCounterLabel.BackgroundTransparency = 0.4
-			scaffoldCounterLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-			scaffoldCounterLabel.TextSize = 22
-			scaffoldCounterLabel.Font = Enum.Font.GothamBold
-			scaffoldCounterLabel.Parent = CoreGui
-			Instance.new("UICorner", scaffoldCounterLabel).CornerRadius = UDim.new(0, 8)
-		end
-
-		scaffoldCounterLabel.Visible = true
-		local blockType = Scaffold.Values["Block Type"] or "wool_white"
-		local count = scaffoldGetBlockCount(blockType)
-		scaffoldCounterLabel.Text = blockType:gsub("_", " ") .. ": " .. count
-	end
-
-	function scaffoldIsBlockEmpty(gridPos)
-		local worldPos = gridPos * 3
-		local params = OverlapParams.new()
-		params.FilterDescendantsInstances = {Player.Character}
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		local parts = G.Services.Workspace:GetPartBoundsInBox(CFrame.new(worldPos), Vector3.new(2.8, 2.8, 2.8), params)
-		for _, p in ipairs(parts) do
-			if p.CanCollide and not p:IsDescendantOf(Player.Character) then
-				return false -- A solid block already exists here
+-- Pre-calculate adjacent grid offsets (CatVape logic)
+for x = -3, 3, 3 do
+	for y = -3, 3, 3 do
+		for z = -3, 3, 3 do
+			vec = Vector3.new(x, y, z)
+			if vec ~= Vector3.zero then
+				table.insert(scaffoldAdjacent, vec)
 			end
 		end
-		return true
 	end
-	function scaffoldPlaceBlock(newGridPos, targetGridPos)
-		if not sm_placeRemote then return end
+end
 
-		-- Calculate the hit normal based on which face of the target block we are clicking
-		local diff = newGridPos - targetGridPos
-		local hitNormal = Vector3.new(0, 1, 0)
-		if diff.Y == 1 then hitNormal = Vector3.new(0, 1, 0)
-		elseif diff.Y == -1 then hitNormal = Vector3.new(0, -1, 0)
-		elseif diff.X == 1 then hitNormal = Vector3.new(1, 0, 0)
-		elseif diff.X == -1 then hitNormal = Vector3.new(-1, 0, 0)
-		elseif diff.Z == 1 then hitNormal = Vector3.new(0, 0, 1)
-		elseif diff.Z == -1 then hitNormal = Vector3.new(0, 0, -1)
+-- Resolve the PlaceBlock remote (Using your exact working directory)
+pcall(function()
+	scaffoldPlaceRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("block-engine"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("PlaceBlock")
+end)
+
+function scaffoldRoundPos(pos)
+	return Vector3.new(math.round(pos.X / 3) * 3, math.round(pos.Y / 3) * 3, math.round(pos.Z / 3) * 3)
+end
+
+function scaffoldGetPlacedBlock(pos)
+	gridPos = Vector3.new(math.round(pos.X / 3), math.round(pos.Y / 3), math.round(pos.Z / 3))
+	worldPos = gridPos * 3
+	params = OverlapParams.new()
+	params.FilterDescendantsInstances = {Player.Character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	parts = G.Services.Workspace:GetPartBoundsInBox(CFrame.new(worldPos), Vector3.new(2.8, 2.8, 2.8), params)
+	for _, p in ipairs(parts) do
+		if p.CanCollide and not p:IsDescendantOf(Player.Character) then
+			return p, gridPos
+		end
+	end
+	return nil, gridPos
+end
+
+-- CRITICAL FIX #1: FAST RAYCAST PROXIMITY (Fixes 5 FPS near void)
+function scaffoldBlockProximity(pos)
+	-- Raycast straight down to find the nearest block surface below the player
+	rp = RaycastParams.new()
+	rp.FilterType = Enum.RaycastFilterType.Exclude
+	rp.FilterDescendantsInstances = {Player.Character}
+
+	-- Cast down 50 studs from the player's feet
+	hit = G.Services.Workspace:Raycast(Vector3.new(pos.X, pos.Y + 5, pos.Z), Vector3.new(0, -50, 0), rp)
+
+	if hit then
+		-- Snap the hit position to the nearest grid block above the surface
+		blockPos = Vector3.new(math.round(hit.Position.X / 3) * 3, math.round((hit.Position.Y + 1.5) / 3) * 3, math.round(hit.Position.Z / 3) * 3)
+		return blockPos
+	end
+
+	return nil -- Over the void, return nil instantly (0 FPS cost)
+end
+
+function scaffoldCheckAdjacent(pos)
+	for _, v in ipairs(scaffoldAdjacent) do
+		block, _ = scaffoldGetPlacedBlock(pos + v)
+		if block then return true end
+	end
+	return false
+end
+
+-- Remote for equipping items
+scaffoldSetInvRemote = nil
+pcall(function()
+	scaffoldSetInvRemote = G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged"):WaitForChild("SetInvItem")
+end)
+
+function scaffoldGetBlock()
+	char = Player.Character
+	if not char then return nil, 0 end
+
+	-- 1. Check what is currently in hand
+	handItem = char:FindFirstChild("HandInvItem")
+	currentHandName = nil
+	if handItem and handItem.Value then
+		currentHandName = typeof(handItem.Value) == "Instance" and handItem.Value.Name or tostring(handItem.Value)
+	end
+
+	-- 2. If holding a valid block, use it
+	if currentHandName then
+		inv = G.Services.RS:FindFirstChild("Inventories") and G.Services.RS.Inventories:FindFirstChild(Player.Name)
+		amount = inv and inv:FindFirstChild(currentHandName) and inv[currentHandName]:GetAttribute("Amount") or 0
+		if amount > 0 then 
+			-- Verify it's actually a block type (basic check)
+			if currentHandName:find("wool") or currentHandName:find("plank") or currentHandName:find("stone") or currentHandName:find("obsidian") or currentHandName:find("glass") or currentHandName:find("brick") then
+				return currentHandName, amount
+			end
+		end
+	end
+
+	-- 3. If NOT holding a block, and "Limit to items" is OFF, search inventory and EQUIP it
+	if not Scaffold.Values["Limit to items"] then
+		inv = G.Services.RS:FindFirstChild("Inventories") and G.Services.RS.Inventories:FindFirstChild(Player.Name)
+		if inv then
+			for _, item in ipairs(inv:GetChildren()) do
+				-- Check if it's a valid block type
+				if item.Name:find("wool") or item.Name:find("plank") or item.Name:find("stone") or item.Name:find("obsidian") or item.Name:find("glass") or item.Name:find("brick") then
+					amt = item:GetAttribute("Amount") or 0
+					if amt > 0 then
+						-- CRITICAL FIX: Equip the block if we aren't holding it
+						if currentHandName ~= item.Name and scaffoldSetInvRemote then
+							pcall(function()
+								scaffoldSetInvRemote:InvokeServer({ hand = item })
+							end)
+						end
+						return item.Name, amt
+					end
+				end
+			end
+		end
+	end
+
+	return nil, 0
+end
+
+function scaffoldLoop()
+	char = Player.Character
+	if not char then return end
+	hrp = char:FindFirstChild("HumanoidRootPart")
+	hum = char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum or hum.Health <= 0 then return end
+
+	wool, amount = scaffoldGetBlock()
+
+	-- Require mouse down check
+	if Scaffold.Values["Require mouse down"] then
+		if not G.Services.UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+			wool = nil
+		end
+	end
+
+	-- Update Block Count label
+	if Scaffold.Values["Block Count"] then
+		if not scaffoldLabel then
+			scaffoldLabel = Instance.new("TextLabel")
+			scaffoldLabel.Size = UDim2.fromOffset(100, 20)
+			scaffoldLabel.Position = UDim2.new(0.5, 6, 0.5, 60)
+			scaffoldLabel.BackgroundTransparency = 1
+			scaffoldLabel.AnchorPoint = Vector2.new(0.5, 0)
+			scaffoldLabel.Text = "0"
+			scaffoldLabel.TextColor3 = Color3.new(0, 1, 0)
+			scaffoldLabel.TextSize = 18
+			scaffoldLabel.RichText = true
+			scaffoldLabel.Font = Enum.Font.Arial
+			scaffoldLabel.Parent = CoreGui
+		end
+		scaffoldLabel.Visible = true
+		scaffoldLabel.Text = (amount or 0) .. " (Scaffold)"
+		scaffoldLabel.TextColor3 = Color3.fromHSV(((amount or 0) / 128) / 2.8, 0.86, 1)
+	else
+		if scaffoldLabel then scaffoldLabel.Visible = false end
+	end
+
+	if wool then
+		-- Tower: Set velocity to 38 if Space is held
+		if Scaffold.Values["Tower"] and G.Services.UIS:IsKeyDown(Enum.KeyCode.Space) and not G.Services.UIS:GetFocusedTextBox() then
+			hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 38, hrp.AssemblyLinearVelocity.Z)
 		end
 
-		local targetWorldPos = targetGridPos * 3
-		local hitPosition = targetWorldPos + (hitNormal * 1.5)
-		local blockType = Scaffold.Values["Block Type"] or "wool_white"
+		expandVal = tonumber(Scaffold.Values["Expand"]) or 3
+		for i = expandVal, 1, -1 do
+			-- Calculate position based on movement direction
+			yOffset = (hum.HipHeight or 2) + (Scaffold.Values["Downwards"] and G.Services.UIS:IsKeyDown(Enum.KeyCode.LeftShift) and 4.5 or 1.5)
+			currentpos = scaffoldRoundPos(hrp.Position - Vector3.new(0, yOffset, 0) + hum.MoveDirection * (i * 3))
 
-		-- Exact game arguments for placing a block
-		local args = {
-			position = Vector3.new(newGridPos.X, newGridPos.Y, newGridPos.Z),
-			blockType = blockType,
-			blockData = 0,
-			mouseBlockInfo = {
-				target = {
-					blockRef = { blockPosition = Vector3.new(targetGridPos.X, targetGridPos.Y, targetGridPos.Z) },
-					hitPosition = hitPosition,
-					hitNormal = hitNormal,
-				},
-				placementPosition = Vector3.new(newGridPos.X, newGridPos.Y, newGridPos.Z),
+			-- Diagonal fix
+			if Scaffold.Values["Diagonal"] then
+				angle = math.abs(math.round(math.deg(math.atan2(-hum.MoveDirection.X, -hum.MoveDirection.Z)) / 45) * 45)
+				if angle % 90 == 45 then
+					dt = scaffoldLastPos - currentpos
+					if ((dt.X == 0 and dt.Z ~= 0) or (dt.X ~= 0 and dt.Z == 0)) and ((scaffoldLastPos - hrp.Position) * Vector3.new(1, 0, 1)).Magnitude < 2.5 then
+						currentpos = scaffoldLastPos
+					end
+				end
+			end
+
+			-- CRITICAL FIX #2: Update visual to the NEW block position (currentpos)
+			scaffoldUpdateVisual(currentpos)
+
+			block, blockpos = scaffoldGetPlacedBlock(currentpos)
+			if not block then
+				-- Find a nearby block to place on
+				gridPos = Vector3.new(math.round(currentpos.X / 3), math.round(currentpos.Y / 3), math.round(currentpos.Z / 3))
+				if scaffoldCheckAdjacent(gridPos * 3) then
+					placePos = gridPos * 3
+				else
+					-- CRITICAL FIX #1: Use the fast raycast proximity instead of the heavy 3D scan
+					placePos = scaffoldBlockProximity(currentpos)
+				end
+
+				if placePos then
+					-- Calculate the grid positions for the remote
+					newGrid = Vector3.new(math.round(currentpos.X / 3), math.round(currentpos.Y / 3), math.round(currentpos.Z / 3))
+					targetGrid = Vector3.new(math.round(placePos.X / 3), math.round(placePos.Y / 3), math.round(placePos.Z / 3))
+
+					task.delay(0, function()
+						scaffoldPlaceBlock(newGrid, targetGrid, wool)
+					end)
+				end
+			end
+			scaffoldLastPos = currentpos
+		end
+	end
+end
+function scaffoldClearVisuals()
+	if scaffoldVisualTween then scaffoldVisualTween:Cancel(); scaffoldVisualTween = nil end
+	if scaffoldVisualBlock then scaffoldVisualBlock.Parent = nil end
+	scaffoldVisualPos = nil
+end
+
+-- CRITICAL FIX #2: VISUAL GOES TO NEWEST BLOCK PLACED
+function scaffoldUpdateVisual(pos)
+	if not scaffoldVisualBlock or not pos then return end
+	-- Snap the visual to the exact grid position where the new block will be placed
+	blockpos = Vector3.new(math.round(pos.X / 3) * 3, math.round(pos.Y / 3) * 3, math.round(pos.Z / 3) * 3)
+	if scaffoldVisualPos == blockpos then return end
+
+	if scaffoldVisualTween then scaffoldVisualTween:Cancel(); scaffoldVisualTween = nil end
+
+	cam = G.Services.Workspace.CurrentCamera
+	if scaffoldVisualBlock.Parent == cam then
+		scaffoldVisualTween = G.Services.TweenService:Create(scaffoldVisualBlock, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CFrame = CFrame.new(blockpos)})
+		scaffoldVisualTween:Play()
+	else
+		scaffoldVisualBlock.CFrame = CFrame.new(blockpos)
+		scaffoldVisualBlock.Parent = cam
+	end
+	scaffoldVisualPos = blockpos
+end
+
+function scaffoldPlaceBlock(newGridPos, targetGridPos, blockType)
+	if not scaffoldPlaceRemote then return end
+
+	-- Calculate the hit normal based on which face of the target block we are clicking
+	diff = newGridPos - targetGridPos
+	hitNormal = Vector3.new(0, 1, 0)
+	if diff.Y == 1 then hitNormal = Vector3.new(0, 1, 0)
+	elseif diff.Y == -1 then hitNormal = Vector3.new(0, -1, 0)
+	elseif diff.X == 1 then hitNormal = Vector3.new(1, 0, 0)
+	elseif diff.X == -1 then hitNormal = Vector3.new(-1, 0, 0)
+	elseif diff.Z == 1 then hitNormal = Vector3.new(0, 0, 1)
+	elseif diff.Z == -1 then hitNormal = Vector3.new(0, 0, -1)
+	end
+
+	targetWorldPos = targetGridPos * 3
+	hitPosition = targetWorldPos + (hitNormal * 1.5)
+
+	-- Exact game arguments for placing a block
+	args = {
+		position = Vector3.new(newGridPos.X, newGridPos.Y, newGridPos.Z),
+		blockType = blockType,
+		blockData = 0,
+		mouseBlockInfo = {
+			target = {
+				blockRef = { blockPosition = Vector3.new(targetGridPos.X, targetGridPos.Y, targetGridPos.Z) },
+				hitPosition = hitPosition,
+				hitNormal = hitNormal,
 			},
-		}
+			placementPosition = Vector3.new(newGridPos.X, newGridPos.Y, newGridPos.Z),
+		},
+	}
 
-		pcall(function()
-			sm_placeRemote:InvokeServer(args)
-		end)
+	pcall(function()
+		scaffoldPlaceRemote:InvokeServer(args)
+	end)
+end
+
+
+Scaffold.Callbacks.OnToggle = function(state)
+	loops["scaffold"] = state
+	if state then
+		-- Setup Visual block if enabled
+		if Scaffold.Values["Visual"] and not scaffoldVisualBlock then
+			scaffoldVisualBlock = Instance.new("Part")
+			scaffoldVisualBlock.Size = Vector3.new(3, 3, 3)
+			scaffoldVisualBlock.Anchored = true
+			scaffoldVisualBlock.CanCollide = false
+			scaffoldVisualBlock.CanQuery = false
+			scaffoldVisualBlock.CanTouch = false
+			scaffoldVisualBlock.CastShadow = false
+			scaffoldVisualBlock.Transparency = 1
+			selection = Instance.new("SelectionBox")
+			selection.Adornee = scaffoldVisualBlock
+			selection.LineThickness = 0.04
+			selection.Color3 = Color3.fromRGB(255, 255, 255)
+			selection.Transparency = 0
+			selection.SurfaceColor3 = Color3.fromRGB(255, 255, 255)
+			selection.SurfaceTransparency = 0.6
+			selection.Parent = scaffoldVisualBlock
+		end
+
+		if not scaffoldConn then
+			scaffoldConn = G.Services.RunService.Heartbeat:Connect(scaffoldLoop)
+		end
+	else
+		if scaffoldConn then scaffoldConn:Disconnect(); scaffoldConn = nil end
+		scaffoldClearVisuals()
+		if scaffoldVisualBlock then scaffoldVisualBlock:Destroy(); scaffoldVisualBlock = nil end
+		if scaffoldLabel then scaffoldLabel:Destroy(); scaffoldLabel = nil end
 	end
-
-	scaffoldLoopConn = nil
-
-	function scaffoldLoop()
-		local char = Player.Character
-		if not char then return end
-		local hrp = char:FindFirstChild("HumanoidRootPart")
-		local hum = char:FindFirstChildOfClass("Humanoid")
-		if not hrp or not hum then return end
-
-		scaffoldUpdateCounter()
-
-		local feetPos = hrp.Position - Vector3.new(0, 2.5, 0)
-		local gridBelow = Vector3.new(math.round(feetPos.X / 3), math.round(feetPos.Y / 3), math.round(feetPos.Z / 3))
-
-		local placed = false
-
-		-- Tower: Place directly below
-		if Scaffold.Values["Tower"] then
-			if scaffoldIsBlockEmpty(gridBelow) then
-				local targetGrid = gridBelow + Vector3.new(0, 1, 0)
-				if not scaffoldIsBlockEmpty(targetGrid) then
-					scaffoldPlaceBlock(gridBelow, targetGrid)
-					placed = true
-				end
-			end
-		end
-
-		-- Expand: Place behind the player based on movement direction
-		if not placed and Scaffold.Values["Expand"] then
-			local moveDir = hum.MoveDirection
-			if moveDir.Magnitude > 0.1 then
-				local dirGrid = Vector3.new(math.round(moveDir.X), 0, math.round(moveDir.Z))
-				if dirGrid.Magnitude > 0 then
-					local gridBehind = gridBelow - dirGrid
-					if scaffoldIsBlockEmpty(gridBehind) then
-						local targetGrid = gridBehind + dirGrid
-						if not scaffoldIsBlockEmpty(targetGrid) then
-							scaffoldPlaceBlock(gridBehind, targetGrid)
-						end
-					end
-				end
-			end
-		end
-
-		-- Safe Walk: Prevent walking off edges
-		if Scaffold.Values["Safe Walk"] then
-			local moveDir = hum.MoveDirection
-			if moveDir.Magnitude > 0.1 then
-				local dirGrid = Vector3.new(math.round(moveDir.X), 0, math.round(moveDir.Z))
-				if dirGrid.Magnitude > 0 then
-					local gridAhead = gridBelow + dirGrid
-					if scaffoldIsBlockEmpty(gridAhead) then
-						local belowAhead = gridAhead - Vector3.new(0, 1, 0)
-						if scaffoldIsBlockEmpty(belowAhead) then
-							hum.WalkSpeed = math.min(hum.WalkSpeed, 8)
-						end
-					end
-				end
-			end
-		end
-
-		-- Sprint
-		if Scaffold.Values["Sprint"] then
-			if canRequire and SprintController then
-				SprintController.attemptingSprint = true
-				SprintController:startSprinting()
-			end
-		end
-	end
-
-	Scaffold.Callbacks.OnToggle = function(state)
-		loops["scaffold"] = state
-		if state then
-			if not scaffoldLoopConn then
-				scaffoldLoopConn = G.Services.RunService.Heartbeat:Connect(scaffoldLoop)
-			end
-		else
-			if scaffoldLoopConn then
-				scaffoldLoopConn:Disconnect()
-				scaffoldLoopConn = nil
-			end
-			if scaffoldCounterLabel then
-				scaffoldCounterLabel.Visible = false
-			end
-			-- Restore normal walk speed if Safe Walk slowed it down
-			if cachedHumanoid then
-				cachedHumanoid.WalkSpeed = 16
-			end
-		end
-	end
-
+end
 	-- ============================================================
 	--  VISUALS: Generator ESP
 	-- ============================================================
@@ -28931,76 +29218,104 @@ end
 	fontCache = setmetatable({}, {__mode = "k"})
 	fontConnections = {}
 
-	fontMap = {
-		["Minecraft (Arcade)"] = Enum.Font.Arcade,
-		["Clean (Gotham)"] = Enum.Font.Gotham,
-		["Sci-Fi (Code)"] = Enum.Font.Code,
-		["Classic (Legacy)"] = Enum.Font.Legacy,
-		["Cartoon"] = Enum.Font.Cartoon
-	}
+-- 1. DEFINE THE FONT MAP & OPTIONS
+local fontOptions = {"Minecraft (Arcade)", "Clean (Gotham)", "Sci-Fi (Code)", "Classic (Legacy)", "Cartoon"}
+local fontMap = {
+	["Minecraft (Arcade)"] = Enum.Font.Arcade,
+	["Clean (Gotham)"] = Enum.Font.GothamBold,
+	["Sci-Fi (Code)"] = Enum.Font.Code,
+	["Classic (Legacy)"] = Enum.Font.Legacy,
+	["Cartoon"] = Enum.Font.Cartoon
+}
 
-	CustomFontBtn = GameTab:CreateButton("Custom Font", function(state)
-		loops["custom font"] = state
+-- 2. STATE VARIABLES
+local currentSelectedFontName = "Minecraft (Arcade)"
+local fontConnections = {}
+local fontCache = setmetatable({}, {__mode = "k"})
 
-		if state then
-			playerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
-			applyFontsToHierarchy(playerGui)
-			applyFontsToHierarchy(G.Services.Workspace)
-
-			-- Try to hook CoreGui if your exploit supports it
-			pcall(function() applyFontsToHierarchy(game:GetService("CoreGui")) end)
-		else
-			-- Turn it off and clean up
-			for _, conn in ipairs(fontConnections) do conn:Disconnect() end
-			fontConnections = {}
-
-			-- Put original fonts back
-			for obj, origFont in pairs(fontCache) do
-				if obj and obj.Parent then
-					obj.Font = origFont
-				end
-			end
-			fontCache = setmetatable({}, {__mode = "k"})
-		end
-	end, false)
-
-	CustomFontBtn.Values = {
-		["Selected Font"] = "Minecraft (Arcade)"
-	}
-
-	CustomFontBtn:CreateDropdown("Select Font", {"Minecraft (Arcade)", "Clean (Gotham)", "Sci-Fi (Code)", "Classic (Legacy)", "Cartoon"}, function(val)
-		CustomFontBtn.Values["Selected Font"] = val
-
-		-- Update immediately if the main toggle is already on
-		if loops["custom font"] then
-			selectedEnum = fontMap[val]
-			for obj, _ in pairs(fontCache) do
-				if obj and obj.Parent then 
-					obj.Font = selectedEnum 
-				end
-			end
-		end
-	end)
-
-	function applyFontToObj(obj)
+-- 3. CORE UPDATE FUNCTIONS
+local function applyFontToObj(obj)
+	-- Use pcall because sometimes IsA fails on destroyed/locked objects
+	pcall(function()
 		if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
 			if fontCache[obj] == nil then 
 				fontCache[obj] = obj.Font 
 			end
 
-			selectedEnum = fontMap[CustomFontBtn.Values["Selected Font"]]
+			local selectedEnum = fontMap[currentSelectedFontName]
 			if selectedEnum then 
-				obj.Font = selectedEnum 
+				obj.Font = selectedEnum
+			end
+		end
+	end)
+end
+
+local function applyFontsToHierarchy(parent)
+	-- Apply to everything that currently exists
+	for _, v in pairs(parent:GetDescendants()) do
+		applyFontToObj(v)
+	end
+	-- Hook onto anything added in the future (this automatically handles newly spawned GUIs and respawns)
+	table.insert(fontConnections, parent.DescendantAdded:Connect(applyFontToObj))
+end
+
+-- 4. CREATE UI BUTTON
+CustomFontBtn = GameTab:CreateButton("Custom Font", function(state)
+	loops["custom font"] = state
+
+	if state then
+		local playerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+
+		-- Apply to PlayerGui and Workspace (for BillboardGuis)
+		applyFontsToHierarchy(playerGui)
+		applyFontsToHierarchy(game:GetService("Workspace"))
+
+		-- Try to hook CoreGui if your exploit supports it
+		pcall(function() applyFontsToHierarchy(game:GetService("CoreGui")) end)
+	else
+		-- Turn it off and clean up connections so it stops tracking new GUIs
+		for _, conn in ipairs(fontConnections) do conn:Disconnect() end
+		fontConnections = {}
+
+		-- Put original fonts back
+		for obj, origFont in pairs(fontCache) do
+			if obj and obj.Parent then
+				pcall(function() obj.Font = origFont end)
+			end
+		end
+
+		-- Clear the cache
+		fontCache = setmetatable({}, {__mode = "k"})
+	end
+end, false)
+
+-- Setup values table properly without overwriting anything the UI lib might have made
+CustomFontBtn.Values = CustomFontBtn.Values or {}
+CustomFontBtn.Values["Selected Font"] = currentSelectedFontName
+
+-- 5. CREATE UI DROPDOWN
+CustomFontBtn:CreateDropdown("Select Font", fontOptions, function(val)
+	-- FIX: Handle UI libraries that return the index (number) instead of the string value
+	if type(val) == "number" then
+		val = fontOptions[val]
+	end
+
+	-- Update our state
+	currentSelectedFontName = val
+	CustomFontBtn.Values["Selected Font"] = val
+
+	-- If the toggle is currently ON, update all tracked text instantly
+	if loops["custom font"] then
+		local selectedEnum = fontMap[currentSelectedFontName]
+		if selectedEnum then
+			for obj, _ in pairs(fontCache) do
+				if obj and obj.Parent then 
+					pcall(function() obj.Font = selectedEnum end)
+				end
 			end
 		end
 	end
-
-	function applyFontsToHierarchy(parent)
-		for _, v in pairs(parent:GetDescendants()) do
-			applyFontToObj(v)
-		end
-		table.insert(fontConnections, parent.DescendantAdded:Connect(applyFontToObj))
-	end
+end)
 
 	chatCache = {}
 	tcs = game:GetService("TextChatService")
