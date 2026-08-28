@@ -16599,6 +16599,17 @@ end
 			fireDelay = fireDelay, maxCharge = maxCharge
 		}
 	end
+	
+function paIsTeammate(character)
+	if not character then return false end
+	local pa_pl = Players:GetPlayerFromCharacter(character)
+	if not pa_pl then return false end
+	local pa_lp = Players.LocalPlayer
+	if not pa_lp.Team then return false end
+	return pa_pl.Team ~= nil and pa_pl.Team == pa_lp.Team
+end
+	
+	
 
 	function paHasAmmo(L)
 		if L.kind == "throw" then return paAmount(L.weapon.Name) > 0 end
@@ -16716,7 +16727,7 @@ function paConsider(model, h, v, myPos)
 		if ProjectileAura.Values["Target Players"] then
 			if EntityCache and EntityCache.Players then
 				for _, pap_plChar in ipairs(EntityCache.Players) do
-					if pap_plChar ~= Players.LocalPlayer.Character then
+					if pap_plChar ~= Players.LocalPlayer.Character and not paIsTeammate(pap_plChar) then
 						pap_h = pap_plChar:FindFirstChild("HumanoidRootPart")
 						pap_hum = pap_plChar:FindFirstChildOfClass("Humanoid")
 						if pap_h and pap_hum and pap_hum.Health > 0 then
