@@ -12768,7 +12768,6 @@ Speed.Callbacks.OnToggle = function(value)
 		end
 
 		if not cachedChar or not cachedHumanoid or cachedHumanoid.Health <= 0 then
-			NotificationSystem.Notify("Speed", "Waiting for character to load...", 3)
 
 			speedRetryConn = Player.CharacterAdded:Connect(function(newChar)
 				if speedRetryConn then
@@ -12783,7 +12782,6 @@ Speed.Callbacks.OnToggle = function(value)
 			return 
 		end
 
-		NotificationSystem.Notify("Speed", "Speed enabled.", 2)
 
 		speedConnection = G.Services.RunService.Heartbeat:Connect(function(deltaTime)
 			if not mainScreenUI or mainScreenUI:GetAttribute("Running") == false then return end
@@ -14037,7 +14035,7 @@ if #asItemList == 0 then
 end
 asDefaultSel = {}
 
-ChestESP:CreateSlider("ESP Scale", 3, 3, 1, nil, 0.1)
+ChestESP:CreateSlider("ESP Scale", 1, 5, 1, nil, 0.1)
 ChestESP:CreateDropdown("Items", asItemList, asDefaultSel, nil, true)
 
 
@@ -14176,7 +14174,7 @@ ChestESP.Callbacks.OnToggle = function(state)
 						activeESPs[chestPart] = nil
 					end
 				end
-				task.wait(0.15)
+				task.wait(0.5)
 			end
 			for chestPart, gui in pairs(activeESPs) do gui:Destroy() end
 			table.clear(activeESPs)
