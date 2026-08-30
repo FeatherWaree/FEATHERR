@@ -8749,17 +8749,33 @@ AimAssist.Callbacks.OnToggle = function(state)
 	end)
 end
 -- Radar for Bridges
-local function IsOnVoidOrBridge(hrp)
-	SharedRayParams.FilterDescendantsInstances = {hrp.Parent}
-	pos = hrp.Position
-	down = Vector3.new(0, -20, 0)
-	if not G.Services.Workspace:Raycast(pos, down, SharedRayParams) then return true end
-	right = hrp.CFrame.RightVector * 4
-	forward = hrp.CFrame.LookVector * 4
-	if not G.Services.Workspace:Raycast(pos + right, down, params) or not G.Services.Workspace:Raycast(pos - right, down, params) or
-		not G.Services.Workspace:Raycast(pos + forward, down, params) or not G.Services.Workspace:Raycast(pos - forward, down, params) then
+-- Create a dedicated RaycastParams object for this function to prevent casting errors
+VelocityRayParams = RaycastParams.new()
+VelocityRayParams.FilterType = Enum.RaycastFilterType.Exclude
+VelocityRayParams.IgnoreWater = true
+
+function IsOnVoidOrBridge(hrp)
+	VelocityRayParams.FilterDescendantsInstances = {hrp.Parent}
+	local pos = hrp.Position
+	local down = Vector3.new(0, -20, 0)
+
+	-- Check directly underneath
+	if not G.Services.Workspace:Raycast(pos, down, VelocityRayParams) then 
 		return true 
 	end
+
+	-- Check surrounding edges to see if we are on a bridge or solid ground
+	local right = hrp.CFrame.RightVector * 4
+	local forward = hrp.CFrame.LookVector * 4
+
+	-- Fixed the typo here (changed 'params' to 'VelocityRayParams')
+	if not G.Services.Workspace:Raycast(pos + right, down, VelocityRayParams) or 
+		not G.Services.Workspace:Raycast(pos - right, down, VelocityRayParams) or
+		not G.Services.Workspace:Raycast(pos + forward, down, VelocityRayParams) or 
+		not G.Services.Workspace:Raycast(pos - forward, down, VelocityRayParams) then
+		return true 
+	end
+
 	return false
 end
 
@@ -30311,7 +30327,7 @@ KitRadar.Callbacks.OnToggle = function(state)
 	end
 end
 -- ============================================================
---  VISUALS: Item Skin Changer (Fixed Audio - No Global Muting)
+--  VISUALS: Item Skin Changer (Fixed Audio - Guaranteed Playback)
 -- ============================================================
 if isc_conn then pcall(function() isc_conn:Disconnect() end) isc_conn = nil end
 if isc_swingConn then pcall(function() isc_swingConn:Disconnect() end) isc_swingConn = nil end
@@ -30349,25 +30365,32 @@ isc_customSwing = nil
 isc_customHit = nil
 isc_heldName = nil
 
--- REMOVED THE DANGEROUS __namecall HOOK THAT WAS MUTING ALL SOUNDS
-
 iscMeta = nil
 pcall(function()
 	iscMeta = require(G.Services.RS.TS.games.bedwars["item-skin"]["item-skin-meta"]).ItemSkinMeta
 end)
 if type(iscMeta) ~= "table" then iscMeta = {} end
 
--- ============ SAFE SOUND PLAYER ============
+-- ============ FIXED SOUND PLAYER (Sound Pool + PlayerGui) ============
+iscSoundPool = {}
 iscPlaySound = function(id)
 	if type(id) ~= "string" or id == "" then return end
 	if not string.find(id, "rbxassetid") then id = "rbxassetid://" .. id end
+
 	pcall(function()
-		local s = Instance.new("Sound")
-		s.SoundId = id
-		s.Volume = 1
-		s.Parent = G.Services.Workspace.CurrentCamera or G.Services.Workspace
-		s.PlayOnRemove = true
-		s:Destroy()
+		-- Reuse existing sound for this ID to prevent spam/limits
+		local s = iscSoundPool[id]
+		if not s or not s.Parent then
+			s = Instance.new("Sound")
+			s.SoundId = id
+			s.Volume = 1
+			s.RollOffMaxDistance = 10000 -- Bypasses 3D distance muting
+			s.Parent = PlayerGui -- Parent to PlayerGui to guarantee playback
+			iscSoundPool[id] = s
+		end
+
+		s.TimePosition = 0
+		s:Play()
 	end)
 end
 
@@ -30421,10 +30444,6 @@ iscRebuildSounds = function()
 	if type(skinMeta.projectileSourceOverrides) == "table" then
 		if type(skinMeta.projectileSourceOverrides.hitSounds) == "table" then isc_customHit = skinMeta.projectileSourceOverrides.hitSounds end
 	end
-
-	-- NOTE: We are NO LONGER suppressing base sounds globally to prevent audio bugs.
-	-- We simply play the custom sound ON TOP. If you strictly need to mute the base sound,
-	-- we would need a much more specific hook, but for now, stability is priority.
 end
 
 -- ============ PASSIVE LISTENERS (Safe) ============
@@ -30463,7 +30482,7 @@ isc_charConn = Player.CharacterAdded:Connect(function(char)
 end)
 iscHookHand(Player.Character)
 
--- ============ VISUAL SKIN APPLY (Unchanged logic, just cleaned up) ============
+-- ============ VISUAL SKIN APPLY ============
 function iscIsFirstPerson()
 	local head = Player.Character and Player.Character:FindFirstChild("Head")
 	if not head then return false end
