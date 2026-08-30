@@ -30283,15 +30283,16 @@ KitRadar.Callbacks.OnToggle = function(state)
 		NotificationSystem.Notify("Kit Radar", "Disabled.", 2)
 	end
 end
-
 -- ============================================================
---  VISUALS: Item Skin Changer (v3 - hits can NOT break, sounds play every hit)
+--  VISUALS: Item Skin Changer (Fixed Audio - No Global Muting)
 -- ============================================================
 if isc_conn then pcall(function() isc_conn:Disconnect() end) isc_conn = nil end
 if isc_swingConn then pcall(function() isc_swingConn:Disconnect() end) isc_swingConn = nil end
 if isc_hitConn then pcall(function() isc_hitConn:Disconnect() end) isc_hitConn = nil end
 if isc_handConn then pcall(function() isc_handConn:Disconnect() end) isc_handConn = nil end
 if isc_charConn then pcall(function() isc_charConn:Disconnect() end) isc_charConn = nil end
+
+-- Cleanup old skins
 if type(isc_tracked) == "table" then
 	for isc_it, isc_info in pairs(isc_tracked) do
 		pcall(function()
@@ -30305,21 +30306,23 @@ if type(isc_tracked) == "table" then
 			end
 			for _, isc_e in ipairs(isc_info.fx or {}) do
 				if isc_e and isc_e.Parent then
-					isc_c = isc_e:GetAttribute("_iscOrigEnabled"); if isc_c then isc_c.Enabled = isc_c; isc_e:SetAttribute("_iscOrigEnabled", nil) end
+					isc_c = isc_e:GetAttribute("_iscOrigEnabled"); if isc_c then isc_e.Enabled = isc_c; isc_e:SetAttribute("_iscOrigEnabled", nil) end
 				end
 			end
 		end)
 	end
 end
+
 isc_tracked = {}
 isc_reconAcc = 0
 isc_rs = G.Services.RunService
 isc_selected = isc_selected or {}
-isc_suppress = {}
+isc_suppress = {} 
 isc_customSwing = nil
 isc_customHit = nil
 isc_heldName = nil
-isc_blockFlag = false
+
+-- REMOVED THE DANGEROUS __namecall HOOK THAT WAS MUTING ALL SOUNDS
 
 iscMeta = nil
 pcall(function()
@@ -30327,17 +30330,17 @@ pcall(function()
 end)
 if type(iscMeta) ~= "table" then iscMeta = {} end
 
--- ============ STATELESS SOUND PLAYER (plays every time, never dies) ============
+-- ============ SAFE SOUND PLAYER ============
 iscPlaySound = function(id)
 	if type(id) ~= "string" or id == "" then return end
 	if not string.find(id, "rbxassetid") then id = "rbxassetid://" .. id end
 	pcall(function()
-		isc_s = Instance.new("Sound")
-		isc_s.SoundId = id
-		isc_s.Volume = 1
-		isc_s.Parent = G.Services.Workspace.CurrentCamera or G.Services.Workspace
-		isc_s.PlayOnRemove = true
-		isc_s:Destroy()
+		local s = Instance.new("Sound")
+		s.SoundId = id
+		s.Volume = 1
+		s.Parent = G.Services.Workspace.CurrentCamera or G.Services.Workspace
+		s.PlayOnRemove = true
+		s:Destroy()
 	end)
 end
 
@@ -30352,11 +30355,11 @@ end
 
 -- ============ HELD ITEM + SOUND STATE ============
 iscGetHeldName = function()
-	isc_char = Player.Character
-	if not isc_char then return nil end
-	isc_hi = isc_char:FindFirstChild("HandInvItem")
-	if isc_hi and isc_hi.Value then
-		return typeof(isc_hi.Value) == "Instance" and isc_hi.Value.Name or tostring(isc_hi.Value)
+	local char = Player.Character
+	if not char then return nil end
+	local hi = char:FindFirstChild("HandInvItem")
+	if hi and hi.Value then
+		return typeof(hi.Value) == "Instance" and hi.Value.Name or tostring(hi.Value)
 	end
 	return nil
 end
@@ -30367,90 +30370,47 @@ iscRebuildSounds = function()
 	isc_customHit = nil
 	isc_heldName = iscGetHeldName()
 	if not isc_heldName then return end
-	isc_tag = isc_selected[isc_heldName]
-	if not isc_tag then return end
 
-	-- find the skin meta (exact key first, then scan)
-	isc_skinMeta = iscMeta[isc_heldName .. "_" .. isc_tag]
-	if not isc_skinMeta then
-		for _, isc_m in pairs(iscMeta) do
-			if type(isc_m) == "table" and isc_m.itemType == isc_heldName and isc_m.skinTag == isc_tag then
-				isc_skinMeta = isc_m
+	local tag = isc_selected[isc_heldName]
+	if not tag then return end
+
+	-- Find skin meta
+	local skinMeta = iscMeta[isc_heldName .. "_" .. tag]
+	if not skinMeta then
+		for _, m in pairs(iscMeta) do
+			if type(m) == "table" and m.itemType == isc_heldName and m.skinTag == tag then
+				skinMeta = m
 				break
 			end
 		end
 	end
-	if not isc_skinMeta then return end
+	if not skinMeta then return end
 
-	-- custom sounds from the skin
-	if type(isc_skinMeta.sword) == "table" then
-		if type(isc_skinMeta.sword.swingSounds) == "table" then isc_customSwing = isc_skinMeta.sword.swingSounds end
-		if type(isc_skinMeta.sword.hitSounds) == "table" then isc_customHit = isc_skinMeta.sword.hitSounds end
+	-- Get custom sounds
+	if type(skinMeta.sword) == "table" then
+		if type(skinMeta.sword.swingSounds) == "table" then isc_customSwing = skinMeta.sword.swingSounds end
+		if type(skinMeta.sword.hitSounds) == "table" then isc_customHit = skinMeta.sword.hitSounds end
 	end
-	if type(isc_skinMeta.projectileSourceOverrides) == "table" then
-		if type(isc_skinMeta.projectileSourceOverrides.hitSounds) == "table" then isc_customHit = isc_skinMeta.projectileSourceOverrides.hitSounds end
+	if type(skinMeta.projectileSourceOverrides) == "table" then
+		if type(skinMeta.projectileSourceOverrides.hitSounds) == "table" then isc_customHit = skinMeta.projectileSourceOverrides.hitSounds end
 	end
 
-	-- suppress the BASE item's normal sounds ONLY if we have custom replacements
-	isc_baseMeta = ItemMetaTable and ItemMetaTable[isc_heldName] or nil
-	if isc_baseMeta and type(isc_baseMeta.sword) == "table" then
-		if isc_customSwing and type(isc_baseMeta.sword.swingSounds) == "table" then
-			for _, id in ipairs(isc_baseMeta.sword.swingSounds) do isc_suppress[id] = true end
-		end
-		if isc_customHit and type(isc_baseMeta.sword.hitSounds) == "table" then
-			for _, id in ipairs(isc_baseMeta.sword.hitSounds) do isc_suppress[id] = true end
-		end
-	end
-	-- suppress base projectile (arrow/bolt) hit sounds so custom bow hits sound right
-	if isc_customHit and isc_baseMeta and type(isc_baseMeta.projectileSource) == "table" then
-		isc_projName = nil
-		pcall(function()
-			isc_pt = isc_baseMeta.projectileSource.projectileType
-			if type(isc_pt) == "function" then
-				isc_projName = isc_pt(isc_baseMeta.projectileSource.ammoItemTypes and isc_baseMeta.projectileSource.ammoItemTypes[1] or isc_heldName)
-			end
-		end)
-		isc_pm = PA_PROJ_META and PA_PROJ_META[isc_projName or isc_heldName] or nil
-		if isc_pm and type(isc_pm.hitSounds) == "table" then
-			for _, tierList in pairs(isc_pm.hitSounds) do
-				if type(tierList) == "table" then
-					for _, id in ipairs(tierList) do isc_suppress[id] = true end
-				elseif type(tierList) == "string" then
-					isc_suppress[tierList] = true
-				end
-			end
-		end
-	end
+	-- NOTE: We are NO LONGER suppressing base sounds globally to prevent audio bugs.
+	-- We simply play the custom sound ON TOP. If you strictly need to mute the base sound,
+	-- we would need a much more specific hook, but for now, stability is priority.
 end
 
--- ============ SOUND-ONLY HOOK (Mutes instead of blocking to save the sword controller) ============
-if hookmetamethod and checkcaller and getnamecallmethod then
-	local iscOldNamecall
-	iscOldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-		if not checkcaller() and loops and loops["item skin changer"] then
-			if getnamecallmethod() == "Play" and typeof(self) == "Instance" and self.ClassName == "Sound" then
-				if isc_suppress[self.SoundId] then
-					self.Volume = 0 -- Mutes the sound silently, preventing script crashes
-				end
-			end
-		end
-		return iscOldNamecall(self, ...)
-	end)
-end
-
--- ============ PASSIVE LISTENERS (play custom sounds, can't break anything) ============
--- Swing sound: fires on EVERY sword swing (hit or miss)
+-- ============ PASSIVE LISTENERS (Safe) ============
 pcall(function()
-	isc_sync = require(Player.PlayerScripts:WaitForChild("TS", 5):WaitForChild("client-sync-events", 5)).ClientSyncEvents
-	if isc_sync and isc_sync.SwordSwing then
-		isc_swingConn = isc_sync.SwordSwing:connect(function()
+	local sync = require(Player.PlayerScripts:WaitForChild("TS", 5):WaitForChild("client-sync-events", 5)).ClientSyncEvents
+	if sync and sync.SwordSwing then
+		isc_swingConn = sync.SwordSwing:connect(function()
 			if not loops["item skin changer"] then return end
 			if isc_customSwing then iscPlayRandom(isc_customSwing) end
 		end)
 	end
 end)
 
--- Hit sound: fires every time YOU deal damage (sword OR projectile)
 pcall(function()
 	isc_hitConn = NetRemotes:WaitForChild("EntityDamageEvent").OnClientEvent:Connect(function(data)
 		if not loops["item skin changer"] then return end
@@ -30460,234 +30420,230 @@ pcall(function()
 	end)
 end)
 
--- rebuild sound state when held item changes
 iscHookHand = function(char)
 	if isc_handConn then pcall(function() isc_handConn:Disconnect() end) isc_handConn = nil end
 	if not char then return end
-	isc_hi2 = char:FindFirstChild("HandInvItem")
-	if isc_hi2 then
-		isc_handConn = isc_hi2.Changed:Connect(function()
+	local hi = char:FindFirstChild("HandInvItem")
+	if hi then
+		isc_handConn = hi.Changed:Connect(function()
 			if loops["item skin changer"] then iscRebuildSounds() end
 		end)
 	end
 end
+
 isc_charConn = Player.CharacterAdded:Connect(function(char)
 	task.defer(function() iscHookHand(char) end)
 end)
 iscHookHand(Player.Character)
 
--- ============ VISUAL SKIN APPLY ============
+-- ============ VISUAL SKIN APPLY (Unchanged logic, just cleaned up) ============
 function iscIsFirstPerson()
-	isc_head = Player.Character and Player.Character:FindFirstChild("Head")
-	if not isc_head then return false end
-	return (camera.CFrame.Position - isc_head.Position).Magnitude < 1.5
+	local head = Player.Character and Player.Character:FindFirstChild("Head")
+	if not head then return false end
+	return (camera.CFrame.Position - head.Position).Magnitude < 1.5
 end
 
 function iscRemoveSkin(item)
 	if not item or typeof(item) ~= "Instance" then return end
-	isc_old = item:FindFirstChild(item.Name .. "_Skin")
-	if isc_old then isc_old:Destroy() end
-	for _, isc_v in ipairs(item:GetDescendants()) do
-		if isc_v:IsA("BasePart") then
-			isc_ot = isc_v:GetAttribute("_iscOrigTransp")
-			if isc_ot ~= nil then isc_v.Transparency = isc_ot; isc_v:SetAttribute("_iscOrigTransp", nil) end
-			isc_olm = isc_v:GetAttribute("_iscOrigLTM")
-			if isc_olm ~= nil then isc_v.LocalTransparencyModifier = isc_olm; isc_v:SetAttribute("_iscOrigLTM", nil) end
-		elseif isc_v:IsA("ParticleEmitter") or isc_v:IsA("Trail") or isc_v:IsA("Beam") then
-			isc_oe = isc_v:GetAttribute("_iscOrigEnabled")
-			if isc_oe ~= nil then isc_v.Enabled = isc_oe; isc_v:SetAttribute("_iscOrigEnabled", nil) end
+	local old = item:FindFirstChild(item.Name .. "_Skin")
+	if old then old:Destroy() end
+	for _, v in ipairs(item:GetDescendants()) do
+		if v:IsA("BasePart") then
+			local ot = v:GetAttribute("_iscOrigTransp")
+			if ot ~= nil then v.Transparency = ot; v:SetAttribute("_iscOrigTransp", nil) end
+			local olm = v:GetAttribute("_iscOrigLTM")
+			if olm ~= nil then v.LocalTransparencyModifier = olm; v:SetAttribute("_iscOrigLTM", nil) end
+		elseif v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") then
+			local oe = v:GetAttribute("_iscOrigEnabled")
+			if oe ~= nil then v.Enabled = oe; v:SetAttribute("_iscOrigEnabled", nil) end
 		end
 	end
 	isc_tracked[item] = nil
 end
 
--- tries every naming combo so short_pixel / shortpixel / both orders all work
 iscFindSkinModel = function(itemName, tag)
 	if not itemsFolder then return nil end
-	isc_flat = string.gsub(tag, "_", "")
+	local flat = string.gsub(tag, "_", "")
 	return itemsFolder:FindFirstChild(string.lower(itemName .. "_" .. tag))
 		or itemsFolder:FindFirstChild(string.lower(tag .. "_" .. itemName))
 		or itemsFolder:FindFirstChild(itemName .. "_" .. tag)
 		or itemsFolder:FindFirstChild(tag .. "_" .. itemName)
-		or itemsFolder:FindFirstChild(itemName .. "_" .. isc_flat)
-		or itemsFolder:FindFirstChild(isc_flat .. "_" .. itemName)
+		or itemsFolder:FindFirstChild(itemName .. "_" .. flat)
+		or itemsFolder:FindFirstChild(flat .. "_" .. itemName)
 end
 
 function iscApplySkin(item)
 	if not item or typeof(item) ~= "Instance" then return end
 	iscRemoveSkin(item)
 	if not loops["item skin changer"] then return end
-	isc_tag = isc_selected[item.Name]
-	if not isc_tag then return end
-	isc_replacement = iscFindSkinModel(item.Name, isc_tag)
-	if not isc_replacement then return end
-	isc_handle = item:FindFirstChild("Handle")
-	if not isc_handle then return end
-	isc_skinHandle = isc_replacement:FindFirstChild("Handle")
-	if not isc_skinHandle then return end
+	local tag = isc_selected[item.Name]
+	if not tag then return end
 
-	isc_hide = {}; isc_fx = {}
-	for _, isc_v in ipairs(item:GetDescendants()) do
-		if isc_v:IsA("BasePart") then
-			isc_v:SetAttribute("_iscOrigTransp", isc_v.Transparency)
-			isc_v:SetAttribute("_iscOrigLTM", isc_v.LocalTransparencyModifier)
-			isc_v.Transparency = 1
-			isc_v.LocalTransparencyModifier = 1
-			table.insert(isc_hide, isc_v)
-		elseif isc_v:IsA("ParticleEmitter") or isc_v:IsA("Trail") or isc_v:IsA("Beam") then
-			isc_v:SetAttribute("_iscOrigEnabled", isc_v.Enabled)
-			isc_v.Enabled = false
-			table.insert(isc_fx, isc_v)
+	local replacement = iscFindSkinModel(item.Name, tag)
+	if not replacement then return end
+
+	local handle = item:FindFirstChild("Handle")
+	if not handle then return end
+	local skinHandle = replacement:FindFirstChild("Handle")
+	if not skinHandle then return end
+
+	local hide = {}; local fx = {}
+	for _, v in ipairs(item:GetDescendants()) do
+		if v:IsA("BasePart") then
+			v:SetAttribute("_iscOrigTransp", v.Transparency)
+			v:SetAttribute("_iscOrigLTM", v.LocalTransparencyModifier)
+			v.Transparency = 1
+			v.LocalTransparencyModifier = 1
+			table.insert(hide, v)
+		elseif v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") then
+			v:SetAttribute("_iscOrigEnabled", v.Enabled)
+			v.Enabled = false
+			table.insert(fx, v)
 		end
 	end
 
-	isc_model = Instance.new("Model")
-	isc_model.Name = item.Name .. "_Skin"
-	isc_model.Parent = item
-	isc_skin = isc_skinHandle:Clone()
-	isc_skin.Parent = isc_model
+	local model = Instance.new("Model")
+	model.Name = item.Name .. "_Skin"
+	model.Parent = item
 
-	-- FIX 3: Apply physics properties to ALL descendants to prevent character dragging
-	if isc_skin:IsA("BasePart") then
-		isc_skin.Anchored = false
-		isc_skin.CanCollide = false
-		isc_skin.CanQuery = false
-		isc_skin.CanTouch = false
-		isc_skin.CastShadow = false
-		isc_skin.Massless = true
+	local skin = skinHandle:Clone()
+	skin.Parent = model
+
+	-- Physics fix
+	if skin:IsA("BasePart") then
+		skin.Anchored = false; skin.CanCollide = false; skin.CanQuery = false; skin.CanTouch = false; skin.CastShadow = false; skin.Massless = true
 	end
-	for _, isc_desc in ipairs(isc_skin:GetDescendants()) do
-		if isc_desc:IsA("BasePart") then
-			isc_desc.Anchored = false
-			isc_desc.CanCollide = false
-			isc_desc.CanQuery = false
-			isc_desc.CanTouch = false
-			isc_desc.CastShadow = false
-			isc_desc.Massless = true
+	for _, d in ipairs(skin:GetDescendants()) do
+		if d:IsA("BasePart") then
+			d.Anchored = false; d.CanCollide = false; d.CanQuery = false; d.CanTouch = false; d.CastShadow = false; d.Massless = true
 		end
 	end
 
-	-- FIX 2: Rotation fixes for bows, crossbows, headhunters, axes
-	isc_nameLower = string.lower(item.Name)
-	if string.find(isc_nameLower, "bow") or string.find(isc_nameLower, "crossbow") or string.find(isc_nameLower, "headhunter") then
-		isc_skin.CFrame = isc_handle.CFrame * CFrame.Angles(0, math.rad(-90), 0)
-	elseif string.find(isc_nameLower, "axe") then
-		isc_skin.CFrame = isc_handle.CFrame * CFrame.Angles(0, math.rad(90), 0)
+	-- Rotation fix
+	local nameLower = string.lower(item.Name)
+	if string.find(nameLower, "bow") or string.find(nameLower, "crossbow") or string.find(nameLower, "headhunter") then
+		skin.CFrame = handle.CFrame * CFrame.Angles(0, math.rad(-90), 0)
+	elseif string.find(nameLower, "axe") then
+		skin.CFrame = handle.CFrame * CFrame.Angles(0, math.rad(90), 0)
 	else
-		isc_skin.CFrame = isc_handle.CFrame
+		skin.CFrame = handle.CFrame
 	end
 
-	if string.find(isc_nameLower, "lasso") then
-		isc_skin:SetAttribute("_iscForceTransp", 1)
-		isc_lassoInner = isc_skin:FindFirstChild("lasso")
-		if isc_lassoInner and isc_lassoInner:IsA("BasePart") then
-			isc_lassoInner:SetAttribute("_iscForceTransp", 0)
+	-- Lasso fix
+	if string.find(nameLower, "lasso") then
+		skin:SetAttribute("_iscForceTransp", 1)
+		local lassoInner = skin:FindFirstChild("lasso")
+		if lassoInner and lassoInner:IsA("BasePart") then
+			lassoInner:SetAttribute("_iscForceTransp", 0)
 		end
 	end
-	isc_weld = Instance.new("WeldConstraint")
-	isc_weld.Part0 = isc_handle
-	isc_weld.Part1 = isc_skin
-	isc_weld.Parent = isc_skin
-	isc_model.PrimaryPart = isc_skin
 
-	isc_info = { hide = isc_hide, fx = isc_fx, skin = {}, skinfx = {} }
-	for _, isc_d in ipairs(isc_model:GetDescendants()) do
-		if isc_d:IsA("BasePart") then table.insert(isc_info.skin, isc_d)
-		elseif isc_d:IsA("ParticleEmitter") or isc_d:IsA("Trail") or isc_d:IsA("Beam") then table.insert(isc_info.skinfx, isc_d) end
-	end
-	isc_vmnow = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
-	isc_info.isViewmodel = (isc_vmnow and item:IsDescendantOf(isc_vmnow)) and true or false
-	isc_tracked[item] = isc_info
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = handle; weld.Part1 = skin; weld.Parent = skin
+	model.PrimaryPart = skin
 
-	isc_fp0 = iscIsFirstPerson()
-	isc_show0 = (isc_info.isViewmodel and isc_fp0) or (not isc_info.isViewmodel and not isc_fp0)
-	isc_opaq0 = isc_show0 and 0 or 1
-	for _, isc_p in ipairs(isc_info.skin) do
-		isc_ft = isc_p:GetAttribute("_iscForceTransp")
-		isc_val = (isc_show0 and isc_ft ~= nil) and isc_ft or isc_opaq0
-		isc_p.Transparency = isc_val
-		isc_p.LocalTransparencyModifier = isc_val
+	local info = { hide = hide, fx = fx, skin = {}, skinfx = {} }
+	for _, d in ipairs(model:GetDescendants()) do
+		if d:IsA("BasePart") then table.insert(info.skin, d)
+		elseif d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") then table.insert(info.skinfx, d) end
 	end
-	for _, isc_e in ipairs(isc_info.skinfx) do isc_e.Enabled = isc_show0 end
+
+	local vmnow = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+	info.isViewmodel = (vmnow and item:IsDescendantOf(vmnow)) and true or false
+	isc_tracked[item] = info
+
+	local fp = iscIsFirstPerson()
+	local show = (info.isViewmodel and fp) or (not info.isViewmodel and not fp)
+	local opaq = show and 0 or 1
+
+	for _, p in ipairs(info.skin) do
+		local ft = p:GetAttribute("_iscForceTransp")
+		local val = (show and ft ~= nil) and ft or opaq
+		p.Transparency = val
+		p.LocalTransparencyModifier = val
+	end
+	for _, e in ipairs(info.skinfx) do e.Enabled = show end
 end
 
 function iscMaintain()
-	isc_fp = iscIsFirstPerson()
-	for isc_item, isc_info in pairs(isc_tracked) do
-		if not isc_item or not isc_item.Parent or not isc_item:FindFirstChild("Handle") or not isc_item:FindFirstChild(isc_item.Name .. "_Skin") then
-			iscRemoveSkin(isc_item)
+	local fp = iscIsFirstPerson()
+	for item, info in pairs(isc_tracked) do
+		if not item or not item.Parent or not item:FindFirstChild("Handle") or not item:FindFirstChild(item.Name .. "_Skin") then
+			iscRemoveSkin(item)
 		else
-			isc_show = (isc_info.isViewmodel and isc_fp) or (not isc_info.isViewmodel and not isc_fp)
-			isc_opaq = isc_show and 0 or 1
-			for _, isc_p in ipairs(isc_info.hide) do if isc_p.Parent then isc_p.Transparency = 1; isc_p.LocalTransparencyModifier = 1 end end
-			for _, isc_e in ipairs(isc_info.fx) do if isc_e.Parent then isc_e.Enabled = false end end
-			for _, isc_p in ipairs(isc_info.skin) do
-				if isc_p.Parent then
-					isc_ft = isc_p:GetAttribute("_iscForceTransp")
-					isc_val = (isc_show and isc_ft ~= nil) and isc_ft or isc_opaq
-					isc_p.Transparency = isc_val
-					isc_p.LocalTransparencyModifier = isc_val
+			local show = (info.isViewmodel and fp) or (not info.isViewmodel and not fp)
+			local opaq = show and 0 or 1
+			for _, p in ipairs(info.hide) do if p.Parent then p.Transparency = 1; p.LocalTransparencyModifier = 1 end end
+			for _, e in ipairs(info.fx) do if e.Parent then e.Enabled = false end end
+			for _, p in ipairs(info.skin) do
+				if p.Parent then
+					local ft = p:GetAttribute("_iscForceTransp")
+					local val = (show and ft ~= nil) and ft or opaq
+					p.Transparency = val
+					p.LocalTransparencyModifier = val
 				end
 			end
-			for _, isc_e in ipairs(isc_info.skinfx) do if isc_e.Parent then isc_e.Enabled = isc_show end end
+			for _, e in ipairs(info.skinfx) do if e.Parent then e.Enabled = show end end
 		end
 	end
 end
 
-function iscScanParent(isc_par)
-	if not isc_par then return end
-	for _, isc_ch in ipairs(isc_par:GetChildren()) do
-		if not isc_tracked[isc_ch] and isc_ch:FindFirstChild("Handle") then iscApplySkin(isc_ch) end
+function iscScanParent(par)
+	if not par then return end
+	for _, ch in ipairs(par:GetChildren()) do
+		if not isc_tracked[ch] and ch:FindFirstChild("Handle") then iscApplySkin(ch) end
 	end
 end
 
 function iscReconcile()
 	iscScanParent(Player.Character)
-	isc_vm2 = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
-	iscScanParent(isc_vm2)
+	local vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+	iscScanParent(vm)
 end
 
 function iscApplyAll()
 	if Player.Character then
-		for _, isc_item in ipairs(Player.Character:GetChildren()) do iscApplySkin(isc_item) end
+		for _, item in ipairs(Player.Character:GetChildren()) do iscApplySkin(item) end
 	end
-	isc_vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
-	if isc_vm then
-		for _, isc_item in ipairs(isc_vm:GetChildren()) do iscApplySkin(isc_item) end
+	local vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+	if vm then
+		for _, item in ipairs(vm:GetChildren()) do iscApplySkin(item) end
 	end
 end
 
 function iscClearAll()
 	if Player.Character then
-		for _, isc_item in ipairs(Player.Character:GetChildren()) do iscRemoveSkin(isc_item) end
+		for _, item in ipairs(Player.Character:GetChildren()) do iscRemoveSkin(item) end
 	end
-	isc_vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
-	if isc_vm then
-		for _, isc_item in ipairs(isc_vm:GetChildren()) do iscRemoveSkin(isc_item) end
+	local vm = camera:FindFirstChild("Viewmodel") or camera:FindFirstChild("ViewModel")
+	if vm then
+		for _, item in ipairs(vm:GetChildren()) do iscRemoveSkin(item) end
 	end
 end
 
--- ============ UI: dropdowns for EVERY item that has skins (no filter this time) ============
+-- ============ UI ============
 ItemSkinChanger = Visuals:CreateButton("Item Skin Changer", nil, true)
-
-isc_itemsByType = {}
-for isc_key, isc_m in pairs(iscMeta) do
-	if type(isc_m) == "table" and isc_m.itemType and isc_m.skinTag then
-		isc_itemsByType[isc_m.itemType] = isc_itemsByType[isc_m.itemType] or {}
-		if not table.find(isc_itemsByType[isc_m.itemType], isc_m.skinTag) then
-			table.insert(isc_itemsByType[isc_m.itemType], isc_m.skinTag)
+local isc_itemsByType = {}
+for k, m in pairs(iscMeta) do
+	if type(m) == "table" and m.itemType and m.skinTag then
+		isc_itemsByType[m.itemType] = isc_itemsByType[m.itemType] or {}
+		if not table.find(isc_itemsByType[m.itemType], m.skinTag) then
+			table.insert(isc_itemsByType[m.itemType], m.skinTag)
 		end
 	end
 end
-isc_typeList = {}
-for isc_t in pairs(isc_itemsByType) do table.insert(isc_typeList, isc_t) end
+
+local isc_typeList = {}
+for t in pairs(isc_itemsByType) do table.insert(isc_typeList, t) end
 table.sort(isc_typeList)
-for _, isc_t in ipairs(isc_typeList) do
-	isc_opts = {"None"}
-	table.sort(isc_itemsByType[isc_t])
-	for _, isc_tag in ipairs(isc_itemsByType[isc_t]) do table.insert(isc_opts, isc_tag) end
-	ItemSkinChanger:CreateDropdown(isc_t, isc_opts, "None", function(val)
-		isc_selected[isc_t] = (val == "None") and nil or val
+
+for _, t in ipairs(isc_typeList) do
+	opts = {"None"}
+	table.sort(isc_itemsByType[t])
+	for _, tag in ipairs(isc_itemsByType[t]) do table.insert(opts, tag) end
+
+	ItemSkinChanger:CreateDropdown(t, opts, "None", function(val)
+		isc_selected[t] = (val == "None") and nil or val
 		if loops["item skin changer"] then
 			iscRebuildSounds()
 			iscApplyAll()
@@ -30700,13 +30656,13 @@ ItemSkinChanger.Callbacks.OnToggle = function(state)
 	if state then
 		iscRebuildSounds()
 		if not isc_conn then
-			isc_conn = isc_rs.RenderStepped:Connect(function(isc_dt)
+			isc_conn = isc_rs.RenderStepped:Connect(function(dt)
 				if not loops["item skin changer"] then
 					if isc_conn then isc_conn:Disconnect(); isc_conn = nil end
 					return
 				end
 				iscMaintain()
-				isc_reconAcc = isc_reconAcc + (isc_dt or 0.016)
+				isc_reconAcc = isc_reconAcc + (dt or 0.016)
 				if isc_reconAcc >= 0.1 then isc_reconAcc = 0; pcall(iscReconcile) end
 			end)
 		end
