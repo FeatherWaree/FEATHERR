@@ -1183,16 +1183,10 @@ if canRequire then
 	originalGetMouseInfo = BlockSelector.getMouseInfo
 	BlockPlacementController = KnitClient.Controllers.BlockPlacementController
 	blockPlacer = BlockPlacementController and BlockPlacementController.blockPlace
-	SprintConstants = require(replicatedStorage.TS.sprint:WaitForChild("sprint-constants")).SprintConstants
-	SprintController = KnitClient.Controllers.SprintController
 	SoundManager = require(G.Services.RS:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@easy-games"):WaitForChild("game-core"):WaitForChild("out")).SoundManager
 	GameSound = require(G.Services.RS:WaitForChild("TS"):WaitForChild("sound"):WaitForChild("game-sound")).GameSound
-	local origStopSprinting
-
-	pcall(function()
-		origStopSprinting = SprintController.stopSprinting
-	end)
-
+	SprintConstants = require(replicatedStorage.TS.sprint:WaitForChild("sprint-constants")).SprintConstants
+	SprintController = KnitClient.Controllers.SprintController
 end
 
 if DamageBlock then
@@ -15543,20 +15537,52 @@ end
 
 
 
+local origStopSprinting
+pcall(function()
+	origStopSprinting = SprintController.stopSprinting
+end)
+
+sprintDebounce = false
+
 Sprint.Callbacks.OnToggle = function(state)
 	loops["sprint"] = state
-	if loops["sprint"] and canRequire then
+
+	if state and canRequire then
 		SprintConstants.RUN_FOV_MULT = Sprint.Values["FOV Multipler"]
-		SprintController.stopSprinting = function() end
+
 		SprintController.attemptingSprint = true
 		SprintController:startSprinting()
-	elseif not loops["sprint"] and canRequire then
+
+		-- Hook the stop function directly (No Loops)
+		SprintController.stopSprinting = function(self, ...)
+			local result = origStopSprinting(self, ...)
+
+			if loops["sprint"] and not sprintDebounce then
+				sprintDebounce = true
+
+				self.attemptingSprint = true
+
+				task.spawn(function()
+					if self.attemptingSprint then
+						self:startSprinting()
+					end
+					sprintDebounce = false
+				end)
+			end
+
+			return result
+		end
+
+	elseif not state and canRequire then
 		SprintConstants.RUN_FOV_MULT = 1.1
-		SprintController.stopSprinting = origStopSprinting
+
+		if origStopSprinting then
+			SprintController.stopSprinting = origStopSprinting
+		end
+
 		SprintController:stopSprinting(true)
 	end
 end
-
 TRIGGER_RADIUS   = 3.5
 TRIGGER_MAXDIST  = 22  
 WS = G.Services.Workspace 
@@ -29429,6 +29455,12 @@ Transparency.Callbacks.OnToggle = function(state)
 				cachedChar:SetAttribute("Transparency", Transparency.Values["Amount"])
 			end
 		end
+	else
+		if cachedChar then
+			if cachedChar:GetAttribute("Transparency") then
+				cachedChar:SetAttribute("Transparency", 0)
+			end
+		end
 	end
 end
 
@@ -29534,11 +29566,6 @@ function buildCape()
 
 	applyCapeSkin()
 
-	task.delay(0.05, function()
-		if loops and loops["transparency"] and game:GetService("Players").LocalPlayer.Character then
-			transpApplyAll(game:GetService("Players").LocalPlayer.Character)
-		end
-	end)
 end
 
 function capeOnCharacterAdded(newCapeChar)
@@ -29576,8 +29603,8 @@ local pa_raycastParams = RaycastParams.new()
 pa_raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 pa_raycastParams.IgnoreWater = true
 
-local attachConnection = nil
-local lastChar = nil
+attachConnection = nil
+ lastChar = nil
 
 local function attachLoop()
 	-- 1. LOCAL VARIABLES: Adding 'local' prevents Lua from doing heavy global lookups
@@ -30479,7 +30506,7 @@ function iscApplySkin(item)
 	local tag = isc_selected[item.Name]
 	if not tag then return end
 
-	local replacement = iscFindSkinModel(item.Name, tag)
+	replacement = iscFindSkinModel(item.Name, tag)
 	if not replacement then return end
 
 	local handle = item:FindFirstChild("Handle")
