@@ -47,7 +47,7 @@ else
 	canRequire = false
 	print("❌ Executor does NOT support require. Some features will be disabled.")
 end
-
+canRequire = true
 
 replicatedStorage = G.Services.RS
 HttpService = game:GetService("HttpService")
