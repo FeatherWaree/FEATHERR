@@ -34,18 +34,19 @@ rainbowConnection = nil
 
 
 
-canRequire = true
+canRequire = false
 
-if canRequire then
-	print("✅ Supported!")
+local success, err = pcall(function()
+	require(game:GetService("ReplicatedStorage"):WaitForChild("TS")) 
+end)
+
+if success then
+	canRequire = true
+	print("✅ Executor supports require!")
 else
-	print("❌ Not supported")
+	canRequire = false
+	print("❌ Executor does NOT support require. Some features will be disabled.")
 end
-
-canRequire = true
-
-
-
 
 
 replicatedStorage = G.Services.RS
@@ -1070,7 +1071,7 @@ loops = {
 	["auto caitlyn"] = false,
 	["auto freiya"] = false,
 	["anti lasso"] = false,
-	["auto syx"] = false,
+	["auto styx"] = false,
 	["auto agni"] = false,
 	["auto noelle"] = false,
 	["auto ragnar"] = false,
@@ -30719,5 +30720,73 @@ ItemSkinChanger.Callbacks.OnToggle = function(state)
 		isc_customSwing = nil
 		isc_customHit = nil
 		iscClearAll()
+	end
+end
+
+-- ============================================================
+--  COMBAT: DamageBoost (Speed burst on taking damage)
+-- ============================================================
+DamageBoost = Combat:CreateButton("Damage Boost", nil, true)
+DamageBoost:CreateSlider("Speed Multiplier", 1.1, 3.0, 1.5, nil, 0.1)
+DamageBoost:CreateSlider("Duration (s)", 0.1, 1.0, 0.3, nil, 0.05)
+
+db_conn = nil
+db_boostThread = nil
+db_originalSpeed = 16
+
+DamageBoost.Callbacks.OnToggle = function(state)
+	loops["damage boost"] = state
+
+	if state then
+		-- Listen for when the player takes damage
+		db_conn = entityDamaged.OnClientEvent:Connect(function(data)
+			if not loops["damage boost"] then return end
+			if type(data) ~= "table" then return end
+
+			-- Check if the LocalPlayer is the one taking damage
+			if data.entityInstance == Player.Character then
+				local char = Player.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if not hum or hum.Health <= 0 then return end
+
+				-- Cancel any existing boost thread so they don't overlap
+				if db_boostThread then
+					task.cancel(db_boostThread)
+					db_boostThread = nil
+				end
+
+				-- Save current speed before boosting
+				db_originalSpeed = hum.WalkSpeed
+
+				-- Apply the speed boost
+				local multiplier = DamageBoost.Values["Speed Multiplier"] or 1.5
+				hum.WalkSpeed = db_originalSpeed * multiplier
+
+				-- Revert back after the duration
+				local duration = DamageBoost.Values["Duration (s)"] or 0.3
+				db_boostThread = task.delay(duration, function()
+					if hum and hum.Parent and hum.Health > 0 then
+						hum.WalkSpeed = db_originalSpeed
+					end
+					db_boostThread = nil
+				end)
+			end
+		end)
+	else
+		-- Cleanup connections and revert speed if toggled off mid-boost
+		if db_conn then 
+			db_conn:Disconnect() 
+			db_conn = nil 
+		end
+		if db_boostThread then 
+			task.cancel(db_boostThread) 
+			db_boostThread = nil 
+
+			local char = Player.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if hum and hum.Parent then
+				hum.WalkSpeed = db_originalSpeed
+			end
+		end
 	end
 end
