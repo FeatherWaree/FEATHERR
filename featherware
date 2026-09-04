@@ -5454,19 +5454,6 @@ ZoomUnlocker:CreateSlider("Max Zoom Distance", 1, 300, 2, function(state)
 	end
 end)
 
-
-Nuker = GameTab:CreateButton("Nuker", nil, true)
-Nuker:CreateDropdown("Mode", {"Blatant", "Legit"}, "Blatant", nil)
-Nuker:CreateToggle("Bed Only", false, nil)
-Nuker:CreateSlider("Break Speed", 0.01, 1, 0.3,  nil, 0.01)
-Nuker:CreateSlider("Break Range", 1, 30, 21)
-Nuker:CreateDropdown("Break", {"bed", "tesla", "hive", "lucky_block", "iron_ore"}, "bed", nil, true)
-Nuker:CreateToggle("Mining Highlight", nil, false)
-Nuker:CreateColorPicker("Highlight Color", Color3.new(), nil)
-Nuker:CreateToggle("Custom HP Bar", true, nil)
-
-
-
 FastBreak = GameTab:CreateButton("Fast Break", nil, true)
 FastBreak:CreateSlider("Break Speed", 0.01, 1, 0.3, nil, 0.01)
 FastBreak:CreateToggle("Only On Beds", nil, false)
@@ -14844,7 +14831,6 @@ Night.Callbacks.OnToggle = function(state)
 		game.Lighting.ClockTime = 14
 	end
 end
-
 beds, teslas, hives, lucky_blocks, iron_ores = {}, {}, {}, {}, {}
 
 for i, child in pairs(G.Services.Workspace:GetDescendants()) do
@@ -14878,8 +14864,111 @@ targetMap = {
 	["lucky_block"] = lucky_blocks,
 	["iron_ore"] = iron_ores
 }
+nkGroupPriority = {"bed", "tesla", "hive", "lucky_block", "iron_ore"}
 
--- ===== HIGHLIGHT BOX =====
+-- ===== REMOTES / MODULES =====
+nkSetInv = nil
+pcall(function()
+	nkSetInv = G.Services.RS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@rbxts",5):WaitForChild("net",5):WaitForChild("out",5):WaitForChild("_NetManaged",5):WaitForChild("SetInvItem",5)
+end)
+
+nkBlockEngine = nil
+nkBreakAsset = nil
+nkBreakFX = nil
+nkAnimUtil = nil
+nkGetItemMeta = nil
+pcall(function()
+	nkGameCore = require(G.Services.RS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("game-core",5):WaitForChild("out",5))
+	nkAnimUtil = nkGameCore.AnimationUtil
+end)
+pcall(function()
+	nkBE = require(G.Services.RS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("block-engine",5):WaitForChild("out",5))
+	nkBlockEngine = nkBE.BlockEngine
+	nkAnimId = require(G.Services.RS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("block-engine",5):WaitForChild("out",5):WaitForChild("shared",5):WaitForChild("animation",5):WaitForChild("animation-id",5)).AnimationId
+	nkBreakAsset = nkBlockEngine:getAnimationController():getAssetId(nkAnimId.BREAK_BLOCK)
+	nkBreakFX = require(G.Services.RS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@easy-games",5):WaitForChild("block-engine",5):WaitForChild("out",5):WaitForChild("client",5):WaitForChild("break",5):WaitForChild("break-effect",5)).BreakEffect.new()
+end)
+pcall(function()
+	nkGetItemMeta = require(G.Services.RS:WaitForChild("TS",5):WaitForChild("item",5):WaitForChild("item-meta",5)).getItemMeta
+end)
+
+-- ===== GRID + HEALTH =====
+function gridPos(p)
+	return Vector3.new(math.round(p.X / 3), math.round(p.Y / 3), math.round(p.Z / 3))
+end
+
+function nkGridOf(point)
+	if nkBlockEngine then
+		ok, bp = pcall(function() return nkBlockEngine:getBlockPosition(point) end)
+		if ok and bp then return bp end
+	end
+	return gridPos(point)
+end
+
+nkHealthCache = {}
+pcall(function()
+	nkHealthRemote = G.Services.RS:WaitForChild("rbxts_include",5):WaitForChild("node_modules",5):WaitForChild("@rbxts",5):WaitForChild("net",5):WaitForChild("out",5):WaitForChild("_NetManaged",5):WaitForChild("BlockHealthbarUpdate",5)
+	nkHealthRemote.OnClientEvent:Connect(function(d)
+		if type(d) ~= "table" or not d.blockPosition then return end
+		nkHealthCache[d.blockPosition.X .. "_" .. d.blockPosition.Y .. "_" .. d.blockPosition.Z] = {h = d.newHealth, m = d.maxHealth, t = os.clock()}
+	end)
+end)
+
+function nkReadHealth(gp)
+	if not nkBlockEngine then return nil, nil end
+	ok, data = pcall(function() return nkBlockEngine:getStore():getBlockData(gp) end)
+	if ok and data then
+		h = data:GetAttribute(Player.Name .. "_Health")
+		if type(h) ~= "number" then h = data:GetAttribute("Health") end
+		if type(h) ~= "number" then
+			pcall(function()
+				h = data:GetAttribute(tostring(nkBlockEngine:getDefaultHealthKey()))
+			end)
+		end
+		m = data:GetAttribute("MaxHealth")
+		if type(h) == "number" then return h, m end
+	end
+	return nil, nil
+end
+
+nkPredicted = {}
+function nkPredictHit(block, gp)
+	key = gp.X .. "_" .. gp.Y .. "_" .. gp.Z
+	maxH = block:GetAttribute("MaxHealth")
+	cur = nil
+	live, lm = nkReadHealth(gp)
+	if nkPredicted[key] then
+		cur = nkPredicted[key].h
+	else
+		cur = live or block:GetAttribute("Health") or maxH
+	end
+	dmg = nil
+	if nkBlockEngine then
+		pcall(function() dmg = nkBlockEngine:calculateBlockDamage(Player, {blockPosition = gp}) end)
+	end
+	if type(dmg) ~= "number" or dmg <= 0 then dmg = (maxH or 100) * 0.1 end
+	cur = math.max(0, (cur or maxH or 100) - dmg)
+	nkPredicted[key] = {h = cur, m = maxH, t = os.clock()}
+	nkHealthCache[key] = {h = cur, m = maxH, t = os.clock()}
+	return cur, maxH
+end
+
+function nkCellHealth(gp, inst)
+	key = gp.X .. "_" .. gp.Y .. "_" .. gp.Z
+	c = nkHealthCache[key]
+	if c and (os.clock() - c.t) < 6 then return c.h end
+	h, m = nkReadHealth(gp)
+	if type(h) == "number" then return h end
+	if inst then
+		h = inst:GetAttribute("Health")
+		if type(h) == "number" then return h end
+		m = inst:GetAttribute("MaxHealth")
+		if type(m) == "number" then return m end
+	end
+	return 100
+end
+
+-- ===== HIGHLIGHT BOX (blatant) =====
 nukerBox = Instance.new("Part")
 nukerBox.Name = "3D_NUKER_BOX"
 nukerBox.Anchored = true
@@ -14893,7 +14982,6 @@ nukerHighlight.OutlineTransparency = 0
 nukerHighlight.Parent = nukerBox
 nukerBox.Size = Vector3.new(0.1, 0.1, 0.1)
 nukerBox.Parent = game.Lighting
-
 nukerHighlightTween = nil
 lastHighlightKey = nil
 
@@ -14905,25 +14993,72 @@ function updateNukerHighlight(cf, size)
 		lastHighlightKey = nil
 		return
 	end
-
 	nukerHighlight.FillColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 0, 0)
 	nukerHighlight.OutlineColor = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 255, 255)
-
 	key = tostring(cf.Position) .. "|" .. tostring(size)
 	if key == lastHighlightKey and nukerBox.Parent == G.Services.Workspace then return end
 	lastHighlightKey = key
-
 	nukerBox.CFrame = cf
 	nukerBox.Size = Vector3.new(0.1, 0.1, 0.1)
 	nukerBox.Parent = G.Services.Workspace
-
 	if nukerHighlightTween then nukerHighlightTween:Cancel() end
-	nukerHighlightTween = TweenService:Create(
-		nukerBox,
-		TweenInfo.new(0.30, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-		{ Size = size + Vector3.new(0.4, 0.4, 0.4) }
-	)
+	nukerHighlightTween = TweenService:Create(nukerBox, TweenInfo.new(0.30, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = size + Vector3.new(0.4, 0.4, 0.4)})
 	nukerHighlightTween:Play()
+end
+
+-- ===== MINING PATH (legit) =====
+nkPathFolder = Instance.new("Folder")
+nkPathFolder.Name = "NukerPath"
+nkPathFolder.Parent = game.Lighting
+nkPathBoxes = {}
+
+function nkClearPath()
+	for k, b in pairs(nkPathBoxes) do pcall(function() b:Destroy() end) end
+	nkPathBoxes = {}
+end
+
+function nkRenderPath(cells)
+	if not cells or #cells == 0 then
+		nkClearPath()
+		return
+	end
+	seen = {}
+	col = Nuker.Values["Highlight Color"] or Color3.fromRGB(255, 0, 0)
+	for _, gp in ipairs(cells) do
+		key = gp.X .. "_" .. gp.Y .. "_" .. gp.Z
+		seen[key] = true
+		if not nkPathBoxes[key] then
+			b = Instance.new("Part")
+			b.Anchored = true
+			b.CanCollide = false
+			b.CanQuery = false
+			b.CanTouch = false
+			b.Transparency = 1
+			b.Size = Vector3.new(0.1, 0.1, 0.1)
+			b.CFrame = CFrame.new(gp.X * 3, gp.Y * 3, gp.Z * 3)
+			b.Parent = nkPathFolder
+			h = Instance.new("Highlight")
+			h.Adornee = b
+			h.FillTransparency = 0.7
+			h.OutlineTransparency = 0
+			h.Parent = b
+			nkPathBoxes[key] = b
+			TweenService:Create(b, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = Vector3.new(3, 3, 3), Transparency = 0.6}):Play()
+		end
+		nkPathBoxes[key].Highlight.FillColor = col
+		nkPathBoxes[key].Highlight.OutlineColor = col
+	end
+	for key, b in pairs(nkPathBoxes) do
+		if not seen[key] then
+			nkPathBoxes[key] = nil
+			task.spawn(function()
+				pcall(function()
+					TweenService:Create(b, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = Vector3.new(0.1, 0.1, 0.1), Transparency = 1}):Play()
+				end)
+				task.delay(0.22, function() pcall(function() b:Destroy() end) end)
+			end)
+		end
+	end
 end
 
 -- ===== CUSTOM HP BAR =====
@@ -14964,7 +15099,6 @@ function createHpBar(block)
 	hb_gui.AlwaysOnTop = true
 	hb_gui.LightInfluence = 0
 	hb_gui.MaxDistance = 45
-
 	hb_bg = Instance.new("Frame")
 	hb_bg.Size = UDim2.new(1, 0, 1, 0)
 	hb_bg.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
@@ -14972,7 +15106,6 @@ function createHpBar(block)
 	hb_bg.BorderSizePixel = 0
 	hb_bc = Instance.new("UICorner", hb_bg)
 	hb_bc.CornerRadius = UDim.new(0, 4)
-
 	hb_fill = Instance.new("Frame")
 	hb_fill.Size = UDim2.new(1, -2, 1, -2)
 	hb_fill.Position = UDim2.new(0, 1, 0, 1)
@@ -14982,16 +15115,7 @@ function createHpBar(block)
 	hb_fill.Parent = hb_bg
 	hb_bg.Parent = hb_gui
 	hb_gui.Parent = block
-
 	hpBarGui = hb_gui; hpBarBg = hb_bg; hpBarFill = hb_fill; hpBarTarget = block
-
-	hb_max = block:GetAttribute("MaxHealth")
-	hb_cur = block:GetAttribute("Health")
-	if type(hb_max) == "number" and type(hb_cur) == "number" and hb_max > 0 then
-		hb_pct = math.clamp(hb_cur / hb_max, 0, 1)
-		hb_fill.Size = UDim2.new(hb_pct, -2, 1, -2)
-		hb_fill.BackgroundColor3 = hpBarColor(hb_pct)
-	end
 end
 
 function updateCustomHpBar(block)
@@ -14999,23 +15123,28 @@ function updateCustomHpBar(block)
 		hideHpBar()
 		return
 	end
-	if hpBarTarget and not hpBarTarget.Parent then
-		destroyHpBarNow()
-	end
+	if hpBarTarget and not hpBarTarget.Parent then destroyHpBarNow() end
 	if not block or not block.Parent then
 		hideHpBar()
 		return
 	end
-	if block ~= hpBarTarget then
-		createHpBar(block)
-	end
+	if block ~= hpBarTarget then createHpBar(block) end
 	if not hpBarFill then return end
-	hb_max = block:GetAttribute("MaxHealth")
-	hb_cur = block:GetAttribute("Health")
-	if type(hb_max) ~= "number" or type(hb_cur) ~= "number" or hb_max <= 0 then
-		hideHpBar()
-		return
+
+	gp = nkGridOf(block.Position)
+	live, lmax = nkReadHealth(gp)
+	if type(live) == "number" then
+		hb_cur, hb_max = live, lmax or block:GetAttribute("MaxHealth")
+	else
+		p = nkPredicted[gp.X .. "_" .. gp.Y .. "_" .. gp.Z]
+		if p then
+			hb_cur, hb_max = p.h, p.m or block:GetAttribute("MaxHealth")
+		else
+			hb_cur = block:GetAttribute("Health")
+			hb_max = block:GetAttribute("MaxHealth")
+		end
 	end
+	if type(hb_max) ~= "number" or type(hb_cur) ~= "number" or hb_max <= 0 then return end
 	hb_pct = math.clamp(hb_cur / hb_max, 0, 1)
 	pcall(function()
 		TweenService:Create(hpBarFill, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
@@ -15058,8 +15187,9 @@ function blockAtPoint(point, char)
 	return nil
 end
 
-function gridPos(p)
-	return Vector3.new(math.round(p.X / 3), math.round(p.Y / 3), math.round(p.Z / 3))
+function nkIsBreakableName(n)
+	n = string.lower(n)
+	return n:find("wool") or n:find("plank") or n:find("stone") or n:find("wood") or n:find("brick") or n:find("clay") or n:find("sand") or n:find("glass") or n:find("obsidian") or n:find("marble") or n:find("slate") or n:find("andesite") or n:find("diorite") or n:find("granite") or n:find("moss") or n:find("cobble") or n:find("snow") or n:find("ice") or n:find("dirt") or n:find("grass") or n:find("log") or n:find("pillar") or n:find("slab") or n:find("ceramic") or n:find("iron_ore") or n:find("diamond_ore") or n:find("emerald_ore")
 end
 
 function fireBreak(blockPosition, hitPos, hitNormal)
@@ -15077,56 +15207,290 @@ function fireBreak(blockPosition, hitPos, hitNormal)
 	end)
 end
 
-lastBreakTime = 0
+function nkAutoToolCheck(mineBlock, now)
+	if not Nuker.Values["Auto Tool"] then return end
+	held = nkHeldName()
+	inv = G.Services.RS:FindFirstChild("Inventories") and G.Services.RS.Inventories:FindFirstChild(Player.Name)
+	tKey = tostring(nkGridOf(mineBlock.Position).X) .. "_" .. tostring(nkGridOf(mineBlock.Position).Y) .. "_" .. tostring(nkGridOf(mineBlock.Position).Z) .. "_" .. mineBlock.Name
+	if tKey ~= nkLastTargetKey then
+		nkLastTargetKey = tKey
+		bestTool = nkBestToolFor(mineBlock.Name, inv)
+		if bestTool and bestTool ~= held then
+			if nkSwapTool(bestTool) then
+				nkSwapWaitUntil = now + 0.1
+				nkNotifyTool(bestTool)
+			end
+		end
+	end
+end
 
+lastBreakTime = 0
 function tryBreak(bp, hitPos, hitNormal, hlCf, hlSize)
 	updateNukerHighlight(hlCf, hlSize)
 	now = os.clock()
+	if now < nkSwapWaitUntil then return end -- wait for auto-tool swap
 	if now - lastBreakTime < (Nuker.Values["Break Speed"] or 0.30) then return end
 	lastBreakTime = now
 	fireBreak(bp, hitPos, hitNormal)
 end
 
-function scanBedSides(bed, char, range)
-	best = nil
-	myPos = char.HumanoidRootPart.Position
-	dirs = {
-		Vector3.new(1,0,0), Vector3.new(-1,0,0),
-		Vector3.new(0,1,0), Vector3.new(0,-1,0),
-		Vector3.new(0,0,1), Vector3.new(0,0,-1)
-	}
-	for _, dir in ipairs(dirs) do
-		half = (bed.Size.X * math.abs(dir.X) + bed.Size.Y * math.abs(dir.Y) + bed.Size.Z * math.abs(dir.Z)) / 2
-		bedPoint = bed.Position + dir * (half - 0.5)
+-- ===== LEGIT EFFECTS (managed track, stops when not mining) =====
+nkAnimTrack = nil
 
-		count = 0
-		for i = 0, 5 do
-			pt = bed.Position + dir * (half + 1.5 + i * 3)
-			if cellSolid(pt, char) then
-				count = count + 1
-			else
-				break
+function nkStopLegitEffects()
+	pcall(function()
+		if nkAnimTrack then
+			nkAnimTrack:Stop()
+			nkAnimTrack:Destroy()
+			nkAnimTrack = nil
+		end
+	end)
+end
+
+function nkPlayLegitHit(blockName, gp)
+	if not loops["nuker"] then return end
+	pcall(function()
+		if nkAnimTrack then
+			pcall(function() nkAnimTrack:Stop() nkAnimTrack:Destroy() end)
+			nkAnimTrack = nil
+		end
+		if nkAnimUtil and nkBreakAsset then
+			nkAnimTrack = nkAnimUtil:playAnimation(Player, nkBreakAsset)
+			if nkAnimTrack then
+				task.delay(0.35, function()
+					pcall(function()
+						if nkAnimTrack then nkAnimTrack:Stop() end
+					end)
+				end)
 			end
 		end
+	end)
+	pcall(function()
+		if nkBreakFX then
+			nkBreakFX:playHit(blockName, Vector3.new(gp.X, gp.Y, gp.Z), Player)
+		end
+	end)
+end
 
-		if count == 0 then
-			if (bedPoint - myPos).Magnitude <= range then
-				if not best or not best.open then
-					best = {open = true, count = 0, outerPoint = nil, bedPoint = bedPoint, dir = dir}
+-- ===== AUTO TOOL =====
+nkValidTools = {"wood_pickaxe", "stone_pickaxe", "iron_pickaxe", "diamond_pickaxe", "wood_axe", "stone_axe", "iron_axe", "diamond_axe", "shears"}
+nkAxes = {"diamond_axe", "iron_axe", "stone_axe", "wood_axe"}
+nkPickaxes = {"diamond_pickaxe", "iron_pickaxe", "stone_pickaxe", "wood_pickaxe"}
+nkLastToolNotify = 0
+
+function nkHeldName()
+	char = Player.Character
+	if not char then return nil end
+	hi = char:FindFirstChild("HandInvItem")
+	if hi and hi.Value then
+		return typeof(hi.Value) == "Instance" and hi.Value.Name or tostring(hi.Value)
+	end
+	return nil
+end
+
+function nkBestToolFor(blockName, inv)
+	n = string.lower(blockName)
+	want = nil
+	if n:find("wool") then
+		want = {"shears"}
+	elseif n == "bed" or n:find("plank") or n:find("wood") or n:find("log") then
+		want = nkAxes
+	elseif n:find("obsidian") or n:find("ceramic") or n:find("stone_brick") or n:find("stone") or n:find("tesla") or n:find("hive") or n:find("iron_ore") or n:find("lucky") then
+		want = nkPickaxes
+	end
+	if not want then return nil end
+	if inv then
+		for _, t in ipairs(want) do
+			if inv:FindFirstChild(t) then return t end
+		end
+	end
+	return nil
+end
+
+function nkSwapTool(toolName)
+	inv = G.Services.RS:FindFirstChild("Inventories") and G.Services.RS.Inventories:FindFirstChild(Player.Name)
+	item = inv and inv:FindFirstChild(toolName)
+	if not item or not nkSetInv then return false end
+	pcall(function() nkSetInv:InvokeServer({hand = item}) end)
+	return true
+end
+
+function nkNotifyTool(toolName)
+	now = os.clock()
+	if now - nkLastToolNotify > 0.5 then
+		nkLastToolNotify = now
+		NotificationSystem.Notify("Auto Tool", "Swapped to " .. toolName, 2)
+	end
+end
+
+function nkItemCooldown(held)
+	nk_cd = nil
+	if nkGetItemMeta and held then
+		pcall(function()
+			m = nkGetItemMeta(held)
+			if m and type(m.breakBlockCooldown) == "number" and m.breakBlockCooldown > 0 then
+				nk_cd = m.breakBlockCooldown
+			end
+		end)
+		if nk_cd then return nk_cd end
+	end
+	return 0.3
+end
+
+-- ANGLE: slider = full-circle value (360=all, 180=front half, 90=narrow cone)
+function nkAngleOk(cam, point)
+	val = Nuker.Values["Angle"] or 359
+	if val >= 359 then return true end
+	allowed = val / 2
+	look = cam.CFrame.LookVector
+	toB = (point - cam.CFrame.Position).Unit
+	return math.deg(math.acos(math.clamp(look:Dot(toB), -1, 1))) <= allowed
+end
+
+-- ===== BEST PATH EVAL =====
+nkDirs = {
+	Vector3.new(1,0,0), Vector3.new(-1,0,0),
+	Vector3.new(0,1,0), Vector3.new(0,-1,0),
+	Vector3.new(0,0,1), Vector3.new(0,0,-1)
+}
+
+function nkPerpOffsets(dir)
+	if dir.Y ~= 0 then
+		return {Vector3.new(0,0,0), Vector3.new(1.2,0,0), Vector3.new(-1.2,0,0), Vector3.new(0,0,1.2), Vector3.new(0,0,-1.2)}
+	elseif dir.X ~= 0 then
+		return {Vector3.new(0,0,0), Vector3.new(0,1.2,0), Vector3.new(0,-1.2,0), Vector3.new(0,0,1.2), Vector3.new(0,0,-1.2)}
+	else
+		return {Vector3.new(0,0,0), Vector3.new(1.2,0,0), Vector3.new(-1.2,0,0), Vector3.new(0,1.2,0), Vector3.new(0,-1.2,0)}
+	end
+end
+
+function nkEvalTarget(target, char, range, isBed)
+	myPos = char.HumanoidRootPart.Position
+	best = nil
+	if isBed then
+		for _, dir in ipairs(nkDirs) do
+			half = (target.Size.X*math.abs(dir.X) + target.Size.Y*math.abs(dir.Y) + target.Size.Z*math.abs(dir.Z)) / 2
+			bedPoint = target.Position + dir * (half - 0.5)
+			for _, off in ipairs(nkPerpOffsets(dir)) do
+				cells = {}
+				hpSum = 0
+				for i = 0, 5 do
+					pt = target.Position + dir * (half + 1.5 + i*3) + off
+					if cellSolid(pt, char) then
+						gp = nkGridOf(pt)
+						inst = blockAtPoint(pt, char)
+						hpSum = hpSum + nkCellHealth(gp, inst)
+						table.insert(cells, gp)
+					else
+						break
+					end
+				end
+				if #cells == 0 then
+					dist = (bedPoint - myPos).Magnitude
+					if dist <= range then
+						cost = dist
+						if not best or cost < best.cost then
+							best = {open = true, cost = cost, bedPoint = bedPoint, dir = dir, cells = {nkGridOf(bedPoint)}, outer = nil, target = target}
+						end
+					end
+				else
+					outerPt = target.Position + dir * (half + 1.5 + (#cells - 1)*3) + off
+					dist = (outerPt - myPos).Magnitude
+					if dist <= range then
+						cost = dist + hpSum * 0.15 + #cells * 2
+						if not best or cost < best.cost then
+							best = {open = false, cost = cost, bedPoint = bedPoint, dir = dir, cells = cells, outer = outerPt, target = target}
+						end
+					end
 				end
 			end
-		else
-			outerIdx = count - 1
-			outerPoint = bed.Position + dir * (half + 1.5 + outerIdx * 3)
-			if (outerPoint - myPos).Magnitude <= range then
-				if not best or (not best.open and count < best.count) then
-					best = {open = false, count = count, outerPoint = outerPoint, bedPoint = bedPoint, dir = dir}
+		end
+	else
+		dirV = myPos - target.Position
+		dirV = Vector3.new(dirV.X, 0, dirV.Z)
+		if dirV.Magnitude > 0.1 then
+			dirV = dirV.Unit
+			half = (target.Size.X*math.abs(dirV.X) + target.Size.Z*math.abs(dirV.Z)) / 2
+			cells = {}
+			hpSum = 0
+			for i = 0, 5 do
+				pt = target.Position + dirV * (half + 1.5 + i*3)
+				if cellSolid(pt, char) then
+					gp = nkGridOf(pt)
+					inst = blockAtPoint(pt, char)
+					hpSum = hpSum + nkCellHealth(gp, inst)
+					table.insert(cells, gp)
+				else
+					break
+				end
+			end
+			if #cells == 0 then
+				dist = (target.Position - myPos).Magnitude
+				if dist <= range then
+					best = {open = true, cost = dist, bedPoint = target.Position, dir = dirV, cells = {nkGridOf(target.Position)}, outer = nil, target = target}
+				end
+			else
+				outerPt = target.Position + dirV * (half + 1.5 + (#cells - 1)*3)
+				dist = (outerPt - myPos).Magnitude
+				if dist <= range then
+					best = {open = false, cost = dist + hpSum*0.15 + #cells*2, bedPoint = target.Position, dir = dirV, cells = cells, outer = outerPt, target = target}
 				end
 			end
 		end
 	end
 	return best
 end
+
+-- ===== PRIORITY TARGET PICKER =====
+function nkPickTarget(char, range)
+	myPos = char.HumanoidRootPart.Position
+	for _, g in ipairs(nkGroupPriority) do
+		if isGroupEnabled(g) then
+			best, bd = nil, range
+			for _, blk in ipairs(targetMap[g]) do
+				if blk and blk.Parent and (g ~= "bed" or not isOwnTeam(blk)) then
+					d = (myPos - blk.Position).Magnitude
+					if d < bd then bd = d; best = blk end
+				end
+			end
+			if best then return best, g end
+		end
+	end
+	return nil, nil
+end
+
+-- ===== UI =====
+Nuker = GameTab:CreateButton("Nuker", nil, true)
+function nkApplyModeVisibility()
+	legit = (Nuker.Values["Mode"] == "Legit")
+	if nkMineHLT and nkMineHLT.SetVisible then nkMineHLT:SetVisible(not legit) end
+	if nkMinePathT and nkMinePathT.SetVisible then nkMinePathT:SetVisible(legit) end
+	if nkAngleS and nkAngleS.SetVisible then nkAngleS:SetVisible(legit) end
+	if nkCooldownsT and nkCooldownsT.SetVisible then nkCooldownsT:SetVisible(legit) end
+	if not legit and nkClearPath then nkClearPath() end
+end
+
+nkModeDD = Nuker:CreateDropdown("Mode", {"Blatant", "Legit"}, "Blatant", function(v) nkApplyModeVisibility() end)
+nkBreakDD = Nuker:CreateDropdown("Break", {"bed", "tesla", "hive", "lucky_block", "iron_ore"}, {"bed"}, nil, true)
+nkBedOnlyT = Nuker:CreateToggle("Bed Only", false, nil)
+nkSpeedS = Nuker:CreateSlider("Break Speed", 0.05, 1, 0.30, nil, 0.01)
+nkRangeS = Nuker:CreateSlider("Break Range", 6, 40, 21, nil, 1)
+nkCooldownsT = Nuker:CreateToggle("Use Item Cooldowns", false, nil)
+nkAngleS = Nuker:CreateSlider("Angle", 1, 359, 359, nil, 1)
+nkAutoToolT = Nuker:CreateToggle("Auto Tool", false, nil)
+nkMineHLT = Nuker:CreateToggle("Mining Highlight", true, nil)
+nkMinePathT = Nuker:CreateToggle("Mining Path", true, nil)
+nkColorCP = Nuker:CreateColorPicker("Highlight Color", Color3.fromRGB(255, 0, 0), nil)
+nkHPBarT = Nuker:CreateToggle("Custom HP Bar", true, nil)
+
+nkApplyModeVisibility()
+
+-- ===== STATE =====
+nkDecision = nil
+nkDecisionTime = 0
+nkLegitLastBreak = 0
+nkLastTargetKey = nil
+nkSwapWaitUntil = 0
 
 -- ===== MAIN =====
 Nuker.Callbacks.OnToggle = function(state)
@@ -15137,140 +15501,162 @@ Nuker.Callbacks.OnToggle = function(state)
 	end
 	updateNukerHighlight(nil)
 	hideHpBar()
+	nkClearPath()
+	nkStopLegitEffects()
+	nkDecision = nil
 
-	if loops["nuker"] then
-		NukerConnection = G.Services.RunService.Heartbeat:Connect(function()
-			if not loops["nuker"] then return end
-			char = Player.Character
-			if not char or not char:FindFirstChild("HumanoidRootPart") then
-				updateNukerHighlight(nil)
+	if not loops["nuker"] then return end
+
+	NukerConnection = G.Services.RunService.Heartbeat:Connect(function()
+		if not loops["nuker"] then
+			nkStopLegitEffects()
+			return
+		end
+		char = Player.Character
+		if not char or not char:FindFirstChild("HumanoidRootPart") then
+			updateNukerHighlight(nil)
+			updateCustomHpBar(nil)
+			nkClearPath()
+			nkStopLegitEffects()
+			return
+		end
+		hrp = char.HumanoidRootPart
+		cam = G.Services.Workspace.CurrentCamera
+		if not cam then return end
+
+		nukerMode = Nuker.Values["Mode"] or "Blatant"
+		if nukerMode ~= "Blatant" and nukerMode ~= "Legit" then nukerMode = "Blatant" end
+		bedOnly = Nuker.Values["Bed Only"] or false
+		range = Nuker.Values["Break Range"] or 21
+		now = os.clock()
+
+		-- ============ LEGIT ============
+		if nukerMode == "Legit" then
+			held = nkHeldName()
+			autoTool = Nuker.Values["Auto Tool"] or false
+			inv = G.Services.RS:FindFirstChild("Inventories") and G.Services.RS.Inventories:FindFirstChild(Player.Name)
+
+			if not autoTool and (not held or not table.find(nkValidTools, held)) then
 				updateCustomHpBar(nil)
+				nkClearPath()
+				nkStopLegitEffects()
 				return
 			end
-			hrp = char.HumanoidRootPart
-			cam = G.Services.Workspace.CurrentCamera
-			if not cam then return end
 
-			-- CRITICAL FIX: Use a unique variable name so other modules don't overwrite it
-			nukerMode = Nuker.Values["Mode"] or "Blatant"
-
-			-- SAFETY CHECK: If the saved config somehow got corrupted to "On Hit" or something else, reset it
-			if nukerMode ~= "Blatant" and nukerMode ~= "Legit" then
-				nukerMode = "Blatant"
-				Nuker.Values["Mode"] = "Blatant"
-				if Nuker.UpdateFunctions and Nuker.UpdateFunctions["Mode"] then
-					pcall(function() Nuker.UpdateFunctions["Mode"]("Blatant") end)
-				end
+			target, groupName = nkPickTarget(char, range)
+			if not target then
+				updateCustomHpBar(nil)
+				nkClearPath()
+				nkStopLegitEffects()
+				return
 			end
 
-			bedOnly = Nuker.Values["Bed Only"] or false
-			range = Nuker.Values["Break Range"] or 21
-			mineBlock = nil
+			if not nkAngleOk(cam, target.Position) then
+				updateCustomHpBar(nil)
+				nkStopLegitEffects()
+				return
+			end
 
-			-- ============ LEGIT ============
-			if nukerMode == "Legit" then
-				lgParams = RaycastParams.new()
-				lgParams.FilterType = Enum.RaycastFilterType.Exclude
-				lgParams.FilterDescendantsInstances = {char}
-				lgParams.IgnoreWater = true
-				lgRay = cam:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * range, lgParams)
+			eval = nkEvalTarget(target, char, range, groupName == "bed")
+			if eval and Nuker.Values["Mining Path"] then
+				nkRenderPath(eval.cells)
+			else
+				nkClearPath()
+			end
 
-				if not lgRay or not lgRay.Instance then
-					updateNukerHighlight(nil)
+			if eval and not eval.open and eval.outer then
+				solid = blockAtPoint(eval.outer, char)
+				if solid and nkIsBreakableName(solid.Name) then
+					minePoint = eval.outer
+					mineBlock = solid
+				else
 					updateCustomHpBar(nil)
+					nkStopLegitEffects()
 					return
 				end
-				lgInst = lgRay.Instance
+			else
+				mineBlock = target
+				minePoint = eval and eval.bedPoint or target.Position
+			end
 
-				lgBed = nil
-				for _, b in ipairs(beds) do
-					if lgInst == b or lgInst:IsDescendantOf(b) then lgBed = b break end
-				end
-
-				if lgBed then
-					if isOwnTeam(lgBed) or not isGroupEnabled("bed") then
-						updateNukerHighlight(nil)
-						updateCustomHpBar(nil)
-						return
-					end
-					mineBlock = lgBed
-					lgInside = lgRay.Position - lgRay.Normal * 0.5
-					tryBreak(gridPos(lgInside), lgRay.Position, lgRay.Normal, lgBed.CFrame, lgBed.Size)
-				else
-					if bedOnly then
-						updateNukerHighlight(nil)
-						updateCustomHpBar(nil)
-						return
-					end
-					lgGroup = nil
-					for name, group in pairs(targetMap) do
-						for _, blk in ipairs(group) do
-							if lgInst == blk or lgInst:IsDescendantOf(blk) then lgGroup = name break end
-						end
-						if lgGroup then break end
-					end
-					if not lgGroup or not isGroupEnabled(lgGroup) then
-						updateNukerHighlight(nil)
-						updateCustomHpBar(nil)
-						return
-					end
-					mineBlock = lgInst
-					lgInside = lgRay.Position - lgRay.Normal * 0.5
-					lgCell = gridPos(lgInside) * 3
-					tryBreak(gridPos(lgInside), lgRay.Position, lgRay.Normal, CFrame.new(lgCell), Vector3.new(3,3,3))
-				end
+			nkAutoToolCheck(mineBlock, now)
+			if now < nkSwapWaitUntil then
 				updateCustomHpBar(mineBlock)
 				return
 			end
 
-			-- ============ BLATANT ============
-			nearestBed = nil
-			shortest = range
+			if Nuker.Values["Use Item Cooldowns"] then
+				cool = nkItemCooldown(held)
+			else
+				cool = Nuker.Values["Break Speed"] or 0.3
+			end
+			if now - nkLegitLastBreak < cool then
+				updateCustomHpBar(mineBlock)
+				return
+			end
+			nkLegitLastBreak = now
+
+			cellCenter = nkGridOf(minePoint)
+			fireBreak(cellCenter, minePoint, (hrp.Position - minePoint).Unit)
+			nkPredictHit(mineBlock, cellCenter)
+			nkPlayLegitHit(mineBlock.Name, cellCenter)
+			updateCustomHpBar(mineBlock)
+			return
+		end
+
+		-- ============ BLATANT (Auto Tool now works here) ============
+		if now - nkDecisionTime > 0.25 then
+			nkDecisionTime = now
+			nkDecision = nil
 			if isGroupEnabled("bed") then
+				candBeds = {}
 				for _, b in ipairs(beds) do
 					if b and b.Parent and not isOwnTeam(b) then
 						d = (hrp.Position - b.Position).Magnitude
-						if d < shortest then
-							shortest = d
-							nearestBed = b
+						if d <= range + 12 then
+							table.insert(candBeds, {b = b, d = d})
 						end
 					end
 				end
-			end
-
-			if nearestBed then
-				side = scanBedSides(nearestBed, char, range)
-				if side and side.open then
-					mineBlock = nearestBed
-					tryBreak(gridPos(side.bedPoint), side.bedPoint + side.dir * 0.5, side.dir, nearestBed.CFrame, nearestBed.Size)
-				elseif side then
-					if bedOnly then
-						updateNukerHighlight(nearestBed.CFrame, nearestBed.Size)
-						updateCustomHpBar(nil)
-						return
+				table.sort(candBeds, function(a, b) return a.d < b.d end)
+				for i = 1, math.min(#candBeds, 3) do
+					ev = nkEvalTarget(candBeds[i].b, char, range, true)
+					if ev and (not nkDecision or ev.cost < nkDecision.cost) then
+						nkDecision = ev
 					end
-					mineBlock = blockAtPoint(side.outerPoint, char) or nearestBed
-					cellCenter = gridPos(side.outerPoint) * 3
-					tryBreak(gridPos(side.outerPoint), side.outerPoint, (hrp.Position - side.outerPoint).Unit, CFrame.new(cellCenter), Vector3.new(3,3,3))
-				else
-					mineBlock = nearestBed
-					updateNukerHighlight(nearestBed.CFrame, nearestBed.Size)
 				end
-				updateCustomHpBar(mineBlock)
-				return
 			end
+		end
 
-			if bedOnly then
-				updateNukerHighlight(nil)
-				updateCustomHpBar(nil)
-				return
+		mineBlock = nil
+		blatBp, blatHit, blatNorm, blatCf, blatSize = nil, nil, nil, nil, nil
+
+		if nkDecision then
+			if nkDecision.open then
+				mineBlock = nkDecision.target
+				side = nkDecision
+				blatBp = nkGridOf(side.bedPoint)
+				blatHit = side.bedPoint + side.dir * 0.5
+				blatNorm = side.dir
+				blatCf = mineBlock.CFrame
+				blatSize = mineBlock.Size
+			else
+				solid = blockAtPoint(nkDecision.outer, char)
+				if solid and nkIsBreakableName(solid.Name) then
+					mineBlock = solid
+					blatBp = nkGridOf(nkDecision.outer)
+					blatHit = nkDecision.outer
+					blatNorm = (hrp.Position - nkDecision.outer).Unit
+					blatCf = CFrame.new(blatBp.X*3, blatBp.Y*3, blatBp.Z*3)
+					blatSize = Vector3.new(3,3,3)
+				end
 			end
-
+		elseif not bedOnly then
 			nearestTarget = nil
-			shortest = range
-			for name, group in pairs(targetMap) do
-				if name ~= "bed" and isGroupEnabled(name) then
-					for _, blk in ipairs(group) do
+			for _, g in ipairs(nkGroupPriority) do
+				if g ~= "bed" and isGroupEnabled(g) then
+					shortest = range
+					for _, blk in ipairs(targetMap[g]) do
 						if blk and blk.Parent then
 							d = (hrp.Position - blk.Position).Magnitude
 							if d < shortest then
@@ -15279,33 +15665,60 @@ Nuker.Callbacks.OnToggle = function(state)
 							end
 						end
 					end
+					if nearestTarget then break end
 				end
 			end
 
-			if not nearestTarget then
-				updateNukerHighlight(nil)
-				updateCustomHpBar(nil)
-				return
+			if nearestTarget then
+				tEv = nkEvalTarget(nearestTarget, char, range, false)
+				if tEv and not tEv.open and tEv.outer then
+					solid = blockAtPoint(tEv.outer, char)
+					if solid and nkIsBreakableName(solid.Name) then
+						mineBlock = solid
+						blatBp = nkGridOf(tEv.outer)
+						blatHit = tEv.outer
+						blatNorm = (hrp.Position - tEv.outer).Unit
+						blatCf = CFrame.new(blatBp.X*3, blatBp.Y*3, blatBp.Z*3)
+						blatSize = Vector3.new(3,3,3)
+					end
+				else
+					rayParams = RaycastParams.new()
+					rayParams.FilterType = Enum.RaycastFilterType.Exclude
+					rayParams.FilterDescendantsInstances = {char, nearestTarget}
+					rayParams.IgnoreWater = true
+					rayResult = G.Services.Workspace:Raycast(cam.CFrame.Position, nearestTarget.Position - cam.CFrame.Position, rayParams)
+					if rayResult and rayResult.Instance and (rayResult.Instance == nearestTarget or rayResult.Instance:IsDescendantOf(nearestTarget)) then
+						mineBlock = rayResult.Instance
+						inside = rayResult.Position - rayResult.Normal * 0.5
+						blatBp = nkGridOf(inside)
+						blatHit = rayResult.Position
+						blatNorm = rayResult.Normal
+						blatCf = CFrame.new(blatBp.X*3, blatBp.Y*3, blatBp.Z*3)
+						blatSize = Vector3.new(3,3,3)
+					else
+						mineBlock = nearestTarget
+						blatBp = nkGridOf(nearestTarget.Position)
+						blatHit = nearestTarget.Position
+						blatNorm = (cam.CFrame.Position - nearestTarget.Position).Unit
+						blatCf = nearestTarget.CFrame
+						blatSize = nearestTarget.Size
+					end
+				end
 			end
+		end
 
-			rayParams = RaycastParams.new()
-			rayParams.FilterType = Enum.RaycastFilterType.Exclude
-			rayParams.FilterDescendantsInstances = {char, nearestTarget}
-			rayParams.IgnoreWater = true
-			rayResult = G.Services.Workspace:Raycast(cam.CFrame.Position, nearestTarget.Position - cam.CFrame.Position, rayParams)
-
-			if rayResult and rayResult.Instance then
-				mineBlock = rayResult.Instance
-				inside = rayResult.Position - rayResult.Normal * 0.5
-				cellCenter = gridPos(inside) * 3
-				tryBreak(gridPos(inside), rayResult.Position, rayResult.Normal, CFrame.new(cellCenter), Vector3.new(3,3,3))
-			else
-				mineBlock = nearestTarget
-				tryBreak(gridPos(nearestTarget.Position), nearestTarget.Position, (cam.CFrame.Position - nearestTarget.Position).Unit, nearestTarget.CFrame, nearestTarget.Size)
+		if mineBlock then
+			nkAutoToolCheck(mineBlock, now) -- Auto Tool in Blatant
+			if blatBp then
+				tryBreak(blatBp, blatHit, blatNorm, blatCf, blatSize)
+				nkPredictHit(mineBlock, blatBp)
 			end
 			updateCustomHpBar(mineBlock)
-		end)
-	end
+		else
+			updateNukerHighlight(nil)
+			updateCustomHpBar(nil)
+		end
+	end)
 end
 function cleanupAlarm()
 	if activeAlarmData.model then
@@ -30789,4 +31202,617 @@ DamageBoost.Callbacks.OnToggle = function(state)
 			end
 		end
 	end
+end
+
+-- ============================================================
+--  UTILITY: Cheater Detector (v2 - accurate, no sliders)
+-- ============================================================
+if cd_mainConn then pcall(function() cd_mainConn:Disconnect() end) cd_mainConn = nil end
+if cd_dmgConn then pcall(function() cd_dmgConn:Disconnect() end) cd_dmgConn = nil end
+if cd_descConn then pcall(function() cd_descConn:Disconnect() end) cd_descConn = nil end
+if cd_remConn then pcall(function() cd_remConn:Disconnect() end) cd_remConn = nil end
+if cd_projConn then pcall(function() cd_projConn:Disconnect() end) cd_projConn = nil end
+if cd_chestConns then for _, c in pairs(cd_chestConns) do pcall(function() c:Disconnect() end) end end
+cd_chestConns = {}
+
+cd_players = {}
+cd_notifyCD = {}
+cd_chestLog = {}
+cd_owlTargets = {}
+cd_owlScan = 0
+
+CheaterDetector = Utility:CreateButton("Cheater Detector", nil, true)
+CheaterDetector:CreateToggle("Self", false, nil)
+CheaterDetector:CreateToggle("Reach", true, nil)
+CheaterDetector:CreateDropdown("Killaura Checks", {"Wall Check", "Angle"}, {"Wall Check", "Angle"}, nil, true)
+CheaterDetector:CreateToggle("Kaida Reach", true, nil)
+CheaterDetector:CreateToggle("Speed", true, nil)
+CheaterDetector:CreateToggle("Fly", true, nil)
+CheaterDetector:CreateToggle("Climber", true, nil)
+CheaterDetector:CreateToggle("Phase", true, nil)
+CheaterDetector:CreateToggle("No Fall", true, nil)
+CheaterDetector:CreateToggle("No Animations", true, nil)
+CheaterDetector:CreateToggle("Chest Stealer", true, nil)
+CheaterDetector:CreateToggle("Trap/Gloop Disabler", true, nil)
+CheaterDetector:CreateToggle("Inf Jump", true, nil)
+CheaterDetector:CreateToggle("Velocity", true, nil)
+CheaterDetector:CreateToggle("Scaffold", true, nil)
+CheaterDetector:CreateToggle("Quick Collect", true, nil)
+CheaterDetector:CreateToggle("Resource Collector", true, nil)
+CheaterDetector:CreateToggle("Long Jump", true, nil)
+CheaterDetector:CreateToggle("NoVoid", true, nil)
+CheaterDetector:CreateToggle("BlockCPS Bypass", true, nil)
+CheaterDetector:CreateToggle("Gravity", true, nil)
+CheaterDetector:CreateToggle("Nuker", true, nil)
+CheaterDetector:CreateToggle("Fast Break", true, nil)
+CheaterDetector:CreateToggle("Spin Bot", true, nil)
+CheaterDetector:CreateToggle("Projectile Aura", true, nil)
+
+-- ============ HELPERS ============
+cdState = function(plr)
+	if not cd_players[plr] then
+		cd_players[plr] = {
+			lastVel = Vector3.zero, nextSample = 0,
+			lastHurt = -999, velBefore = Vector3.zero, hurtTime = -999, velChecked = true,
+			fallY = nil, falling = false,
+			airTime = 0, climbTime = 0, phaseTime = 0, phaseNext = 0,
+			airJumps = 0, lastJumpSpike = 0,
+			moveTime = 0,
+			lastMelee = -999, lastMeleeAny = -999,
+			scafTimes = {}, trapTime = -999,
+			speedTime = 0, ljTime = 0, spinTime = 0, fallTime = 0,
+			lastLook = nil,
+			prevY = nil, wasFalling = false, pearlTime = -999,
+			lastPlace = -999, placeTimes = {},
+			lastBreak = -999,
+			collectTimes = {},
+			shotTimes = {},
+		}
+	end
+	return cd_players[plr]
+end
+
+cdNotify = function(plr, reason)
+	cd_key = tostring(plr.UserId) .. reason
+	cd_now = os.clock()
+	if cd_notifyCD[cd_key] and cd_now - cd_notifyCD[cd_key] < 6 then return end
+	cd_notifyCD[cd_key] = cd_now
+	NotificationSystem.Notify(plr.DisplayName, reason, 4)
+end
+
+cdShouldCheck = function(plr)
+	if plr == Player then return CheaterDetector.Values["Self"] == true end
+	return true
+end
+
+cdHeldName = function(char)
+	cd_hi = char:FindFirstChild("HandInvItem")
+	if cd_hi and cd_hi.Value then
+		return typeof(cd_hi.Value) == "Instance" and cd_hi.Value.Name or tostring(cd_hi.Value)
+	end
+	return nil
+end
+
+cdKaEnabled = function(checkName)
+	cd_ks = CheaterDetector.Values["Killaura Checks"]
+	if type(cd_ks) == "table" then return table.find(cd_ks, checkName) ~= nil end
+	return false
+end
+
+cdHasBalloon = function(char)
+	return (char:GetAttribute("InflatedBalloons") or 0) > 0
+end
+
+cdOwlScanNow = function()
+	cd_owlTargets = {}
+	for _, o in ipairs(G.Services.Workspace:GetChildren()) do
+		if o.Name == "ServerOwl" then
+			cd_t = o:GetAttribute("Target")
+			if cd_t then cd_owlTargets[cd_t] = true end
+		end
+	end
+end
+
+cdSpeedExempt = function(plr, char, st, now)
+	if cdHasBalloon(char) then return true end
+	if char:GetAttribute("SpeedBoost") then return true end
+	cd_kit = char:GetAttribute("PlayingAsKits") or char:GetAttribute("PlayingAsKit")
+	if cd_kit == "wind_walker" or cd_kit == "frosty_hammer" then return true end
+	if cd_owlTargets[plr.UserId] then return true end
+	if now - st.lastHurt < 0.6 then return true end
+	return false
+end
+
+cdNearestPlayer = function(pos, range)
+	cd_best, cd_bd = nil, range
+	for _, p in ipairs(Players:GetPlayers()) do
+		if cdShouldCheck(p) and p.Character then
+			cd_hr = p.Character:FindFirstChild("HumanoidRootPart")
+			if cd_hr then
+				cd_d = (cd_hr.Position - pos).Magnitude
+				if cd_d < cd_bd then cd_bd = cd_d; cd_best = p end
+			end
+		end
+	end
+	return cd_best, cd_bd
+end
+
+cdIsBlockName = function(n)
+	return n:find("wool") or n:find("plank") or n:find("stone") or n:find("wood") or n:find("glass") or n:find("brick") or n:find("sand") or n:find("clay") or n:find("bed")
+end
+
+cdIsResourceName = function(n)
+	return n == "iron" or n == "gold" or n == "diamond" or n == "emerald" or n == "star" or n == "treasure"
+end
+
+cdHookChest = function(part)
+	cd_folder = part:FindFirstChild("ChestFolderValue")
+	cd_folder = cd_folder and cd_folder.Value
+	if not cd_folder or cd_chestConns[cd_folder] then return end
+	cd_chestLog[cd_folder] = {}
+	cd_chestConns[cd_folder] = cd_folder.ChildRemoved:Connect(function(item)
+		if not loops["cheater detector"] or not CheaterDetector.Values["Chest Stealer"] then return end
+		if item.Name == "ChestOwner" then return end
+		cd_now = os.clock()
+		cd_times = cd_chestLog[cd_folder]
+		table.insert(cd_times, cd_now)
+		while #cd_times > 6 do table.remove(cd_times, 1) end
+		if #cd_times >= 3 and (cd_times[#cd_times] - cd_times[#cd_times - 2]) <= 0.35 then
+			cd_p = cdNearestPlayer(part.Position, 25)
+			if cd_p then cdNotify(cd_p, "Chest Stealer (instant loot)") end
+			cd_chestLog[cd_folder] = {}
+		end
+	end)
+end
+
+-- ============ DAMAGE EVENT (reach / KA / kaida / velocity) ============
+pcall(function()
+	cd_dmgConn = NetRemotes:WaitForChild("EntityDamageEvent", 10).OnClientEvent:Connect(function(data)
+		if not loops["cheater detector"] then return end
+		if type(data) ~= "table" then return end
+		cd_from = data.fromEntity
+		cd_victim = data.entityInstance
+		if typeof(cd_from) ~= "Instance" or typeof(cd_victim) ~= "Instance" then return end
+		if cd_from == cd_victim then return end
+		cd_fromPlr = Players:GetPlayerFromCharacter(cd_from)
+		cd_victimPlr = Players:GetPlayerFromCharacter(cd_victim)
+		cd_now = os.clock()
+
+		if cd_victimPlr and cdShouldCheck(cd_victimPlr) then
+			cd_st = cdState(cd_victimPlr)
+			cd_st.lastHurt = cd_now
+			if CheaterDetector.Values["Velocity"] then
+				cd_st.velBefore = cd_st.lastVel
+				cd_st.hurtTime = cd_now
+				cd_st.velChecked = false
+			end
+		end
+
+		if cd_fromPlr and cdShouldCheck(cd_fromPlr) then
+			cd_held = cdHeldName(cd_from)
+			cd_st = cdState(cd_fromPlr)
+			cd_st.lastMeleeAny = cd_now
+			if cd_held then
+				cd_fHRP = cd_from:FindFirstChild("HumanoidRootPart")
+				cd_vHRP = cd_victim:FindFirstChild("HumanoidRootPart")
+				if cd_fHRP and cd_vHRP then
+					cd_dist = (cd_fHRP.Position - cd_vHRP.Position).Magnitude
+
+					-- SWORD REACH: server max is 14.4, anything above = cheat
+					if CheaterDetector.Values["Reach"] and table.find(swords, cd_held) and cd_dist > 14.5 then
+						cdNotify(cd_fromPlr, "Reach (" .. math.floor(cd_dist) .. " studs)")
+					end
+
+					-- KAIDA REACH: normal claw max 21
+					if CheaterDetector.Values["Kaida Reach"] and cd_held:find("summoner_claw") and cd_dist > 21.5 then
+						cdNotify(cd_fromPlr, "Kaida Reach (" .. math.floor(cd_dist) .. " studs)")
+					end
+
+					if table.find(swords, cd_held) then
+						-- KA: WALL CHECK
+						if cdKaEnabled("Wall Check") and cd_dist <= 20 then
+							cd_wp = RaycastParams.new()
+							cd_wp.FilterType = Enum.RaycastFilterType.Exclude
+							cd_wp.FilterDescendantsInstances = {cd_from, cd_victim}
+							cd_w = G.Services.Workspace:Raycast(cd_fHRP.Position + Vector3.new(0, 1, 0), cd_vHRP.Position - cd_fHRP.Position, cd_wp)
+							if cd_w and cd_w.Instance and cd_w.Instance.CanCollide then
+								cdNotify(cd_fromPlr, "Killaura (no wall check)")
+							end
+						end
+						-- KA: ANGLE (hits from behind, ~180°)
+						if cdKaEnabled("Angle") then
+							cd_ang = math.deg(math.acos(math.clamp(cd_fHRP.CFrame.LookVector:Dot((cd_vHRP.Position - cd_fHRP.Position).Unit), -1, 1)))
+							if cd_ang >= 170 then
+								cdNotify(cd_fromPlr, "Killaura (360 angle hit)")
+							end
+						end
+						cd_st.lastMelee = cd_now
+					end
+				end
+			end
+		end
+	end)
+end)
+
+-- ============ WORLD WATCHER (scaffold / blockcps / fastbreak / nuker / quickcollect / resource) ============
+cd_descConn = G.Services.Workspace.DescendantAdded:Connect(function(d)
+	if not loops["cheater detector"] then return end
+
+	-- projectile aura + pearl tracking
+	if d.Parent and d.Parent.Name == "ProjectileTargeting" then
+		cd_now = os.clock()
+		cd_n = d.Name:lower()
+		-- pearl exemption for novoid
+		if cd_n:find("pearl") then
+			cd_p = cdNearestPlayer(d:GetPivot().Position, 15)
+			if cd_p then cdState(cd_p).pearlTime = cd_now end
+		end
+		if CheaterDetector.Values["Projectile Aura"] then
+			-- find owner via any attribute holding a player's UserId
+			cd_owner = nil
+			for cd_uid, cd_val in pairs(d:GetAttributes()) do
+				if type(cd_val) == "number" then
+					cd_op = Players:GetPlayerByUserId(cd_val)
+					if cd_op then cd_owner = cd_op break end
+				end
+			end
+			if cd_owner and cdShouldCheck(cd_owner) then
+				cd_st = cdState(cd_owner)
+				table.insert(cd_st.shotTimes, cd_now)
+				while #cd_st.shotTimes > 8 do table.remove(cd_st.shotTimes, 1) end
+				if #cd_st.shotTimes >= 2 and (cd_st.shotTimes[#cd_st.shotTimes] - cd_st.shotTimes[#cd_st.shotTimes - 1]) < 0.25 then
+					cdNotify(cd_owner, "Projectile Aura (fire rate)")
+					cd_st.shotTimes = {}
+				elseif #cd_st.shotTimes >= 3 and (cd_st.shotTimes[#cd_st.shotTimes] - cd_st.shotTimes[#cd_st.shotTimes - 2]) <= 1 then
+					cdNotify(cd_owner, "Projectile Aura (multi weapon)")
+					cd_st.shotTimes = {}
+				end
+			end
+		end
+		return
+	end
+
+	if not d:IsA("BasePart") then return end
+	cd_n = d.Name:lower()
+
+	-- chests
+	if CheaterDetector.Values["Chest Stealer"] and (cd_n == "chest" or cd_n == "team_crate") then
+		cdHookChest(d)
+		return
+	end
+
+	-- block placed
+	if CheaterDetector.Values["Scaffold"] or CheaterDetector.Values["BlockCPS Bypass"] then
+		if cdIsBlockName(cd_n) and not cd_n:find("bed") then
+			cd_now = os.clock()
+			cd_p, cd_pd = cdNearestPlayer(d.Position, 10)
+			if cd_p and (d.Position.Y - cd_p.Character.HumanoidRootPart.Position.Y) < 6 then
+				cd_st = cdState(cd_p)
+				cd_hr = cd_p.Character.HumanoidRootPart
+
+				-- BLOCKCPS BYPASS: placing faster than the 12 CPS cap
+				if CheaterDetector.Values["BlockCPS Bypass"] then
+					if cd_now - cd_st.lastPlace < 0.06 then
+						cdNotify(cd_p, "BlockCPS Bypass")
+					end
+				end
+				cd_st.lastPlace = cd_now
+
+				-- SCAFFOLD: blocks appearing under feet while NOT looking down & moving,
+				-- or placing while a sword is held (impossible legit)
+				if CheaterDetector.Values["Scaffold"] then
+					cd_dy = cd_hr.Position.Y - d.Position.Y
+					cd_held = cdHeldName(cd_p.Character)
+					if cd_dy > 1 and cd_dy < 5 and cd_hr.CFrame.LookVector.Y > -0.15 and cd_hr.AssemblyLinearVelocity.Magnitude > 4 then
+						table.insert(cd_st.scafTimes, cd_now)
+						while #cd_st.scafTimes > 6 do table.remove(cd_st.scafTimes, 1) end
+						if #cd_st.scafTimes >= 2 and (cd_st.scafTimes[#cd_st.scafTimes] - cd_st.scafTimes[#cd_st.scafTimes - 1]) <= 2 then
+							cdNotify(cd_p, "Scaffold (auto bridge)")
+							cd_st.scafTimes = {}
+						end
+					elseif cd_held and table.find(swords, cd_held) then
+						cdNotify(cd_p, "Scaffold (placing with sword)")
+					end
+				end
+			end
+		end
+	end
+
+	-- resource collected? (added = dropped; removal handled below)
+end)
+
+cd_remConn = G.Services.Workspace.DescendantRemoving:Connect(function(d)
+	if not loops["cheater detector"] then return end
+	cd_now = os.clock()
+
+	-- trap trigger
+	if CheaterDetector.Values["Trap/Gloop Disabler"] and d:IsA("BasePart") and d.Name == "snap_trap" then
+		cd_p = cdNearestPlayer(d.Position, 6)
+		if cd_p then cdState(cd_p).trapTime = cd_now end
+		return
+	end
+
+	if not d:IsA("BasePart") then return end
+	cd_n = d.Name:lower()
+
+	-- block broken (fast break / nuker)
+	if (CheaterDetector.Values["Fast Break"] or CheaterDetector.Values["Nuker"]) and cdIsBlockName(cd_n) then
+		cd_p = cdNearestPlayer(d.Position, 8)
+		if cd_p then
+			cd_st = cdState(cd_p)
+			if CheaterDetector.Values["Fast Break"] and cd_now - cd_st.lastBreak < 0.25 then
+				cdNotify(cd_p, "Fast Break (<0.3s)")
+			end
+			if CheaterDetector.Values["Nuker"] and cd_now - cd_st.lastMeleeAny < 0.5 then
+				cdNotify(cd_p, "Nuker (mining while hitting)")
+			end
+			cd_st.lastBreak = cd_now
+		end
+	end
+
+	-- resource pickup (quick collect / range)
+	if (CheaterDetector.Values["Quick Collect"] or CheaterDetector.Values["Resource Collector"]) and cdIsResourceName(cd_n) then
+		cd_p, cd_pd = cdNearestPlayer(d.Position, 30)
+		if cd_p then
+			cd_st = cdState(cd_p)
+			if CheaterDetector.Values["Resource Collector"] and cd_pd > 8 then
+				cdNotify(cd_p, "Resource Collector (" .. math.floor(cd_pd) .. " studs)")
+			end
+			if CheaterDetector.Values["Quick Collect"] then
+				table.insert(cd_st.collectTimes, cd_now)
+				while #cd_st.collectTimes > 6 do table.remove(cd_st.collectTimes, 1) end
+				if #cd_st.collectTimes >= 3 and (cd_st.collectTimes[#cd_st.collectTimes] - cd_st.collectTimes[#cd_st.collectTimes - 2]) <= 0.3 then
+					cdNotify(cd_p, "Quick Collect (no pickup delay)")
+					cd_st.collectTimes = {}
+				end
+			end
+		end
+	end
+end)
+
+for _, p in ipairs(G.Services.Workspace:GetDescendants()) do
+	if p:IsA("BasePart") and (p.Name == "chest" or p.Name == "team_crate") then
+		cdHookChest(p)
+	end
+end
+
+-- ============ MAIN MOVEMENT LOOP ============
+cd_mainConn = G.Services.RunService.Heartbeat:Connect(function()
+	if not loops["cheater detector"] then return end
+	cd_now = os.clock()
+	if cd_now - cd_owlScan > 1 then cd_owlScan = cd_now; cdOwlScanNow() end
+
+	for _, p in ipairs(Players:GetPlayers()) do
+		if cdShouldCheck(p) then
+			cd_char = p.Character
+			if cd_char then
+				cd_hr = cd_char:FindFirstChild("HumanoidRootPart")
+				cd_hum = cd_char:FindFirstChildOfClass("Humanoid")
+				if cd_hr and cd_hum and cd_hum.Health > 0 and cd_now >= cdState(p).nextSample then
+					cd_st = cdState(p)
+					cd_st.nextSample = cd_now + 0.1
+					cd_dt = 0.1
+					cd_vel = cd_hr.AssemblyLinearVelocity
+					cd_hSpeed = Vector3.new(cd_vel.X, 0, cd_vel.Z).Magnitude
+					cd_grounded = cd_hum.FloorMaterial ~= Enum.Material.Air
+
+					-- VELOCITY
+					if CheaterDetector.Values["Velocity"] and not cd_st.velChecked and cd_st.hurtTime > 0 then
+						cd_dh = cd_now - cd_st.hurtTime
+						if cd_dh >= 0.1 and cd_dh <= 0.3 then
+							cd_st.velChecked = true
+							if (cd_vel - cd_st.velBefore).Magnitude < 8 then
+								cdNotify(p, "Velocity (no knockback)")
+							end
+						end
+					end
+
+					-- SPEED (fixed 21 threshold, potion/zephyr/adetunde/owl/knockback exempt)
+					if CheaterDetector.Values["Speed"] then
+						if cd_hSpeed > 21 and not cdSpeedExempt(p, cd_char, cd_st, cd_now) then
+							cd_st.speedTime = cd_st.speedTime + cd_dt
+							if cd_st.speedTime > 0.5 then
+								cdNotify(p, "Speed (" .. math.floor(cd_hSpeed) .. ")")
+								cd_st.speedTime = 0
+							end
+						else
+							cd_st.speedTime = 0
+						end
+					end
+
+					-- LONG JUMP (fireball/yuzi boosted beyond normal)
+					if CheaterDetector.Values["Long Jump"] then
+						if cd_hSpeed > 45 and now and not cdSpeedExempt(p, cd_char, cd_st, cd_now) then
+							cd_st.ljTime = cd_st.ljTime + cd_dt
+							if cd_st.ljTime > 0.25 then
+								cdNotify(p, "Long Jump")
+								cd_st.ljTime = 0
+							end
+						else
+							cd_st.ljTime = 0
+						end
+					end
+
+					-- FLY (hover, balloon/owl exempt)
+					if CheaterDetector.Values["Fly"] then
+						if not cd_grounded and not cdSpeedExempt(p, cd_char, cd_st, cd_now) then
+							if math.abs(cd_vel.Y) < 3 or cd_vel.Y > 2 then
+								cd_st.airTime = cd_st.airTime + cd_dt
+								if cd_st.airTime > 0.8 then
+									cdNotify(p, "Fly")
+									cd_st.airTime = 0
+								end
+							else
+								cd_st.airTime = 0
+							end
+						else
+							cd_st.airTime = 0
+						end
+					end
+
+					-- CLIMBER (faster response)
+					if CheaterDetector.Values["Climber"] then
+						if cd_vel.Y > 12 then
+							cd_st.climbTime = cd_st.climbTime + cd_dt
+							if cd_st.climbTime > 0.3 then
+								cd_cp = RaycastParams.new()
+								cd_cp.FilterType = Enum.RaycastFilterType.Exclude
+								cd_cp.FilterDescendantsInstances = {cd_char}
+								cd_w = G.Services.Workspace:Raycast(cd_hr.Position, cd_hr.CFrame.LookVector * 2.5, cd_cp)
+								if cd_w then
+									cdNotify(p, "Climber")
+									cd_st.climbTime = 0
+								end
+							end
+						else
+							cd_st.climbTime = 0
+						end
+					end
+
+					-- PHASE (only counts walls whose top is ABOVE your centre = truly inside)
+					if CheaterDetector.Values["Phase"] and cd_now >= cd_st.phaseNext then
+						cd_st.phaseNext = cd_now + 0.15
+						cd_pp = OverlapParams.new()
+						cd_pp.FilterType = Enum.RaycastFilterType.Exclude
+						cd_pp.FilterDescendantsInstances = {cd_char}
+						cd_in = G.Services.Workspace:GetPartBoundsInBox(cd_hr.CFrame, Vector3.new(1, 1, 1), cd_pp)
+						cd_solid = false
+						for _, b in ipairs(cd_in) do
+							if b.CanCollide and (b.Position.Y + b.Size.Y / 2) > cd_hr.Position.Y + 0.5 then
+								cd_solid = true
+								break
+							end
+						end
+						if cd_solid then
+							cd_st.phaseTime = cd_st.phaseTime + 0.15
+							if cd_st.phaseTime > 0.45 then
+								cdNotify(p, "Phase")
+								cd_st.phaseTime = 0
+							end
+						else
+							cd_st.phaseTime = 0
+						end
+					end
+
+					-- NO FALL
+					if CheaterDetector.Values["No Fall"] then
+						if cd_vel.Y < -12 then
+							cd_st.falling = true
+							if not cd_st.fallY or cd_hr.Position.Y < cd_st.fallY then cd_st.fallY = cd_hr.Position.Y end
+						elseif cd_st.falling and cd_grounded then
+							cd_st.falling = false
+							if cd_st.fallY and (cd_st.fallY - cd_hr.Position.Y) > 12 and cd_now - cd_st.lastHurt > 0.3 then
+								cdNotify(p, "No Fall")
+							end
+							cd_st.fallY = nil
+						end
+					end
+
+					-- INF JUMP (needs 3 air jumps, balloon/wind_walker exempt)
+					if CheaterDetector.Values["Inf Jump"] then
+						if not cd_grounded and not cdHasBalloon(cd_char) and (cd_char:GetAttribute("PlayingAsKits") or "") ~= "wind_walker" then
+							if cd_vel.Y > 40 and cd_now - cd_st.lastJumpSpike > 0.25 then
+								cd_st.airJumps = cd_st.airJumps + 1
+								cd_st.lastJumpSpike = cd_now
+								if cd_st.airJumps >= 3 then
+									cdNotify(p, "Inf Jump")
+									cd_st.airJumps = 0
+								end
+							end
+						else
+							cd_st.airJumps = 0
+						end
+					end
+
+					-- NOVOID (teleport up right after falling, pearl exempt)
+					if CheaterDetector.Values["NoVoid"] then
+						if cd_st.prevY then
+							if (cd_hr.Position.Y - cd_st.prevY) > 15 and cd_st.wasFalling and cd_now - cd_st.pearlTime > 1 then
+								cdNotify(p, "NoVoid")
+							end
+						end
+						cd_st.wasFalling = cd_vel.Y < -10
+						cd_st.prevY = cd_hr.Position.Y
+					end
+
+					-- GRAVITY (falling too slowly for too long)
+					if CheaterDetector.Values["Gravity"] then
+						if not cd_grounded and cd_vel.Y < 0 and cd_vel.Y > -12 and not cdHasBalloon(cd_char) then
+							cd_st.fallTime = cd_st.fallTime + cd_dt
+							if cd_st.fallTime > 0.3 then
+								cdNotify(p, "Gravity")
+								cd_st.fallTime = 0
+							end
+						else
+							cd_st.fallTime = 0
+						end
+					end
+
+					-- SPIN BOT (sustained insane rotation)
+					if CheaterDetector.Values["Spin Bot"] then
+						cd_look = cd_hr.CFrame.LookVector
+						if cd_st.lastLook then
+							cd_spin = math.deg(math.acos(math.clamp(cd_look:Dot(cd_st.lastLook), -1, 1)))
+							if cd_spin > 50 then
+								cd_st.spinTime = cd_st.spinTime + cd_dt
+								if cd_st.spinTime > 0.5 then
+									cdNotify(p, "Spin Bot")
+									cd_st.spinTime = 0
+								end
+							else
+								cd_st.spinTime = 0
+							end
+						end
+						cd_st.lastLook = cd_look
+					end
+
+					-- TRAP DISABLER
+					if CheaterDetector.Values["Trap/Gloop Disabler"] then
+						if cd_now - cd_st.trapTime < 1 and cd_hSpeed > 10 then
+							cdNotify(p, "Trap Disabler")
+							cd_st.trapTime = -999
+						end
+						if cd_hSpeed > 13 then
+							cd_gp = OverlapParams.new()
+							cd_gp.FilterType = Enum.RaycastFilterType.Exclude
+							cd_gp.FilterDescendantsInstances = {cd_char}
+							cd_gin = G.Services.Workspace:GetPartBoundsInBox(cd_hr.CFrame, Vector3.new(3, 3, 3), cd_gp)
+							for _, g in ipairs(cd_gin) do
+								if g.Name:lower():find("gloop") then
+									cdNotify(p, "Gloop Disabler")
+									break
+								end
+							end
+						end
+					end
+
+					-- NO ANIMATIONS
+					if CheaterDetector.Values["No Animations"] then
+						if cd_hSpeed > 8 then
+							cd_st.moveTime = cd_st.moveTime + cd_dt
+							if cd_st.moveTime > 2 then
+								cd_st.moveTime = 0
+								cd_anim = cd_hum:FindFirstChildOfClass("Animator")
+								if cd_anim and #cd_anim:GetPlayingAnimationTracks() == 0 then
+									cdNotify(p, "No Animations")
+								end
+							end
+						else
+							cd_st.moveTime = 0
+						end
+					end
+
+					cd_st.lastVel = cd_vel
+				end
+			end
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+	cd_players[p] = nil
+end)
+
+CheaterDetector.Callbacks.OnToggle = function(state)
+	loops["cheater detector"] = state
 end
