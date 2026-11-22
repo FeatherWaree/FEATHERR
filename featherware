@@ -117,6 +117,15 @@ function FWNoModules.CreateTaskScope(nativeTask)
             if item == owner then local service=runtime.bindings[name];if service then pcall(function()service:UnbindFromRenderStep(name)end)end;runtime.bindingOwners[name]=nil;runtime.bindings[name]=nil end
         end
     end
+    function FWNoModules.WithSessionOwner(callback,...)
+        local thread=coroutine.running()
+        local previous=thread and runtime.owners[thread]
+        if thread then runtime.owners[thread]=nil end
+        local result=table.pack(pcall(callback,...))
+        if thread then runtime.owners[thread]=previous end
+        if not result[1]then error(result[2],0)end
+        return table.unpack(result,2,result.n)
+    end
     function FWNoModules.RunModuleCallbacks(owner, constructor, state)
         if not state then FWNoModules.CancelFeature(owner)
         elseif runtime.UpdateFeatureHooks then runtime.UpdateFeatureHooks(owner,true)end
@@ -1984,17 +1993,24 @@ do
     function api.Subscribe(callback) listeners[callback] = true; return function() listeners[callback] = nil end end
     function api.Value(value) if value ~= nilValue then return value end end
     api.Clone, api.Encode, api.Decode, api.Equal = clone, encode, decode, equal
+    local function readBinding(binding)
+        local ok,value=pcall(binding.get)
+        if ok then binding.last=clone(value);return value end
+        local saved=_G.SavedConfig[binding.key]
+        if saved~=nil then return api.Value(clone(saved))end
+        return api.Value(clone(binding.last))
+    end
     function api.Register(key, get, set, owner, kind)
         if api.bindings[key] then return end
         local binding = {key = key, get = get, set = set, owner = owner, kind = kind}
-        binding.default = clone(get())
+        binding.default = clone(readBinding(binding))
         api.bindings[key] = binding
         api.order[#api.order + 1] = binding
         if _G.SavedConfig[key] ~= nil and kind == "custom" then set(api.Value(clone(_G.SavedConfig[key]))) end
     end
     function api.Snapshot()
         local result = clone(_G.SavedConfig)
-        for _, binding in ipairs(api.order) do result[binding.key] = clone(binding.get()) end
+        for _, binding in ipairs(api.order) do result[binding.key] = clone(readBinding(binding)) end
         return result
     end
     function api.GetProfiles() return manifest.profiles end
@@ -2047,7 +2063,7 @@ do
         for _, binding in ipairs(api.order) do
             local value = data[binding.key]
             if value == nil then value = baseline[binding.key];if value==nil then value=binding.default end end
-            if not equal(encode(binding.get()), encode(value)) then
+            if not equal(encode(readBinding(binding)), encode(value)) then
                 differences[#differences + 1] = {binding = binding, value = clone(value)}
                 if binding.owner and binding.owner.Toggled ~= nil then affected[binding.owner] = true end
             end
@@ -4104,9 +4120,12 @@ local function injectElements(mod, settingsCont, uniquePrefix)
         _G.__FW_REFRESH_MODULE_LIST = function()
             if refreshPending then return end
             refreshPending = true
-            task.defer(function()
-                refreshPending = false
-                if moduleListFrame.Parent then refreshModuleListVisuals() end
+            -- List updates must survive the feature which requested them turning off.
+            FWNoModules.WithSessionOwner(function()
+                task.defer(function()
+                    refreshPending = false
+                    if moduleListFrame.Parent then refreshModuleListVisuals() end
+                end)
             end)
         end
 		task.defer(refreshModuleListVisuals)
@@ -5171,15 +5190,14 @@ local moduleGui = FWNoModules.OwnInstance(Instance.new("ScreenGui"))
 moduleGui.Name = guiName
 moduleGui.ResetOnSpawn = false
 moduleGui.IgnoreGuiInset = true
-pcall(function() moduleGui.Parent = CoreGui end)
-if not moduleGui.Parent then moduleGui.Parent = PlayerGui end
+moduleGui.Parent = PlayerGui
 FWNoModules.PinOverlay(moduleGui, 2147483646)
 FWNoModules.Connect(mainScreenUI.Destroying, function() moduleGui:Destroy() end)
 
 local gui = FWNoModules.OwnInstance(Instance.new("ScreenGui"))
 gui.Name = "Notifications"
 gui.ResetOnSpawn = false
-gui.Parent = CoreGui
+gui.Parent = PlayerGui
 
 local holder = FWNoModules.OwnInstance(Instance.new("Frame"))
 holder.Parent = gui
@@ -5322,6 +5340,7 @@ local function disableCurrentAnimations(char)
 end
 
 function NotificationSystem.Notify(title, text, duration)
+    return FWNoModules.WithSessionOwner(function()
 	local cfg = NotificationSystem.Settings
 	if not cfg.Enabled then return end
 	duration = duration or cfg.Lifetime
@@ -5448,12 +5467,22 @@ function NotificationSystem.Notify(title, text, duration)
 				FWNoModules.OwnTween(TweenService:Create(v, SLIDE_OUT, { BackgroundTransparency = 1 })):Play()
 			end
 		end
-		exit.Completed:Wait()
-		frame:Destroy()
+        local complete
+        local finished=false
+        local function finish()
+            if finished then return end
+            finished=true
+            if complete then FWNoModules.ReleaseConnection(complete)end
+            if frame.Parent then frame:Destroy()end
+        end
+        complete=FWNoModules.Connect(exit.Completed,finish)
+        -- A cancelled/replaced tween must not leave a permanent notification.
+        task.delay(.45,finish)
 	end
 
 	FWNoModules.Connect(frame.Activated, FWNoModules.Mobile.Activation(dismiss)) 
 	task.delay(duration, dismiss)
+    end)
 end
 
 local function UninjectFW()
@@ -10089,6 +10118,21 @@ do
         return fallbackCooldown, "fallback (metadata unavailable)"
     end
 
+    function timing.BufferInfo(name)
+        local cooldown=timing.WeaponCooldown(name)
+        local constants=canRequire and CombatData and CombatData.SwordsConstants
+        local multiplier=constants and constants.swordSwingBufferMultiplier
+        if not finite(multiplier)or multiplier<0 then multiplier=.4 end
+        local remaining
+        if kaSwordController and type(kaSwordController.getRemainingSwingCooldown)=="function"then
+            local ok,value=pcall(kaSwordController.getRemainingSwingCooldown,kaSwordController,name)
+            if ok and finite(value)then remaining=math.max(0,value)end
+        end
+        -- The supplied controller uses this admission window, then delays by
+        -- (attackSpeed - elapsed) * 1.01. This is not a shorter weapon cooldown.
+        return math.min(cooldown*multiplier,.2),remaining,multiplier
+    end
+
     function timing.AdjusterDelay(name, rate)
         local cooldown = timing.WeaponCooldown(name)
         return math.max(timing.Period(rate), cooldown)
@@ -10137,6 +10181,12 @@ do
         print(string.format("[Sword timing] Cooldown=%.6fs via %s | Effective configured target=%.3f requests/10s", cooldown, source, 10 / interval))
         print(string.format("[Sword timing] Last 10s: Killaura send calls=%d | All locally adjuster-blocked SwordHit calls=%d | Session age=%.2fs", count, blocked, age))
         if count > 1 then print(string.format("[Sword timing] Observed gaps: min=%.6fs avg=%.6fs max=%.6fs", minGap, average, maxGap)) end
+        local window,remaining,multiplier=timing.BufferInfo(session.Weapon or "")
+        print(string.format("[Sword timing] Controller buffer window=%.6fs | Multiplier=%.3f | Remaining local cooldown=%s",window,multiplier,remaining and string.format("%.6fs",remaining)or"unavailable"))
+        print("[Sword timing] Buffered swings wait for attackSpeed; the buffer does not remove a server cooldown or rolling hit limit.")
+        if cooldown>0 and tonumber(requested)and tonumber(requested)>10/cooldown then
+            print(string.format("[Sword timing] Requested rate exceeds this weapon's local metadata ceiling (%.3f/10s). A higher accepted admin rate needs matching server-side rules.",10/cooldown))
+        end
         print("[Sword timing] Send calls are not server-confirmed sword hits. Take this report after at least 10 seconds of continuous attacks.")
     end
 
@@ -27008,100 +27058,94 @@ if hookmetamethod and newcclosure then
     if loops["win effects"] then installOnce() end
 end
 
-local function playNightmareEmote()
-	local character = Player.Character
-	if not character then return end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 then return end
-
-	local lowerTorso = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
-	if not lowerTorso then return end
-
-	animator = humanoid:FindFirstChildOfClass("Animator")
-	if not animator then
-		NotificationSystem.Notify("Nightmare Emote", "No animator found", 1)
-		return
-	end
-
-	local anim = FWNoModules.OwnInstance(Instance.new("Animation"))
-	anim.AnimationId = "rbxassetid://9191822700"
-	local track = FWNoModules.OwnInstance(animator:LoadAnimation(anim))
-	track.Priority = Enum.AnimationPriority.Action
-	track:Play()
-
-	-- 2. Spawn & Setup VFX
-	local vfxClone = nil
-	local success, nightmareVfxTemplate = pcall(function()
-		return G.Services.RS:WaitForChild("Assets", 2):WaitForChild("Effects", 2):WaitForChild("NightmareEmote", 2)
-	end)
-
-	if success and nightmareVfxTemplate then
-		vfxClone = FWNoModules.OwnInstance(nightmareVfxTemplate:Clone())
-		vfxClone.Parent = G.Services.Workspace
-
-		-- Position it exactly like the decompiled controller
-		vfxClone:PivotTo(lowerTorso.CFrame + Vector3.new(0, -2, 0))
-
-		-- Anchor and disable collisions/raycasting
-		for _, descendant in ipairs(vfxClone:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				descendant.CanCollide = false
-				descendant.Anchored = true
-				descendant.CanQuery = false
-				descendant.CanTouch = false
-			end
-		end
-
-		-- Rotate Outer and Middle parts infinitely
-		local outer = vfxClone:FindFirstChild("Outer")
-		if outer then
-			FWNoModules.OwnTween(TweenService:Create(outer, TweenInfo.new(1.5, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1), {Orientation = outer.Orientation + Vector3.new(0, 360, 0)})):Play()
-		end
-
-		local middle = vfxClone:FindFirstChild("Middle")
-		if middle then
-			FWNoModules.OwnTween(TweenService:Create(middle, TweenInfo.new(12.5, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1), {Orientation = middle.Orientation + Vector3.new(0, -360, 0)})):Play()
-		end
-	end
-
-	-- 3. Cleanup on Movement / Jumping / Dying
-	local moveConnection, jumpConnection, deadConnection
-
-	local function cleanup()
-		if track and track.IsPlaying then track:Stop(0.1) end
-		if vfxClone and vfxClone.Parent then vfxClone:Destroy() end
-		if moveConnection then moveConnection:Disconnect() end
-		if jumpConnection then jumpConnection:Disconnect() end
-		if deadConnection then deadConnection:Disconnect() end
-	end
-
-	moveConnection = FWNoModules.Connect(humanoid:GetPropertyChangedSignal("MoveDirection"), function()
-		if humanoid.MoveDirection.Magnitude > 0 then
-			cleanup()
-		end
-	end)
-
-	jumpConnection = FWNoModules.Connect(humanoid:GetPropertyChangedSignal("Jump"), function()
-		if humanoid.Jump then
-			cleanup()
-		end
-	end)
-
-	deadConnection = FWNoModules.Connect(humanoid.Died, function()
-		cleanup()
-	end)
+-- This emote stays enabled until stopped, moved, jumped, or the character dies.
+do
+    local button
+    local active
+    local function stop()
+        local state=active
+        if not state then return end
+        active=nil
+        for _,connection in ipairs(state.connections)do FWNoModules.ReleaseConnection(connection)end
+        for _,animation in ipairs(state.tweens)do pcall(function()animation:Cancel()end)end
+        if state.track then
+            pcall(function()state.track:Stop(.1);state.track:Destroy()end)
+            FWNoModules.ReleaseInstance(state.track)
+        end
+        if state.vfx then state.vfx:Destroy();FWNoModules.ReleaseInstance(state.vfx)end
+        if state.animation then state.animation:Destroy();FWNoModules.ReleaseInstance(state.animation)end
+    end
+    local function disable(state)
+        if active~=state then return end
+        stop()
+        if button and button.Toggled then button:SetState(false)end
+    end
+    local function play()
+        stop()
+        local character=Player.Character
+        local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+        local torso=character and(character:FindFirstChild("LowerTorso")or character:FindFirstChild("Torso"))
+        local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
+        if not humanoid or humanoid.Health<=0 or not torso or not animator then
+            NotificationSystem.Notify("Nightmare Emote","A living character with an animator is required.",2)
+            if button and button.Toggled then button:SetState(false)end
+            return
+        end
+        local state={connections={},tweens={}}
+        active=state
+        local function connect(signal,callback)
+            state.connections[#state.connections+1]=FWNoModules.Connect(signal,callback)
+        end
+        connect(humanoid:GetPropertyChangedSignal("MoveDirection"),function()
+            if humanoid.MoveDirection.Magnitude>.05 then disable(state)end
+        end)
+        connect(humanoid:GetPropertyChangedSignal("Jump"),function()if humanoid.Jump then disable(state)end end)
+        connect(humanoid.Died,function()disable(state)end)
+        connect(Player.CharacterRemoving,function(removed)if removed==character then disable(state)end end)
+        state.animation=FWNoModules.OwnInstance(Instance.new("Animation"))
+        state.animation.AnimationId="rbxassetid://9191822700"
+        local ok,track=pcall(animator.LoadAnimation,animator,state.animation)
+        if not ok then
+            disable(state);NotificationSystem.Notify("Nightmare Emote","Animation could not be loaded.",2)
+            return
+        end
+        state.track=FWNoModules.OwnInstance(track)
+        connect(track.Stopped,function()disable(state)end)
+        track.Priority=Enum.AnimationPriority.Action
+        track.Looped=true
+        track:Play()
+        local found,template=pcall(function()
+            local assets=G.Services.RS:FindFirstChild("Assets")or G.Services.RS:WaitForChild("Assets",2)
+            local effects=assets and(assets:FindFirstChild("Effects")or assets:WaitForChild("Effects",2))
+            return effects and(effects:FindFirstChild("NightmareEmote")or effects:WaitForChild("NightmareEmote",2))
+        end)
+        if active~=state or Player.Character~=character then return end
+        if found and template then
+            state.vfx=FWNoModules.OwnInstance(template:Clone())
+            connect(state.vfx.Destroying,function()
+                if active==state then state.vfx=nil;disable(state)end
+            end)
+            state.vfx:PivotTo(torso.CFrame+Vector3.new(0,-2,0))
+            for _,part in ipairs(state.vfx:GetDescendants())do
+                if part:IsA("BasePart")then
+                    part.CanCollide=false;part.Anchored=true;part.CanQuery=false;part.CanTouch=false
+                end
+            end
+            state.vfx.Parent=G.Services.Workspace
+            for _,spec in ipairs({{"Outer",1.5,360},{"Middle",12.5,-360}})do
+                local part=state.vfx:FindFirstChild(spec[1])
+                if part and part:IsA("BasePart")then
+                    local animation=FWNoModules.OwnTween(TweenService:Create(part,TweenInfo.new(spec[2],Enum.EasingStyle.Linear,Enum.EasingDirection.Out,-1),{Orientation=part.Orientation+Vector3.new(0,spec[3],0)}))
+                    state.tweens[#state.tweens+1]=animation;animation:Play()
+                end
+            end
+        end
+    end
+    button=GameTab:CreateButton("Nightmare Emote",function(enabled)
+        if enabled then play()else stop()end
+    end,false)
+    FWNoModules.OnCleanup(stop)
 end
-
--- Add the Button to your UI (Assuming 'GameTab' is already created in your script)
-local NightmareEmoteBtn
-NightmareEmoteBtn = GameTab:CreateButton("Nightmare Emote", function(state)
-	if state then
-		playNightmareEmote()
-		task.wait(0.5)
-		NightmareEmoteBtn.Toggled = false
-		NightmareEmoteBtn:SetState(false)
-	end
-end, false)
 
 
 FreeLobbyGadget = Visuals:CreateButton("Free Lobby Gadget", nil, true)
@@ -32398,8 +32442,7 @@ function FWNoModules.BuildPlayerDisplay()
         Name = "Featherware_PlayerDisplay", ResetOnSpawn = false, IgnoreGuiInset = true,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Enabled = false,
     })
-    pcall(function() state.gui.Parent = G.Services.CoreGui end)
-    if not state.gui.Parent then state.gui.Parent = PlayerGui end
+    state.gui.Parent = PlayerGui
     FWNoModules.PinOverlay(state.gui, 2147483647)
     pdGui = state.gui
 
@@ -34794,8 +34837,7 @@ function FWNoModules.Mobile.AttachUI(menu,main,scroll,save)
     local rootGui=make("ScreenGui",nil,{Name="Featherware_MobileControls",ResetOnSpawn=false,IgnoreGuiInset=false,DisplayOrder=2147483647,ZIndexBehavior=Enum.ZIndexBehavior.Sibling})
     rootGui:SetAttribute("FWM_ControlRoot",true)
     pcall(function()rootGui.ScreenInsets=Enum.ScreenInsets.CoreUISafeInsets;rootGui.ClipToDeviceSafeArea=true end)
-    pcall(function()rootGui.Parent=game:GetService("CoreGui")end)
-    if not rootGui.Parent then rootGui.Parent=players.LocalPlayer:WaitForChild("PlayerGui")end
+    rootGui.Parent=players.LocalPlayer:WaitForChild("PlayerGui")
     local root=make("Frame",rootGui,{Name="SafeArea",Size=UDim2.new(1,0,1,0),BackgroundTransparency=1})
     local launcher=button(root,"FW")
     launcher.Name="MenuButton";launcher.Size=UDim2.new(0,40,0,40);launcher.Position=UDim2.new(0,12,.3,0)
