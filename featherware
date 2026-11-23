@@ -63952,78 +63952,62 @@ function FWNoModules.BuildProfilesUI()
 end
 
 -- Texture detail reduction. No post-processing blur or render-step loop.
+function FWNoModules.ReduceTexturePixels(pixels,sourceWidth,sourceHeight,width,height,checkpoint)
+    assert(buffer.len(pixels)==sourceWidth*sourceHeight*4,"Unexpected source pixel buffer length")
+    local output=buffer.create(width*height*4)
+    local samples,visible=0,false
+    for y=0,height-1 do
+        local y0=math.floor(y*sourceHeight/height)
+        local y1=math.max(y0,math.floor((y+1)*sourceHeight/height)-1)
+        for x=0,width-1 do
+            local x0=math.floor(x*sourceWidth/width)
+            local x1=math.max(x0,math.floor((x+1)*sourceWidth/width)-1)
+            local red,green,blue,alpha,count=0,0,0,0,0
+            for sy=y0,y1 do
+                for sx=x0,x1 do
+                    local offset=(sy*sourceWidth+sx)*4
+                    local a=buffer.readu8(pixels,offset+3)
+                    -- Premultiply by alpha so transparent white borders cannot wash out colours.
+                    red+=buffer.readu8(pixels,offset)*a
+                    green+=buffer.readu8(pixels,offset+1)*a
+                    blue+=buffer.readu8(pixels,offset+2)*a
+                    alpha+=a;count+=1;samples+=1
+                    if samples%4096==0 and checkpoint and not checkpoint()then return nil,"cancelled"end
+                end
+            end
+            local offset=(y*width+x)*4
+            if alpha>0 then
+                visible=true
+                buffer.writeu8(output,offset,math.floor(red/alpha+.5))
+                buffer.writeu8(output,offset+1,math.floor(green/alpha+.5))
+                buffer.writeu8(output,offset+2,math.floor(blue/alpha+.5))
+            end
+            buffer.writeu8(output,offset+3,math.floor(alpha/count+.5))
+        end
+    end
+    if not visible then return nil,"transparent"end
+    return output
+end
+
 function FWNoModules.CreateBlurryGraphics(deps)
     local api = {IncludeGUI=false, Quality="Very Blurry"}
     local current, working, enabled = nil, false, false
+    local pendingRestores={}
     local levels = {["Very Blurry"]=0,["Blurry"]=1,["Slightly Blurry"]=2}
     local limits = {[0]=64,[1]=128,[2]=256}
-    local savedFlags = {}
     local maxPixels, maxImages = 4194304, 256
-    local kick, observe, forget
+    local kick, observe, forget, summarize
     local function notify(message)
         if deps.Notify then pcall(deps.Notify,message)end
+    end
+    local function log(message)
+        if deps.Log then pcall(deps.Log,"[Featherware/Blurry Graphics] "..message)end
     end
     local function destroy(image)
         if image then pcall(function()image:Destroy()end)end
     end
     local function release(connection)
         if connection then deps.Disconnect(connection)end
-    end
-    local function canonical(value)
-        return string.lower(tostring(value))
-    end
-    local function readFlag(name, boolean)
-        if type(deps.GetFlag)=="function"then
-            for _,key in ipairs({name,(boolean and "DFFlag"or"DFInt")..name})do
-                local ok,value=pcall(deps.GetFlag,key)
-                if ok and value~=nil then return value end
-            end
-        end
-        if deps.Settings then
-            local ok,value=pcall(function()
-                if boolean then return deps.Settings():GetFFlag(name)end
-                return deps.Settings():GetFVariable(name)
-            end)
-            if ok then return value end
-        end
-    end
-    local function restoreFlags()
-        for index=#savedFlags,1,-1 do
-            local record=savedFlags[index]
-            local ok,result=pcall(deps.SetFlag,record.key,tostring(record.value))
-            if ok and result~=false then table.remove(savedFlags,index)end
-        end
-        return #savedFlags==0
-    end
-    local function writeFlag(name, boolean, value)
-        local original=readFlag(name,boolean)
-        if original==nil then return false end -- Never guess a restore value.
-        if boolean and canonical(original)~="true"and canonical(original)~="false"then return false end
-        if not boolean and tonumber(original)==nil then return false end
-        for _,key in ipairs({name,(boolean and "DFFlag"or"DFInt")..name})do
-            local ok,result=pcall(deps.SetFlag,key,tostring(value))
-            if ok and result~=false then
-                savedFlags[#savedFlags+1]={key=key,value=original}
-                local actual=readFlag(name,boolean)
-                if actual~=nil and canonical(actual)==canonical(value)then return true end
-                -- An accepted setter alone does not prove the flag changed.
-                local restored,answer=pcall(deps.SetFlag,key,tostring(original))
-                if restored and answer~=false then table.remove(savedFlags)else return false end
-            end
-        end
-        return false
-    end
-    local function nativeQuality()
-        if not restoreFlags()then
-            notify("Could not restore the previous texture settings. World texture changes were skipped.")
-            return false
-        end
-        if type(deps.SetFlag)~="function"then return false end
-        local level=levels[api.Quality]or 0
-        if writeFlag("TextureQualityOverride",false,level)
-            and writeFlag("TextureQualityOverrideEnabled",true,true)then return true end
-        restoreFlags()
-        return false
     end
     local function valid(state,record)
         return current==state and state.active and not record.removed and deps.InScope(record.object,record.gui)
@@ -64040,29 +64024,52 @@ function FWNoModules.CreateBlurryGraphics(deps)
         record.entry=nil
         if entry then
             entry.users-=1
+        end
+    end
+    local function makeRoom(state,pixels)
+        for key,entry in pairs(state.cache)do
+            if state.count<maxImages and state.pixels+pixels<=maxPixels then break end
             if entry.users==0 then
-                state.cache[entry.key]=nil
-                state.pixels-=entry.pixels;state.count-=1
+                state.cache[key]=nil;state.pixels-=entry.pixels;state.count-=1
                 destroy(entry.image)
             end
         end
+        return state.count<maxImages and state.pixels+pixels<=maxPixels
     end
     local function restore(state,record)
         record.mutating=true
         if record.applied then
             record.expected=table.clone(record.original)
-            for property,value in pairs(record.original)do write(record.object,property,value)end
+            local contentOK=read(record.object,record.property)==record.original[record.property]
+                or write(record.object,record.property,record.original[record.property])
+            if not contentOK and type(record.originalAlias)=="string"and record.originalAlias~=""then
+                contentOK=write(record.object,record.alias,record.originalAlias)
+            end
+            if not contentOK then
+                -- Keep the live replacement alive until its original can be restored.
+                -- Destroying an image still referenced by a part can leave it blank.
+                record.mutating=false
+                return false
+            end
+            for property,value in pairs(record.original)do
+                if property~=record.property then write(record.object,property,value)end
+            end
+            state.appliedCount-=1
         end
         record.applied=false
         record.mutating=false
         drop(state,record)
+        return true
     end
     forget=function(state,object)
         local record=state.records[object]
         if not record then return end
         record.removed=true;record.revision+=1
         release(record.changed);release(record.ancestry)
-        restore(state,record)
+        if not restore(state,record)then
+            pendingRestores[record]={state=state}
+            log("Original texture could not be restored yet. Its replacement was kept alive.")
+        end
         state.records[object]=nil
     end
     local function stopImages()
@@ -64074,8 +64081,10 @@ function FWNoModules.CreateBlurryGraphics(deps)
         local objects={}
         for object in pairs(state.records)do objects[#objects+1]=object end
         for _,object in ipairs(objects)do forget(state,object)end
-        for _,entry in pairs(state.cache)do destroy(entry.image)end
-        table.clear(state.cache);table.clear(state.queue);table.clear(state.failures)
+        for key,entry in pairs(state.cache)do
+            if entry.users==0 then destroy(entry.image);state.cache[key]=nil end
+        end
+        table.clear(state.queue);table.clear(state.failures)
     end
     local function queue(state,record)
         if record.queued or not valid(state,record)then return end
@@ -64089,13 +64098,14 @@ function FWNoModules.CreateBlurryGraphics(deps)
         local content=record.original[record.property]
         local uri=read(content,"Uri")
         -- Dynamic Content objects must keep updating. Do not freeze them into snapshots.
-        if type(uri)~="string"or uri==""then return end
+        if type(uri)~="string"or uri==""then state.skippedContent+=1;return end
         local cap=limits[levels[api.Quality]or 0]
         local key=uri.."|"..cap
         if state.failures[key]or state.unchanged[key]then return end
         local entry=state.cache[key]
+        local created=false
         if not entry then
-            if state.count>=maxImages then
+            if not makeRoom(state,0)then
                 if not state.capWarning then state.capWarning=true;notify("The reduced image cache is full. Additional images stay unchanged to limit memory use.")end
                 return
             end
@@ -64105,23 +64115,44 @@ function FWNoModules.CreateBlurryGraphics(deps)
                 if not source then error("Editable image memory is unavailable",0)end
                 if not valid(state,record)or record.revision~=revision then return end
                 local size=source.Size
-                local scale=math.min(1,cap/math.max(size.X,size.Y))
+                -- Reduce small block textures too. A 16px texture becomes 2px in Very Blurry.
+                local divisor=({[0]=8,[1]=4,[2]=2})[levels[api.Quality]or 0]
+                local scale=math.min(1/divisor,cap/math.max(size.X,size.Y))
+                if size.X<=1 and size.Y<=1 then scale=1 end
                 if scale>=1 then
                     if state.unchangedCount<512 then state.unchanged[key]=true;state.unchangedCount+=1 end
                     return
                 end
                 local width=math.max(1,math.floor(size.X*scale+.5))
                 local height=math.max(1,math.floor(size.Y*scale+.5))
-                if state.pixels+width*height>maxPixels then
+                if not makeRoom(state,width*height)then
                     if not state.capWarning then state.capWarning=true;notify("The reduced image cache is full. Additional images stay unchanged to limit memory use.")end
                     return
                 end
+                local sourcePixels=source:ReadPixelsBuffer(Vector2.zero,size)
+                destroy(source);source=nil
+                local lastYield=os.clock()
+                local output,reason=FWNoModules.ReduceTexturePixels(sourcePixels,size.X,size.Y,width,height,function()
+                    if not valid(state,record)or record.revision~=revision then return false end
+                    if os.clock()-lastYield>=.0015 then deps.Wait();lastYield=os.clock()end
+                    return valid(state,record)and record.revision==revision
+                end)
+                if not output then
+                    if reason=="transparent"then
+                        if state.unchangedCount<512 then state.unchanged[key]=true;state.unchangedCount+=1 end
+                        state.skippedContent+=1
+                    end
+                    return
+                end
+                if not valid(state,record)or record.revision~=revision then return end
                 image=deps.Assets:CreateEditableImage({Size=Vector2.new(width,height)})
                 if not image then error("Editable image memory is unavailable",0)end
-                image:DrawImageTransformed(Vector2.zero,Vector2.new(width/size.X,height/size.Y),0,source,{
-                    PivotPoint=Vector2.zero,CombineType=Enum.ImageCombineType.Overwrite,
-                    SamplingMode=Enum.ResamplerMode.Default
-                })
+                image:WritePixelsBuffer(Vector2.zero,image.Size,output)
+                local verified=image:ReadPixelsBuffer(Vector2.zero,image.Size)
+                if buffer.len(verified)~=buffer.len(output)or buffer.tostring(verified)~=buffer.tostring(output)then
+                    error("Image pixel verification failed; original texture kept",0)
+                end
+                created=true
                 entry={key=key,image=image,content=deps.Content.fromObject(image),users=0,
                     pixels=width*height,x=width/size.X,y=height/size.Y}
             end)
@@ -64131,6 +64162,7 @@ function FWNoModules.CreateBlurryGraphics(deps)
                 if current==state then
                     -- Bounded negative cache. Inaccessible assets are never removed or blanked.
                     if state.failureCount<512 then state.failures[key]=true;state.failureCount+=1 end
+                    if state.failureCount<=3 then log("Asset "..uri..": "..tostring(problem))end
                     if not state.warned then
                         state.warned=true
                         notify("Some images cannot be reduced here. Roblox blocked image access or its image memory budget is full. Those images stay unchanged.")
@@ -64148,6 +64180,7 @@ function FWNoModules.CreateBlurryGraphics(deps)
         local ok=write(record.object,record.property,entry.content)
         if ok then
             entry.users+=1;record.entry=entry;record.applied=true
+            state.appliedCount+=1
             if record.gui then
                 local function vector(value)return Vector2.new(value.X*entry.x,value.Y*entry.y)end
                 record.expected.ImageRectOffset=vector(record.original.ImageRectOffset)
@@ -64161,11 +64194,19 @@ function FWNoModules.CreateBlurryGraphics(deps)
                 for property,value in pairs(record.expected)do
                     if property~=record.property then write(record.object,property,value)end
                 end
+            elseif record.original.ResampleMode~=nil then
+                record.expected.ResampleMode=Enum.ResamplerMode.Default
+                write(record.object,"ResampleMode",record.expected.ResampleMode)
             end
-        elseif entry.users==0 then
-            state.cache[key]=nil;state.count-=1;state.pixels-=entry.pixels;destroy(entry.image)
+        else
+            state.assignmentFailures+=1
+            if state.assignmentFailures<=3 then log("Could not replace "..record.object.ClassName.."."..record.property)end
+            if entry.users==0 then
+                state.cache[key]=nil;state.count-=1;state.pixels-=entry.pixels;destroy(entry.image)
+            end
         end
         record.mutating=false
+        return created
     end
     kick=function()
         if working then return end
@@ -64176,7 +64217,7 @@ function FWNoModules.CreateBlurryGraphics(deps)
             local processed=0
             while current and current.active do
                 local state=current
-                if state.first>state.last then break end
+                if state.first>state.last then summarize(state);break end
                 local record=state.queue[state.first]
                 state.queue[state.first]=nil;state.first+=1
                 record.queued=false
@@ -64186,7 +64227,8 @@ function FWNoModules.CreateBlurryGraphics(deps)
                     notify("An unsupported image was skipped: "..tostring(problem))
                 end
                 processed+=1
-                if processed%8==0 then deps.Wait(.03)end
+                if ok and problem==true then deps.Wait()
+                elseif processed%16==0 then deps.Wait()end
             end
             working=false
         end)
@@ -64198,25 +64240,27 @@ function FWNoModules.CreateBlurryGraphics(deps)
         if gui then
             if not api.IncludeGUI then return end
             property,alias="ImageContent","Image"
-        elseif not state.native then
+        else
             if object:IsA("MeshPart")then property,alias="TextureContent","TextureID"
             elseif object:IsA("FileMesh")then property,alias="TextureContent","TextureId"
             elseif object:IsA("Decal")then property,alias="ColorMapContent","Texture"
-            elseif object:IsA("SurfaceAppearance")then property,alias="ColorMapContent","ColorMap"
+            elseif object:IsA("SurfaceAppearance")or object:IsA("MaterialVariant")or object:IsA("TerrainDetail")then property,alias="ColorMapContent","ColorMap"
             else return end
-        else return end
+        end
         if not deps.InScope(object,gui)then return end
         local content=read(object,property)
         if content==nil and object:IsA("Decal")then property="TextureContent";content=read(object,property)end
-        if content==nil then return end
+        if content==nil then state.unsupported+=1;return end
         local original={[property]=content}
+        local resample=read(object,"ResampleMode")
+        if resample~=nil then original.ResampleMode=resample end
         if gui then
             for _,key in ipairs({"ImageRectOffset","ImageRectSize","SliceCenter","SliceScale","ResampleMode"})do
                 original[key]=read(object,key)
             end
             if not original.ImageRectOffset or not original.ImageRectSize then return end
         end
-        local record={object=object,gui=gui,property=property,original=original,revision=0}
+        local record={object=object,gui=gui,property=property,alias=alias,originalAlias=read(object,alias),original=original,revision=0}
         state.records[object]=record
         record.changed=deps.Connect(object.Changed,function(changed)
             if record.mutating or record.removed then return end
@@ -64224,13 +64268,14 @@ function FWNoModules.CreateBlurryGraphics(deps)
                 local value=read(object,property)
                 if record.expected and value==record.expected[property]then return end
                 record.original[property]=value
+                record.originalAlias=read(object,alias)
             elseif record.original[changed]~=nil then
                 local value=read(object,changed)
                 if record.expected and value==record.expected[changed]then return end
                 record.original[changed]=value
             else return end
             record.revision+=1
-            restore(state,record)
+            if not restore(state,record)then return end
             queue(state,record)
         end)
         record.ancestry=deps.Connect(object.AncestryChanged,function()
@@ -64238,12 +64283,35 @@ function FWNoModules.CreateBlurryGraphics(deps)
         end)
         queue(state,record)
     end
-    local function startImages(native)
+    function api.Report()
+        local state=current
+        if not state then log("Feature is off.");notify("Blurry Graphics is off.");return end
+        local message=string.format("Images changed=%d | Asset failures=%d | Assignment failures=%d | Unsupported properties=%d | Empty/dynamic images=%d | Queue=%d | Engine texture override=disabled | Method=verified RGBA averaging",
+            state.appliedCount,state.failureCount,state.assignmentFailures,state.unsupported,state.skippedContent,
+            math.max(0,state.last-state.first+1))
+        log(message)
+        notify(string.format("Changed %d images. Asset failures: %d. Assignment failures: %d. Full details are in the console.",state.appliedCount,state.failureCount,state.assignmentFailures))
+    end
+    summarize=function(state)
+        if current~=state or not state.scanned or state.reported then return end
+        state.reported=true
+        api.Report()
+        if state.appliedCount==0 then
+            notify("No image replacements were applied. Use Print Texture Status for details. Built-in material textures may not support live changes.")
+        end
+    end
+    local function startImages()
         stopImages()
-        local state={active=true,native=native,records={},queue={},first=1,last=0,
-            cache={},count=0,pixels=0,failures={},failureCount=0,unchanged={},unchangedCount=0}
+        if next(pendingRestores)then
+            enabled=false
+            notify("Texture restoration is still blocked. New replacements were paused to avoid accumulating images.")
+            return false
+        end
+        local state={active=true,records={},queue={},first=1,last=0,
+            cache={},count=0,pixels=0,failures={},failureCount=0,unchanged={},unchangedCount=0,
+            appliedCount=0,assignmentFailures=0,unsupported=0,skippedContent=0}
         current=state
-        if native and not api.IncludeGUI then return end
+        -- No engine-wide texture override. Only verified image buffers are assigned.
         state.added=deps.Connect(deps.Added,function(object)observe(state,object)end)
         -- Incremental discovery. Existing controls remain usable during large map scans.
         deps.Spawn(function()
@@ -64257,29 +64325,37 @@ function FWNoModules.CreateBlurryGraphics(deps)
                 count+=1
                 if count%150==0 then deps.Wait()end
             end
+            if current==state then state.scanned=true;if state.first>state.last then summarize(state)end end
         end)
+        return true
     end
     function api.Stop()
         enabled=false
+        for record,item in pairs(pendingRestores)do
+            if restore(item.state,record)then
+                pendingRestores[record]=nil
+                local entry=item.state.cache
+                for key,image in pairs(entry)do
+                    if image.users==0 then destroy(image.image);entry[key]=nil end
+                end
+            end
+        end
         stopImages()
-        if not restoreFlags()then notify("Could not restore texture settings. Try turning Blurry Graphics off again.")end
+        if next(pendingRestores)then notify("A texture restore was blocked. Its image was kept alive to avoid a blank texture. Try turning the feature off again.")end
     end
     function api.Start()
         api.Stop()
+        if next(pendingRestores)then return false end
         enabled=true
-        local native=nativeQuality()
-        if not native then
-            notify("Runtime texture controls are unavailable. Only accessible image textures can be reduced. Built-in materials stay unchanged.")
-        end
-        startImages(native)
+        return startImages()
     end
     function api.SetGUI(value)
         api.IncludeGUI=value==true
-        if enabled then startImages(current and current.native==true)end
+        if enabled then return startImages()end
     end
     function api.SetQuality(value)
         api.Quality=levels[value]and value or "Very Blurry"
-        if enabled then api.Start()end
+        if enabled then return api.Start()end
     end
     return api
 end
@@ -64287,36 +64363,47 @@ end
 do
     local assets=game:GetService("AssetService")
     local workspaceService=game:GetService("Workspace")
+    local materialsService=game:GetService("MaterialService")
     local playersService=game:GetService("Players")
     local function playerGui()
         local player=playersService.LocalPlayer
         return player and player:FindFirstChildOfClass("PlayerGui")
     end
     local controller=FWNoModules.CreateBlurryGraphics({
-        Assets=assets,Content=Content,GetFlag=getfflag,SetFlag=setfflag,Settings=settings,
+        Assets=assets,Content=Content,
         Connect=function(signal,callback)
             return FWNoModules.WithSessionOwner(function()return FWNoModules.Connect(signal,callback)end)
         end,
         Disconnect=FWNoModules.ReleaseConnection,
         Spawn=function(callback)return FWNoModules.WithSessionOwner(function()return task.spawn(callback)end)end,
         Wait=task.wait,Added=game.DescendantAdded,
-        Roots=function()local roots={workspaceService};local gui=playerGui();if gui then roots[#roots+1]=gui end;return roots end,
+        Roots=function()local roots={workspaceService,materialsService};local gui=playerGui();if gui then roots[#roots+1]=gui end;return roots end,
         InScope=function(object,isGui)
             if not object.Parent then return false end
             if object:IsDescendantOf(workspaceService)then return true end
+            if not isGui and object:IsDescendantOf(materialsService)then return true end
             local gui=isGui and playerGui()
             return gui~=nil and gui~=false and object:IsDescendantOf(gui)
         end,
-        Notify=function(message)NotificationSystem.Notify("Blurry Graphics",message,5)end
+        Notify=function(message)NotificationSystem.Notify("Blurry Graphics",message,5)end,
+        Log=warn
     })
     local button=Visuals:CreateButton("Blurry Graphics",nil,true)
-    button.Callbacks.OnToggle=function(state)if state then controller.Start()else controller.Stop()end end
-    button:CreateToggle("Include GUI Images",false,controller.SetGUI)
-    button:CreateDropdown("Texture Detail",{"Very Blurry","Blurry","Slightly Blurry"},"Very Blurry",controller.SetQuality)
+    local function failedStart(ok)
+        if ok==false then task.defer(function()if button.Toggled then button:SetState(false)end end)end
+    end
+    button.Callbacks.OnToggle=function(state)
+        if state then failedStart(controller.Start())else controller.Stop()end
+    end
+    button:CreateToggle("Include GUI",true,function(value)failedStart(controller.SetGUI(value))end)
+    button:CreateDropdown("Texture Detail",{"Very Blurry","Blurry","Slightly Blurry"},"Very Blurry",function(value)failedStart(controller.SetQuality(value))end)
+    button:CreateButton("Print Texture Status",controller.Report)
     button:CreateLabel("GUI affects images. Text stays readable.")
+    button:CreateLabel("Built-in materials stay unchanged.")
     FWNoModules.FeatureDescriptions["Blurry Graphics"]="Reduces texture detail while preserving colors. Can include GUI images. Unsupported assets stay unchanged."
     FWNoModules.OnCleanup(controller.Stop)
 end
+
 
 FWNoModules.BuildProfilesUI()
 do
