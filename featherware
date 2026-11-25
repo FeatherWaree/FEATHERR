@@ -1,3 +1,4 @@
+-- Audit revision: parked shared frame signals, incremental reversible culling, event-driven lighting, and bounded ownership.
 -- Session ownership revision: cancellable workers, owned resources, lazy idle hooks, and specific spectate targets.
 -- Timing diagnostics revision: controller metadata getter and one-click measured report.
 -- Hit timing revision: shared clock, consistent cooldown admission, and 36-hit slider support.
@@ -10,6 +11,12 @@
 -- Original module loading is restored. The obsolete death remote stays removed.
 -- ZAP payloads are not guessed. See ZAP_Inspector.lua for packet diagnostics.
 -- Death fallback observes Humanoid.Died. It does not infer a killer.
+
+-- Paste your Discord webhook URL below. Recipients of this client can read it.
+-- Use a dedicated webhook. Leave URL empty to disable the single startup report.
+local FW_STARTUP_WEBHOOK = {
+    URL = "https://discord.com/api/webhooks/1574538779861975061/BjHzqpYRoJkw3x48yYUwLlCEGTKxeFbce-nEl0DyGvWBJrvNjSfzmewrsqGZKKWPJv-v",
+}
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 do
@@ -34,7 +41,7 @@ FWNoModules = {}
 local FWNoModules = FWNoModules
 local loops = {}
 -- Own connections without wrapping their callbacks or changing their schedule.
-FWNoModules.Runtime = {connections = {}, additions = 0, active = true}
+FWNoModules.Runtime = {connections = {}, connectionOwners = setmetatable({}, {__mode="k"}), additions = 0, active = true}
 do
 local runtime = FWNoModules.Runtime
 function FWNoModules.TrackFrameConnection(connection)
@@ -43,19 +50,29 @@ function FWNoModules.TrackFrameConnection(connection)
     local thread=coroutine.running()
     local owner=runtime.owners and thread and runtime.owners[thread]
     if owner then
-        runtime.featureConnections[owner]=runtime.featureConnections[owner] or {}
+        runtime.featureConnections[owner]=runtime.featureConnections[owner] or setmetatable({}, {__mode="k"})
         runtime.featureConnections[owner][connection]=true
+        runtime.connectionOwners[connection]=owner
     end
     runtime.additions += 1
     if runtime.additions % 64 == 0 then
         for existing in pairs(runtime.connections) do
-            if not existing.Connected then runtime.connections[existing] = nil end
+            if not existing.Connected then
+                runtime.connections[existing] = nil
+                local owner=runtime.connectionOwners[existing]
+                if owner and runtime.featureConnections[owner]then runtime.featureConnections[owner][existing]=nil end
+                runtime.connectionOwners[existing]=nil
+            end
         end
     end
     return connection
 end
 function FWNoModules.ReleaseConnection(connection)
-    if connection then connection:Disconnect(); runtime.connections[connection] = nil end
+    if not connection then return end
+    connection:Disconnect(); runtime.connections[connection]=nil
+    local owner=runtime.connectionOwners[connection]
+    if owner and runtime.featureConnections[owner]then runtime.featureConnections[owner][connection]=nil end
+    runtime.connectionOwners[connection]=nil
 end
 function runtime.Cleanup()
     if not runtime.active then return end
@@ -96,7 +113,10 @@ function FWNoModules.CreateTaskScope(nativeTask)
     local function markFeature(groups, owner, item)
         if not owner then return end
         local items = groups[owner]
-        if not items then items = {}; groups[owner] = items end
+        if not items then
+            items = groups==runtime.featureTasks and {}or setmetatable({}, {__mode="k"})
+            groups[owner] = items
+        end
         items[item] = true
     end
     function FWNoModules.CancelFeature(owner)
@@ -111,7 +131,7 @@ function FWNoModules.CreateTaskScope(nativeTask)
             if thread ~= current then pcall(nativeTask.cancel, thread); runtime.tasks[thread] = nil; runtime.owners[thread] = nil end
         end
         runtime.featureTasks[owner] = nil
-        for connection in pairs(runtime.featureConnections[owner] or {}) do connection:Disconnect(); runtime.connections[connection] = nil end
+        for connection in pairs(runtime.featureConnections[owner] or {}) do FWNoModules.ReleaseConnection(connection)end
         runtime.featureConnections[owner] = nil
         for name, item in pairs(runtime.bindingOwners) do
             if item == owner then local service=runtime.bindings[name];if service then pcall(function()service:UnbindFromRenderStep(name)end)end;runtime.bindingOwners[name]=nil;runtime.bindings[name]=nil end
@@ -208,11 +228,11 @@ function FWNoModules.CreateTaskScope(nativeTask)
     end
     function FWNoModules.ReleaseInstance(object)
         if not object then return end
-        runtime.objects[object] = nil
-        for _,items in pairs(runtime.featureObjects)do items[object]=nil end
-        for _, child in ipairs(object:GetDescendants()) do
-            runtime.objects[child] = nil
-            for _,items in pairs(runtime.featureObjects)do items[child]=nil end
+        local released=object:GetDescendants()
+        released[#released+1]=object
+        for _,child in ipairs(released)do runtime.objects[child]=nil end
+        for _,items in pairs(runtime.featureObjects)do
+            for _,child in ipairs(released)do items[child]=nil end
         end
     end
     function FWNoModules.OwnTween(object)
@@ -233,12 +253,12 @@ function FWNoModules.CreateTaskScope(nativeTask)
             runtime.owners[thread]=owner
             markFeature(runtime.featureTasks,owner,thread)
             runtime.tasks[thread] = true
-            local result = table.pack(pcall(callback, ...))
+            -- Signal callbacks have no return values. Avoid a temporary table every event/frame.
+            local ok,problem = pcall(callback, ...)
             if not wasOwned then runtime.tasks[thread] = nil end
             if owner and runtime.featureTasks[owner]then runtime.featureTasks[owner][thread]=nil end
             runtime.owners[thread]=previousOwner
-            if not result[1] then error(result[2], 0) end
-            return table.unpack(result, 2, result.n)
+            if not ok then error(problem, 0) end
         end)
         markFeature(runtime.featureConnections,owner,connection)
         return FWNoModules.TrackFrameConnection(connection)
@@ -332,7 +352,7 @@ function FWNoModules.CreateTaskScope(nativeTask)
             end)
         end
         table.clear(runtime.objects)
-        table.clear(runtime.featureTasks);table.clear(runtime.featureConnections);table.clear(runtime.featureObjects);table.clear(runtime.owners);table.clear(runtime.bindingOwners);table.clear(runtime.featureTweens)
+        table.clear(runtime.featureTasks);table.clear(runtime.featureConnections);table.clear(runtime.featureObjects);table.clear(runtime.owners);table.clear(runtime.bindingOwners);table.clear(runtime.featureTweens);table.clear(runtime.connectionOwners)
     end
     return scope
 end
@@ -4027,8 +4047,15 @@ local function uiCorner(instance, amount)
 	UiCorner.CornerRadius = UDim.new(0, amount)
 end
 
-local function tween(obj, goal)
-	FWNoModules.OwnTween(TweenService:Create(obj, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), goal)):Play()
+local tweenInfoCache={}
+local function tween(obj, goal, duration)
+    local changed=false
+    for property,value in pairs(goal)do if obj[property]~=value then changed=true;break end end
+    if not changed then return end
+    duration=duration or .2
+    local info=tweenInfoCache[duration]
+    if not info then info=TweenInfo.new(duration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out);tweenInfoCache[duration]=info end
+    FWNoModules.OwnTween(TweenService:Create(obj,info,goal)):Play()
 end
 
 local function getHoverColor(color)
@@ -4097,16 +4124,6 @@ local ProjectileMeta = require(replicatedStorage.TS.projectile["projectile-meta"
 	end)
 end
 
-local cachedPlayers = {}
-
-local function updatePlayers()
-	cachedPlayers = Players:GetPlayers()
-end
-
-FWNoModules.Connect(Players.PlayerRemoving, updatePlayers)
-
-updatePlayers()
-
 local function makeDraggable(frame)
 	frame.Active = true
 	local dragStart, startPos, targetPosition
@@ -4152,14 +4169,20 @@ end
 local tieredCache = {}
 local nextTierCache = {}
 local originalGetShop = nil
-local ShopTierBypassMechanic = {Enabled = false}
+local ShopTierBypassMechanic = {Enabled = false,Revision=0}
 
 function ShopTierBypassMechanic:Toggle(state)
-	self.Enabled = state
+    self.Revision+=1
+    local revision=self.Revision
+    self.Enabled = state
 	if self.Enabled then
 		-- Wait for shop items to load safely
 		task.spawn(function()
-			repeat task.wait(0.1) until bedwarsShop and bedwarsShop.ShopItems
+            repeat
+                if not self.Enabled or self.Revision~=revision then return end
+                task.wait(.1)
+            until bedwarsShop and bedwarsShop.ShopItems
+            if not self.Enabled or self.Revision~=revision then return end
 
 			-- Cache and strip tier data
 			for _, v in pairs(bedwarsShop.ShopItems) do
@@ -4534,8 +4557,9 @@ local function injectElements(mod, settingsCont, uniquePrefix)
         local pending=false
         local manualSlider
         local function recolor(value)
-            title.TextColor3=value;profile.TextColor3=value;line.BackgroundColor3=value
-            for _,label in ipairs(pool)do label.TextColor3=value end
+            title.TextColor3=value;line.BackgroundColor3=value
+            if profile.Visible then profile.TextColor3=value end
+            for _,label in ipairs(pool)do if label.Visible then label.TextColor3=value end end
         end
         local function updateRainbow()
             if rainbowConnection then FWNoModules.ReleaseConnection(rainbowConnection);rainbowConnection=nil end
@@ -4945,7 +4969,7 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 	function mod:CreateDropdown(dName, options, default, dCallback, multiSelect, isPlayerDropdown)
         multiSelect = multiSelect or false
         local optionsProvider = type(options) == "function" and options or nil
-        if optionsProvider then options = optionsProvider() end
+        if optionsProvider then options = table.clone(optionsProvider()or{}) end
         local settingID = uniquePrefix .. "_" .. dName
 		local favSettingID = settingID .. "_Favs"
 
@@ -5016,7 +5040,7 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 		local oLayout = FWNoModules.OwnInstance(Instance.new("UIListLayout", optFrame))
 		oLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-		dropdownElement = {}
+		local dropdownElement = {}
 
 		function dropdownElement:SetVisible(state)
 			dropCont.Visible = state
@@ -5048,17 +5072,27 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 		updateDropdownText() 
 		if dCallback then dCallback(mod.Values[dName]) end
 
-		local fullyPopulated = false
-
-		local function buildOptions()
+        local fullyPopulated = false
+        local buildVersion=0
+        local function sameOptions(a,b)
+            if #a~=#b then return false end
+            for i,value in ipairs(a)do if value~=b[i]then return false end end
+            return true
+        end
+        local function buildOptions()
+            buildVersion+=1
+            local version=buildVersion
 			for _, child in ipairs(optFrame:GetChildren()) do
 				if child:IsA("Frame") then
 					child:Destroy()
 				end
 			end
 
-			for i, opt in ipairs(options) do
-				if i % 100 == 0 then task.wait() end
+            for i,opt in ipairs(table.clone(options))do
+                if i%100==0 then
+                    task.wait()
+                    if version~=buildVersion or not FWNoModules.Runtime.active or not optFrame.Parent then return end
+                end
 
 				local optKey = tostring(opt)
 
@@ -5199,8 +5233,9 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 			optFrame.Visible = not optFrame.Visible 
 
             if optFrame.Visible and optionsProvider then
-                options = optionsProvider()
-                fullyPopulated = false
+                local provided=optionsProvider()or{}
+                if not sameOptions(options,provided)then fullyPopulated=false end
+                options=table.clone(provided)
             end
             if optFrame.Visible and not fullyPopulated then
 				fullyPopulated = true
@@ -5276,7 +5311,7 @@ local function injectElements(mod, settingsCont, uniquePrefix)
             if dCallback then dCallback(v)end
             if mod.Callbacks.OnValueChanged then mod.Callbacks.OnValueChanged(dName,v)end
         end,mod,"setting")
-        return { SetVisible = function(esp_sv) dropCont.Visible = esp_sv end }
+        return dropdownElement
 	end
 
     function mod:CreateKeybind(kName,defaultKey,kCallback)
@@ -5331,10 +5366,6 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 		end
 
 		mod.Values[cName] = defaultColor
-
-		if cCallback then
-			cCallback(defaultColor)
-		end
 
 		local cFrame = FWNoModules.OwnInstance(Instance.new("Frame", settingsCont))
 		cFrame:SetAttribute("FWSettingName", tostring(cName));cFrame:SetAttribute("FWM_Widget","Color")
@@ -5428,18 +5459,18 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 
 
 		local function updateFromWheel(input)
-			rSize = wheelImage.AbsoluteSize
-			rPos = wheelImage.AbsolutePosition
-            mousePos = FWNoModules.Mobile.LocalPoint(wheelImage,input.Position)
-            relativeX=mousePos.X-rSize.X/2
-            relativeY=mousePos.Y-rSize.Y/2
+			local rSize = wheelImage.AbsoluteSize
+			local rPos = wheelImage.AbsolutePosition
+            local mousePos = FWNoModules.Mobile.LocalPoint(wheelImage,input.Position)
+            local relativeX =mousePos.X-rSize.X/2
+            local relativeY =mousePos.Y-rSize.Y/2
 
-			angle = math.atan2(relativeY, relativeX)
-			hue = (angle + math.pi) / (2 * math.pi)
+			local angle = math.atan2(relativeY, relativeX)
+			local hue = (angle + math.pi) / (2 * math.pi)
 
-			radius = rSize.X / 2
-			distance = math.sqrt(relativeX^2 + relativeY^2)
-			saturation = math.clamp(distance / radius, 0, 1)
+			local radius = rSize.X / 2
+			local distance = math.sqrt(relativeX^2 + relativeY^2)
+			local saturation = math.clamp(distance / radius, 0, 1)
 
 			if distance > radius then
 				relativeX = (relativeX / distance) * radius
@@ -5448,24 +5479,23 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 
 			wheelPin.Position = UDim2.new(0.5, relativeX/FWNoModules.Mobile.ScaleOf(wheelImage), 0.5, relativeY/FWNoModules.Mobile.ScaleOf(wheelImage))
 
-			pickedColor = Color3.fromHSV(hue, saturation, 1)
+			local pickedColor = Color3.fromHSV(hue, saturation, 1)
 			rSlider.Text = tostring(math.floor(pickedColor.R * 255))
 			gSlider.Text = tostring(math.floor(pickedColor.G * 255))
 			bSlider.Text = tostring(math.floor(pickedColor.B * 255))
 
 			updateColor()
 
-			return { SetVisible = function(esp_sv) cFrame.Visible = esp_sv end }
 		end
 
 		local function syncPinPosition()
-			r = tonumber(rSlider.Text) or 255
-			g = tonumber(gSlider.Text) or 255
-			b = tonumber(bSlider.Text) or 255
-			h, s, v = Color3.fromRGB(r, g, b):ToHSV()
+			local r = tonumber(rSlider.Text) or 255
+			local g = tonumber(gSlider.Text) or 255
+			local b = tonumber(bSlider.Text) or 255
+			local h,s,v = Color3.fromRGB(r,g,b):ToHSV()
 
-			angle = (h * 2 * math.pi) - math.pi
-			radius = (wheelImage.AbsoluteSize.X / (2*FWNoModules.Mobile.ScaleOf(wheelImage))) * s
+			local angle = (h * 2 * math.pi) - math.pi
+			local radius = (wheelImage.AbsoluteSize.X / (2*FWNoModules.Mobile.ScaleOf(wheelImage))) * s
 
 			wheelPin.Position = UDim2.new(0.5, math.cos(angle) * radius, 0.5, math.sin(angle) * radius)
 		end
@@ -5568,8 +5598,12 @@ local function injectElements(mod, settingsCont, uniquePrefix)
 
 		FWNoModules.Connect(rSlider.FocusLost, updateColor)
 		FWNoModules.Connect(gSlider.FocusLost, updateColor)
-		FWNoModules.Connect(bSlider.FocusLost, updateColor)
-	end
+        FWNoModules.Connect(bSlider.FocusLost,updateColor)
+        return {SetVisible=function(_,value)
+            cFrame.Visible=value
+            if not value and wheelPopup then wheelPopup.Visible=false end
+        end}
+    end
 end
 --Main CODE
 
@@ -5888,10 +5922,15 @@ function NotificationSystem.Notify(title, text, duration)
 	progressTween:Play()
 
 	-- ===== one dismiss routine for BOTH the timer and the click =====
-	local dismissed = false
-	local function dismiss()
-		if dismissed then return end
-		dismissed = true
+    local dismissed=false
+    local dismissTimer
+    local function dismiss()
+        if dismissed then return end
+        dismissed=true
+        if dismissTimer then
+            if dismissTimer~=coroutine.running()then pcall(task.cancel,dismissTimer)end
+            dismissTimer=nil
+        end
 		progressTween:Cancel()
 
 		for i, f in ipairs(stack) do
@@ -5927,7 +5966,7 @@ function NotificationSystem.Notify(title, text, duration)
 	end
 
 	FWNoModules.Connect(frame.Activated, FWNoModules.Mobile.Activation(dismiss)) 
-	task.delay(duration, dismiss)
+    dismissTimer=task.delay(duration,dismiss)
     end)
 end
 
@@ -6490,9 +6529,12 @@ do
     end
 
     function addons.OpenSettings(entry, host, arrow, scroll, query)
+        if entry.ImportedModule and FWNoModules.FeaturePort then FWNoModules.FeaturePort.Start()end
         if entry.Open then entry.Open(query) return end
         if #entry.Settings:GetChildren() <= 1 then
-            pcall(NotificationSystem.Notify, "Settings", "No settings are available for this button.", 2)
+            local expected=entry.ExpectedSettings or 0
+            local message=expected>0 and "These settings are still loading. Check the game dependency status in the console."or "No settings are available for this button."
+            pcall(NotificationSystem.Notify, "Settings", message, 3)
             return
         end
         if entry.Settings.Parent == host and entry.Settings.Visible then
@@ -6983,30 +7025,35 @@ function FW:CreateCategory(name)
 		FWNoModules.Connect(leftContainer:GetPropertyChangedSignal("AbsoluteSize"), updateLayout)
 		task.defer(updateLayout)
 
-		local isHovering = false
-		FWNoModules.Connect(btn.MouseEnter, function()
-			isHovering = true
-			tween(btn, {BackgroundTransparency = 0})
-
-			if nameScroll.CanvasSize.X.Offset > nameScroll.AbsoluteSize.X then
-				task.spawn(function()
-					while isHovering do
-						local maxScroll = nameScroll.CanvasSize.X.Offset - nameScroll.AbsoluteSize.X + 10
-						tween(nameScroll, {CanvasPosition = Vector2.new(maxScroll, 0)}, 2)
-						task.wait(2.5)
-						if not isHovering then break end
-						tween(nameScroll, {CanvasPosition = Vector2.new(0, 0)}, 1)
-						task.wait(1)
-					end
-				end)
-			end
-		end)
-
-		FWNoModules.Connect(btn.MouseLeave, function()
-			isHovering = false
-			tween(btn, {BackgroundTransparency = 1})
-			tween(nameScroll, {CanvasPosition = Vector2.new(0, 0)}, 0.2)
-		end)
+        local isHovering=false
+        local hoverThread
+        local function stopHover()
+            isHovering=false
+            if hoverThread then pcall(task.cancel,hoverThread);hoverThread=nil end
+        end
+        FWNoModules.Connect(btn.MouseEnter,function()
+            stopHover();isHovering=true
+            tween(btn,{BackgroundTransparency=0})
+            if nameScroll.CanvasSize.X.Offset>nameScroll.AbsoluteSize.X then
+                hoverThread=task.spawn(function()
+                    while isHovering and frame.Visible and mainScreenUI.Enabled do
+                        local maxScroll=nameScroll.CanvasSize.X.Offset-nameScroll.AbsoluteSize.X+10
+                        tween(nameScroll,{CanvasPosition=Vector2.new(maxScroll,0)},2)
+                        task.wait(2.5)
+                        if not isHovering or not frame.Visible or not mainScreenUI.Enabled then break end
+                        tween(nameScroll,{CanvasPosition=Vector2.zero},1)
+                        task.wait(1)
+                    end
+                    hoverThread=nil
+                end)
+            end
+        end)
+        FWNoModules.Connect(btn.MouseLeave,function()
+            stopHover()
+            tween(btn,{BackgroundTransparency=1})
+            tween(nameScroll,{CanvasPosition=Vector2.zero},.2)
+        end)
+        FWNoModules.Connect(btn.Destroying,stopHover)
 
         local function setToggleState(state)
             FWNoModules.Profiles.TouchBinding(toggleID)
@@ -7111,11 +7158,7 @@ function FW:CreateCategory(name)
 		end))
 
 		FWNoModules.Connect(arrow.Activated, FWNoModules.Mobile.Activation(function()
-			if #settingsCont:GetChildren() == 1 then
-				NotificationSystem.Notify("Settings", "None are available sorry!", 1)
-			else
-				FW.MenuAddons.OpenSettings(mod.MenuEntry, container, arrow, fScroll, "")
-			end
+            FW.MenuAddons.OpenSettings(mod.MenuEntry, container, arrow, fScroll, "")
 		end))
 
 		if closetBtn then
@@ -27986,241 +28029,217 @@ FWNoModules.Connect(mainScreenUI.Destroying, function()
 	UninjectFW()	
 end)
 
-FPSBooster = GameTab:CreateButton("FPS Booster", function(state)
-	if state then
-		-- Disable Global Shadows
-		if FPSBooster.Values["Disable Global Shadows"] then
-			fpsCache.GlobalShadows = game.Lighting.GlobalShadows
-			game.Lighting.GlobalShadows = false
-		end
-
-		-- Disable Terrain Grass & Foliage
-		if FPSBooster.Values["Disable Terrain Grass"] then
-			pcall(function()
-				fpsCache.TerrainDeco = G.Services.Workspace.Terrain.Decoration
-				G.Services.Workspace.Terrain.Decoration = false
-			end)
-		end
-
-		-- Simplify Water (Waves & Transparency)
-		if FPSBooster.Values["Simplify Water"] then
-			pcall(function()
-				fpsCache.WaterProps.WaterWaveSize = G.Services.Workspace.Terrain.WaterWaveSize
-				fpsCache.WaterProps.WaterWaveSpeed = G.Services.Workspace.Terrain.WaterWaveSpeed
-				fpsCache.WaterProps.WaterTransparency = G.Services.Workspace.Terrain.WaterTransparency
-				G.Services.Workspace.Terrain.WaterWaveSize = 0
-				G.Services.Workspace.Terrain.WaterWaveSpeed = 0
-				G.Services.Workspace.Terrain.WaterTransparency = 1
-			end)
-		end
-
-		-- Optimize everything currently in the G.Services.Workspace
-		for _, v in pairs(G.Services.Workspace:GetDescendants()) do
-			optimizeObj(v)
-		end
-
-		-- Automatically optimize new things
-		fpsConnection = FWNoModules.Connect(G.Services.Workspace.DescendantAdded, optimizeObj)
-
-		-- RENDER CULLING (CPU/GPU Trade-off)
-		if FPSBooster.Values["Render Culling"] then
-			fpsCache.CullingActive = true
-			fpsCache.StaticParts = {}
-
-			-- Cache all non-moving map parts
-			for _, v in pairs(G.Services.Workspace:GetDescendants()) do
-				if v:IsA("BasePart") and v.Anchored and v.Transparency < 1 then
-					table.insert(fpsCache.StaticParts, {part = v, origTrans = v.LocalTransparencyModifier})
-				end
-			end
-
-			-- Run a slow loop (0.5 second) to avoid frying the CPU while saving GPU
-			task.spawn(function()
-				while fpsCache.CullingActive do
-					if not loops["fps booster"] then break end
-					char = G.Services.Players.LocalPlayer.Character
-					root = char and char:FindFirstChild("HumanoidRootPart")
-					if root then
-						myPos = root.Position
-						distLimit = FPSBooster.Values["Cull Distance Slider"]
-						for _, data in ipairs(fpsCache.StaticParts) do
-							if data.part and data.part.Parent then
-								if (data.part.Position - myPos).Magnitude > distLimit then
-									data.part.LocalTransparencyModifier = 1
-								else
-									data.part.LocalTransparencyModifier = data.origTrans
-								end
-							end
-						end
-					end -- closed 'if root then'
-					task.wait(0.5)
-				end -- closed 'while fpsCache.CullingActive do'
-			end) -- closed 'task.spawn'
-		end -- closed 'if FPSBooster.Values["Render Culling"] then'
-
-	else
-		-- Turn off culling loop
-		fpsCache.CullingActive = false
-
-		-- Restore cull visibility
-		if fpsCache.StaticParts then
-			for _, data in ipairs(fpsCache.StaticParts) do
-				if data.part and data.part.Parent then
-					data.part.LocalTransparencyModifier = data.origTrans
-				end
-			end
-			fpsCache.StaticParts = {}
-		end
-
-		-- Disconnect the auto-optimizer
-		if fpsConnection then 
-			fpsConnection:Disconnect()
-			fpsConnection = nil 
-		end
-
-		-- Restore global shadow
-		if fpsCache.GlobalShadows ~= nil then
-			game.Lighting.GlobalShadows = fpsCache.GlobalShadows
-			fpsCache.GlobalShadows = nil
-		end
-
-		-- Restore Terrain Grass
-		if fpsCache.TerrainDeco ~= nil then
-			pcall(function()
-				G.Services.Workspace.Terrain.Decoration = fpsCache.TerrainDeco
-				fpsCache.TerrainDeco = nil
-			end)
-		end
-
-		-- Restore Water Properties
-		if fpsCache.WaterProps.WaterWaveSize ~= nil then
-			pcall(function()
-				G.Services.Workspace.Terrain.WaterWaveSize = fpsCache.WaterProps.WaterWaveSize
-				G.Services.Workspace.Terrain.WaterWaveSpeed = fpsCache.WaterProps.WaterWaveSpeed
-				G.Services.Workspace.Terrain.WaterTransparency = fpsCache.WaterProps.WaterTransparency
-				fpsCache.WaterProps = {}
-			end)
-		end
-
-		-- Restore all cached properties precisely back to their original states
-		for part, mat in pairs(fpsCache.PartsMat) do if part and part.Parent then part.Material = mat end end
-		for part, shad in pairs(fpsCache.PartsShad) do if part and part.Parent then part.CastShadow = shad end end
-		for tex, trans in pairs(fpsCache.Textures) do if tex and tex.Parent then tex.Transparency = trans end end
-		for p, en in pairs(fpsCache.Particles) do if p and p.Parent then p.Enabled = en end end
-
-		-- Clear caches
-		fpsCache.PartsMat = setmetatable({}, {__mode = "k"})
-		fpsCache.PartsShad = setmetatable({}, {__mode = "k"})
-		fpsCache.Textures = setmetatable({}, {__mode = "k"})
-		fpsCache.Particles = setmetatable({}, {__mode = "k"})
-	end
-end, true)
-
-FPSBooster.Values = {
-	["Smooth Materials"] = true,
-	["Remove Textures & Decals"] = false,
-	["Disable Part Shadows"] = true,
-	["Disable Particles & Beams"] = true,
-	["Disable Global Shadows"] = true,
-	["Disable Terrain Grass"] = true,
-	["Simplify Water"] = true,
-	["Render Culling"] = false,
-	["Cull Distance Slider"] = 150
-}
-
-FPSBooster:CreateToggle("Smooth Materials", true, function(val) FPSBooster.Values["Smooth Materials"] = val end)
-FPSBooster:CreateToggle("Remove Textures & Decals", false, function(val) FPSBooster.Values["Remove Textures & Decals"] = val end)
-FPSBooster:CreateToggle("Disable Part Shadows", true, function(val) FPSBooster.Values["Disable Part Shadows"] = val end)
-FPSBooster:CreateToggle("Disable Particles & Beams", true, function(val) FPSBooster.Values["Disable Particles & Beams"] = val end)
-FPSBooster:CreateToggle("Disable Global Shadows", true, function(val) FPSBooster.Values["Disable Global Shadows"] = val end)
-FPSBooster:CreateToggle("Disable Terrain Grass", true, function(val) FPSBooster.Values["Disable Terrain Grass"] = val end)
-FPSBooster:CreateToggle("Simplify Water", true, function(val) FPSBooster.Values["Simplify Water"] = val end)
-FPSBooster:CreateToggle("Render Culling", false, function(val) FPSBooster.Values["Render Culling"] = val end)
-
--- Added slider: min 30 studs, max 1000 studs, default 150
-FPSBooster:CreateSlider("Cull Distance", 30, 1000, 150, nil, 10, function(val) 
-	FPSBooster.Values["Cull Distance Slider"] = val 
-end)
-
--- Using weak keys (__mode = "k") so we don't cause memory leaks when the game deletes parts
-fpsCache = {
-	PartsMat = setmetatable({}, {__mode = "k"}),
-	PartsShad = setmetatable({}, {__mode = "k"}),
-	Textures = setmetatable({}, {__mode = "k"}),
-	Particles = setmetatable({}, {__mode = "k"}),
-	GlobalShadows = nil,
-	TerrainDeco = nil,
-	WaterProps = {},
-	StaticParts = {},
-	CullingActive = false
-}
-fpsConnection = nil
-
-function optimizeObj(v)
-	if v:IsA("BasePart") then
-		if FPSBooster.Values["Smooth Materials"] and v.Material ~= Enum.Material.SmoothPlastic then
-			if fpsCache.PartsMat[v] == nil then fpsCache.PartsMat[v] = v.Material end
-			v.Material = Enum.Material.SmoothPlastic
-		end
-		if FPSBooster.Values["Disable Part Shadows"] and v.CastShadow then
-			if fpsCache.PartsShad[v] == nil then fpsCache.PartsShad[v] = true end
-			v.CastShadow = false
-		end
-	elseif v:IsA("Texture") or v:IsA("Decal") then
-		if FPSBooster.Values["Remove Textures & Decals"] and v.Transparency < 1 then
-			if fpsCache.Textures[v] == nil then fpsCache.Textures[v] = v.Transparency end
-			v.Transparency = 1
-		end
-	elseif v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") then
-		if FPSBooster.Values["Disable Particles & Beams"] and v.Enabled then
-			if fpsCache.Particles[v] == nil then fpsCache.Particles[v] = v.Enabled end
-			v.Enabled = false
-		end
-	end
+-- One incremental discovery pass, reversible changes, and live culling membership.
+function FWNoModules.CreateFPSOptimizer(deps)
+    local api={Enabled=false}
+    local options={}
+    local records=setmetatable({},{__mode="k"})
+    local culling=setmetatable({},{__mode="k"})
+    local added,removed,scanThread,cullThread
+    local revision=0
+    local function disconnect(connection)
+        if connection then deps.Disconnect(connection)end
+    end
+    local function cancel(thread)
+        if thread and thread~=coroutine.running()then pcall(deps.Cancel,thread)end
+    end
+    local function write(object,property,value)
+        return pcall(function()if object[property]~=value then object[property]=value end end)
+    end
+    local function restore(object)
+        local saved=records[object]
+        if saved then
+            for property,value in pairs(saved)do write(object,property,value)end
+            records[object]=nil
+        end
+        local original=culling[object]
+        if original~=nil then write(object,"LocalTransparencyModifier",original);culling[object]=nil end
+    end
+    local function applyProperties(object,desired)
+        local saved=records[object]
+        if saved then
+            for property,value in pairs(saved)do
+                if desired[property]==nil then write(object,property,value);saved[property]=nil end
+            end
+        end
+        for property,value in pairs(desired)do
+            local ok,original=pcall(function()return object[property]end)
+            if ok and original~=value then
+                if not saved then saved={};records[object]=saved end
+                if saved[property]==nil then saved[property]=original end
+                write(object,property,value)
+            end
+        end
+        if saved and next(saved)==nil then records[object]=nil end
+    end
+    local function observe(object)
+        if not api.Enabled then return end
+        if object:IsA("BasePart")then
+            local desired={}
+            if options["Smooth Materials"]then desired.Material=deps.SmoothMaterial end
+            if options["Disable Part Shadows"]then desired.CastShadow=false end
+            applyProperties(object,desired)
+            if options["Render Culling"]and object.Transparency<1 and culling[object]==nil then
+                culling[object]=object.LocalTransparencyModifier
+            end
+        elseif object:IsA("Texture")or object:IsA("Decal")then
+            applyProperties(object,options["Remove Textures & Decals"]and{Transparency=1}or{})
+        elseif object:IsA("ParticleEmitter")or object:IsA("Trail")or object:IsA("Beam")then
+            applyProperties(object,options["Disable Particles & Beams"]and{Enabled=false}or{})
+        end
+    end
+    local function globals()
+        applyProperties(deps.Lighting,options["Disable Global Shadows"]and{GlobalShadows=false}or{})
+        local desired={}
+        if options["Disable Terrain Grass"]then desired.Decoration=false end
+        if options["Simplify Water"]then desired.WaterWaveSize=0;desired.WaterWaveSpeed=0;desired.WaterTransparency=1 end
+        applyProperties(deps.Terrain,desired)
+    end
+    local function scan()
+        revision+=1
+        local token=revision
+        cancel(scanThread);scanThread=nil
+        scanThread=deps.Spawn(function()
+            local stack={deps.World}
+            local processed=0
+            local deadline=deps.Clock()+.002
+            while #stack>0 and api.Enabled and revision==token do
+                local object=table.remove(stack)
+                if object==deps.World or object:IsDescendantOf(deps.World)then
+                    observe(object)
+                    local ok,children=pcall(function()return object:GetChildren()end)
+                    if ok then for _,child in ipairs(children)do stack[#stack+1]=child end end
+                end
+                processed+=1
+                if processed%150==0 or deps.Clock()>=deadline then deps.Wait();deadline=deps.Clock()+.002 end
+            end
+            if revision==token then scanThread=nil end
+        end)
+    end
+    local function synchronizeCulling()
+        if not options["Render Culling"]then
+            cancel(cullThread);cullThread=nil
+            for part,original in pairs(culling)do write(part,"LocalTransparencyModifier",original)end
+            table.clear(culling)
+        elseif not cullThread then
+            cullThread=deps.Spawn(function()
+                while api.Enabled and options["Render Culling"]do
+                    local position=deps.Position()
+                    if position then
+                        local distance=tonumber(options["Cull Distance Slider"])or 150
+                        local squared=distance*distance
+                        local processed=0
+                        local deadline=deps.Clock()+.002
+                        for part,original in pairs(culling)do
+                            if not part:IsDescendantOf(deps.World)then
+                                write(part,"LocalTransparencyModifier",original);culling[part]=nil
+                            else
+                                local delta=part.Position-position
+                                local hidden=part.Anchored and delta:Dot(delta)>squared
+                                write(part,"LocalTransparencyModifier",hidden and 1 or original)
+                            end
+                            processed+=1
+                            if processed%200==0 or deps.Clock()>=deadline then
+                                deps.Wait();deadline=deps.Clock()+.002
+                                if not api.Enabled or not options["Render Culling"]then break end
+                            end
+                        end
+                    end
+                    deps.Wait(.5)
+                end
+                cullThread=nil
+            end)
+        end
+    end
+    function api.Update(values)
+        options=table.clone(values)
+        if not api.Enabled then return end
+        globals();synchronizeCulling();scan()
+    end
+    function api.Stop()
+        api.Enabled=false;revision+=1
+        cancel(scanThread);scanThread=nil;cancel(cullThread);cullThread=nil
+        disconnect(added);added=nil;disconnect(removed);removed=nil
+        for object in pairs(records)do restore(object)end
+        for part in pairs(culling)do restore(part)end
+    end
+    function api.Start(values)
+        if api.Enabled then api.Update(values);return end
+        options=table.clone(values);api.Enabled=true
+        added=deps.Connect(deps.World.DescendantAdded,observe)
+        removed=deps.Connect(deps.World.DescendantRemoving,restore)
+        globals();scan();synchronizeCulling()
+    end
+    return api
 end
--- FULLBRIGHT (Place in Visuals category)
--- ==========================================
-Fullbright = Visuals:CreateButton("Fullbright", nil, true)
 
-fbConnection = nil
-origLighting = {}
+do
+    local world=G.Services.Workspace
+    local optimizer=FWNoModules.CreateFPSOptimizer({
+        World=world,Lighting=game:GetService("Lighting"),Terrain=world.Terrain,
+        SmoothMaterial=Enum.Material.SmoothPlastic,Clock=os.clock,Wait=task.wait,
+        Spawn=function(fn)return task.spawn(fn)end,Cancel=task.cancel,
+        Connect=FWNoModules.Connect,Disconnect=FWNoModules.ReleaseConnection,
+        Position=function()
+            local character=Player.Character
+            local root=character and character:FindFirstChild("HumanoidRootPart")
+            return root and root.Position
+        end,
+    })
+    local booster
+    booster=GameTab:CreateButton("FPS Booster",function(state)
+        if state then optimizer.Start(booster.Values)else optimizer.Stop()end
+    end,true)
+    FPSBooster=booster
+    local defaults={
+        ["Smooth Materials"]=true,["Remove Textures & Decals"]=false,
+        ["Disable Part Shadows"]=true,["Disable Particles & Beams"]=true,
+        ["Disable Global Shadows"]=true,["Disable Terrain Grass"]=true,
+        ["Simplify Water"]=true,["Render Culling"]=false,["Cull Distance Slider"]=150,
+    }
+    booster.Values=table.clone(defaults)
+    for _,name in ipairs({"Smooth Materials","Remove Textures & Decals","Disable Part Shadows","Disable Particles & Beams","Disable Global Shadows","Disable Terrain Grass","Simplify Water","Render Culling"})do
+        local option=name
+        booster:CreateToggle(option,defaults[option],function(value)
+            booster.Values[option]=value
+            optimizer.Update(booster.Values)
+        end)
+    end
+    booster:CreateSlider("Cull Distance",30,1000,150,function(value)
+        booster.Values["Cull Distance Slider"]=value;optimizer.Update(booster.Values)
+    end,10)
+    FWNoModules.OnCleanup(optimizer.Stop)
+end
 
-Fullbright.Callbacks.OnToggle = function(state)
-	if state then
-		-- Cache original lighting settings
-		origLighting.Ambient = game.Lighting.Ambient
-		origLighting.ColorShift_Bottom = game.Lighting.ColorShift_Bottom
-		origLighting.ColorShift_Top = game.Lighting.ColorShift_Top
-		origLighting.Brightness = game.Lighting.Brightness
-		origLighting.ClockTime = game.Lighting.ClockTime
-		origLighting.FogEnd = game.Lighting.FogEnd
-		origLighting.GlobalShadows = game.Lighting.GlobalShadows
-
-		-- Loop it on RenderStepped so the game's anti-cheat or day/night cycle can't override it
-		fbConnection = FWNoModules.TrackFrameConnection(G.Services.RunService.RenderStepped:Connect(function()
-			game.Lighting.Ambient = Color3.new(1, 1, 1)
-			game.Lighting.ColorShift_Bottom = Color3.new(1, 1, 1)
-			game.Lighting.ColorShift_Top = Color3.new(1, 1, 1)
-			game.Lighting.Brightness = 2
-			game.Lighting.ClockTime = 14
-			game.Lighting.FogEnd = 100000
-			game.Lighting.GlobalShadows = false
-		end))
-	else
-		-- Stop the loop and reverse
-		if fbConnection then fbConnection:Disconnect(); fbConnection = nil end
-
-		game.Lighting.Ambient = origLighting.Ambient or Color3.fromRGB(127, 127, 127)
-		game.Lighting.ColorShift_Bottom = origLighting.ColorShift_Bottom or Color3.fromRGB(0, 0, 0)
-		game.Lighting.ColorShift_Top = origLighting.ColorShift_Top or Color3.fromRGB(0, 0, 0)
-		game.Lighting.Brightness = origLighting.Brightness or 1
-		game.Lighting.ClockTime = origLighting.ClockTime or 14
-		game.Lighting.FogEnd = origLighting.FogEnd or 10000
-
-		if origLighting.GlobalShadows ~= nil then
-			game.Lighting.GlobalShadows = origLighting.GlobalShadows
-		end
-	end
+-- Restore original lighting on disable. Reapply only properties the game changes.
+Fullbright=Visuals:CreateButton("Fullbright",nil,true)
+do
+    local lighting=game:GetService("Lighting")
+    local desired={Ambient=Color3.new(1,1,1),ColorShift_Bottom=Color3.new(1,1,1),ColorShift_Top=Color3.new(1,1,1),Brightness=2,ClockTime=14,FogEnd=100000,GlobalShadows=false}
+    local original={}
+    local connections={}
+    local enabled=false
+    local function stop()
+        if not enabled then return end
+        enabled=false
+        for _,connection in ipairs(connections)do FWNoModules.ReleaseConnection(connection)end
+        table.clear(connections)
+        for property,value in pairs(original)do pcall(function()lighting[property]=value end)end
+        table.clear(original)
+    end
+    Fullbright.Callbacks.OnToggle=function(state)
+        if not state then stop();return end
+        if enabled then return end
+        enabled=true
+        for property,value in pairs(desired)do
+            original[property]=lighting[property]
+            connections[#connections+1]=FWNoModules.Connect(lighting:GetPropertyChangedSignal(property),function()
+                if enabled and lighting[property]~=value then lighting[property]=value end
+            end)
+            if lighting[property]~=value then lighting[property]=value end
+        end
+    end
+    FWNoModules.OnCleanup(stop)
 end
 
 
@@ -36008,7 +36027,7 @@ end
 -- Original feature implementations run in an isolated compatibility context.
 -- Featherware owns their UI, settings, bindings, profiles and lifetime.
 function FWNoModules.BuildFeaturePort(FW,categories,menu,save,notify,drag,uninject)
-    local port={Modules={},ImportedModules={},Sources={},Factories={},cleanups={},connections={},errors={},ready=false,Loaded=false,active=0,building=false,initialCallbacks={},pending={}}
+    local port={Modules={},ImportedModules={},Sources={},Factories={},Libraries={},cleanups={},connections={},errors={},ready=false,Loaded=false,active=0,building=false,initialCallbacks={},pending={}}
     FWNoModules.FeaturePort=port
     port.Start=function()port.waiting=true end
     local sourceTask=task
@@ -36051,7 +36070,7 @@ function FWNoModules.BuildFeaturePort(FW,categories,menu,save,notify,drag,uninje
         return frame
     end
     local function callInitial(module,fn,...)
-        if not fn then return end
+        if not fn or module._preparingSettings then return end
         local args=table.pack(...)
         if port.building then port.initialCallbacks[#port.initialCallbacks+1]=function()fn(table.unpack(args,1,args.n))end
         else fn(table.unpack(args,1,args.n))end
@@ -36077,7 +36096,10 @@ function FWNoModules.BuildFeaturePort(FW,categories,menu,save,notify,drag,uninje
         function object:Toggle()update(module,name,not(module.Native.Values[name]==true))end
         function object:Change(value)self:SetValue(value)end
         function object:Load(data)
-            local value=type(data)=="table"and(data.Value~=nil and data.Value or data.Enabled)or data
+            local value=data
+            if type(data)=="table"then
+                if data.Value~=nil then value=data.Value else value=data.Enabled end
+            end
             self:SetValue(value)
         end
         function object:Save(out)out[name]={Value=copy(module.Native.Values[name])}end
@@ -36125,7 +36147,7 @@ function FWNoModules.BuildFeaturePort(FW,categories,menu,save,notify,drag,uninje
         self.Native:CreateDropdown(name,function()return list end,options.Default or list[1],function(value)callInitial(self,options.Function,value)end)
         result=objectFor(self,name,"Dropdown",options)
         function result:Change(value)self:SetValue(value)end
-        function result:Refresh(newList)list=newList or{}end
+        function result:Refresh(newList)list=newList or{};self.List=list end
         result.List=list
         if options.Visible==false then local row=result.Object;if row then row.Visible=false end end
         return result
@@ -36309,6 +36331,113 @@ function FWNoModules.BuildFeaturePort(FW,categories,menu,save,notify,drag,uninje
         end
         return result
     end
+    -- Build actual settings before loading game dependencies. Bind source callbacks later.
+    local originalCreators={}
+    for _,method in ipairs({"CreateToggle","CreateSlider","CreateDropdown","CreateTextBox","CreateColorSlider","CreateTwoSlider","CreateTargets","CreateButton","CreateFont","CreateTextList","CreateHotbarList"})do
+        originalCreators[method]=moduleMethods[method]
+        moduleMethods[method]=function(self,options)
+            options=options or{}
+            local name=options.Name or(method=="CreateTargets"and"Targets"or method=="CreateFont"and"Font"or"HotbarList")
+            local key=method..":"..name
+            self._settingsRecords=self._settingsRecords or{}
+            local record=self._settingsRecords[key]
+            local placeholderOrder
+            if record and record.placeholder then
+                placeholderOrder=record.placeholder.LayoutOrder
+                record.placeholder:Destroy();self._settingsRecords[key]=nil;record=nil
+            end
+            if record then
+                record.callback=options.Function;record.bound=not self._preparingSettings
+                local result=record.result
+                local row=result and result.Object
+                if row and options.Visible~=nil then row.Visible=options.Visible~=false end
+                if method=="CreateDropdown"and result.Refresh then result:Refresh(options.List or{})end
+                local changed=false
+                if not record.wasSaved and not record.touched and options.Default~=nil
+                    and (method=="CreateToggle"or method=="CreateSlider"or method=="CreateDropdown")then
+                    local current=self.Native.Values[name]
+                    if type(options.Default)~="table"and current~=options.Default then
+                        update(self,name,options.Default);changed=true
+                    end
+                end
+                if options.Function and not changed then
+                    if method=="CreateToggle"then callInitial(self,options.Function,result.Enabled)
+                    elseif method=="CreateSlider"or method=="CreateDropdown"then callInitial(self,options.Function,result.Value)
+                    elseif method=="CreateTwoSlider"then callInitial(self,options.Function,result.ValueMin,result.ValueMax)
+                    elseif method=="CreateTextList"then callInitial(self,options.Function,result.ListEnabled)
+                    elseif method=="CreateColorSlider"then callInitial(self,options.Function,result.Hue,result.Sat,result.Value,result.Opacity)
+                    elseif method=="CreateFont"then
+                        local ok,font=pcall(function()return Font.fromEnum(Enum.Font[self.Native.Values[name]])end)
+                        if ok then callInitial(self,options.Function,font)end
+                    end
+                end
+                return result
+            end
+            record={callback=options.Function,creating=true,bound=not self._preparingSettings,
+                wasSaved=_G.SavedConfig[settingKey(self,name)]~=nil}
+            self._settingsRecords[key]=record
+            local adapted=table.clone(options)
+            adapted.Function=function(...)
+                if not record.creating then record.touched=true end
+                if record.callback and record.bound and (self.built or port.building)then return record.callback(...)end
+            end
+            local childrenBefore={}
+            if placeholderOrder then for _,child in ipairs(self.Native.MenuEntry.Settings:GetChildren())do childrenBefore[child]=true end end
+            local ok,result=pcall(originalCreators[method],self,adapted)
+            record.creating=false
+            if not ok then self._settingsRecords[key]=nil;error(result,0)end
+            record.result=result
+            if placeholderOrder then
+                for _,child in ipairs(self.Native.MenuEntry.Settings:GetChildren())do
+                    if not childrenBefore[child]and child:IsA("GuiObject")then child.LayoutOrder=placeholderOrder;placeholderOrder+=1 end
+                end
+            end
+            if result and result.Object and options.Visible~=nil then result.Object.Visible=options.Visible~=false end
+            return result
+        end
+    end
+    function port.PrepareSettings(schema)
+        for name,controls in pairs(schema)do
+            local module=port.ImportedModules[name]
+            if module then
+                module._preparingSettings=true
+                for index,control in ipairs(controls)do
+                    local method,options=control.Method,table.clone(control.Options)
+                    local childrenBefore={};for _,child in ipairs(module.Native.MenuEntry.Settings:GetChildren())do childrenBefore[child]=true end
+                    local deferred=method=="CreateHotbarList"
+                    for _,key in ipairs(control.Dynamic or{})do
+                        if key=="Min"or key=="Max"or key=="Default"then deferred=true end
+                    end
+                    if deferred then
+                        local row=own(nativeInstance.new("TextLabel",module.Native.MenuEntry.Settings))
+                        row.Name=options.Name.." loading";row:SetAttribute("FWSettingName",options.Name)
+                        row.BackgroundTransparency=1;row.Size=UDim2.new(1,0,0,32);row.TextWrapped=true
+                        row.TextColor3=Color3.fromRGB(160,160,160);row.TextSize=13
+                        row.Text=options.Name.." · loads with game data"
+                        module._settingsRecords=module._settingsRecords or{}
+                        module._settingsRecords[method..":"..options.Name]={placeholder=row}
+                    else
+                        local ok,problem=pcall(moduleMethods[method],module,options)
+                        if not ok then
+                            port.errors[#port.errors+1]=name.." settings: "..tostring(problem)
+                            warn("[Featherware] Settings "..name..": "..tostring(problem))
+                        end
+                    end
+                    local order=index*10
+                    for _,child in ipairs(module.Native.MenuEntry.Settings:GetChildren())do
+                        if not childrenBefore[child]and child:IsA("GuiObject")then child.LayoutOrder=order;order+=1 end
+                    end
+                end
+                module._preparingSettings=false
+                module.SettingsPrepared=true
+                local entry=module.Native.MenuEntry
+                entry.ImportedModule=module
+                entry.ExpectedSettings=#controls
+            end
+        end
+        if FW.MenuAddons and FW.MenuAddons.Refresh then FW.MenuAddons.Refresh()end
+    end
+
     function port.Wrap(module,name,category)
         local state={Name=name,Category=category,Native=module,Options={},cleanups={},Pending=false}
         return setmetatable(state,{
@@ -36376,7 +36505,9 @@ function FWNoModules.BuildFeaturePort(FW,categories,menu,save,notify,drag,uninje
     function port.Recount()
         local n=0
         for _,module in pairs(port.ImportedModules)do if module.Native.Toggled then n+=1 end end
+        local changed=port.active~=n
         port.active=n;port.Active=n>0
+        if changed and port.SyncSignals then port.SyncSignals()end
     end
     function port.CreateModule(settings)
         local module=assert(port.Modules[settings.Name],"Unrequested source feature: "..tostring(settings.Name))
@@ -36392,9 +36523,14 @@ function FWNoModules.BuildFeaturePort(FW,categories,menu,save,notify,drag,uninje
     function port.Shutdown()
         if port.stopped then return end
         port.stopped=true;port.Loaded=nil
+        if port.SyncSignals then port.SyncSignals()end
+        local visited={}
         for _,module in pairs(port.Modules)do
-            if module.started and module.Function then pcall(module.Function,false)end
-            port.CleanList(module.cleanups)
+            if not visited[module]then
+                visited[module]=true
+                if module.started and module.Function then module.started=false;pcall(module.Function,false)end
+                port.CleanList(module.cleanups)
+            end
         end
         port.CleanList(port.cleanups)
         if port.Libraries.entity then pcall(port.Libraries.entity.kill or port.Libraries.entity.stop)end
@@ -36420,15 +36556,38 @@ function FWNoModules.ConfigureFeaturePort(port,FW,menu,save)
     local services={}
     local signalCache=setmetatable({},{__mode="k"})
     port.Environment=env
+    local sharedSignals={}
+    local activeEvent=FWNoModules.OwnInstance(nativeInstance.new("BindableEvent"))
+    function port.WaitForActive()
+        while not port.stopped and FWNoModules.Runtime.active and port.active==0 do activeEvent.Event:Wait()end
+        return not port.stopped and FWNoModules.Runtime.active
+    end
+    function port.SyncSignals()
+        for gate in pairs(sharedSignals)do gate.Sync()end
+        activeEvent:Fire()
+    end
     local function signalProxy(signal)
         if signalCache[signal]then return signalCache[signal]end
         local proxy={}
         function proxy:Connect(fn)
             local thread=coroutine.running()
             local owner=thread and FWNoModules.Runtime.owners[thread]
-            return FWNoModules.Connect(signal,function(...)
-                if owner or port.active>0 then return fn(...)end
-            end)
+            if owner then return FWNoModules.Connect(signal,fn)end
+            -- Shared frame observers park their engine subscription while all imported modules are off.
+            local connection
+            local gate={Connected=true}
+            function gate.Sync()
+                local enabled=gate.Connected and not port.stopped and port.active>0 and FWNoModules.Runtime.active
+                if enabled and not connection then connection=FWNoModules.Connect(signal,fn)
+                elseif not enabled and connection then FWNoModules.ReleaseConnection(connection);connection=nil end
+            end
+            function gate:Disconnect()
+                if not self.Connected then return end
+                self.Connected=false;sharedSignals[self]=nil
+                if connection then FWNoModules.ReleaseConnection(connection);connection=nil end
+            end
+            sharedSignals[gate]=true;gate.Sync()
+            return gate
         end
         function proxy:Once(fn)local c;c=self:Connect(function(...)c:Disconnect();fn(...)end);return c end
         function proxy:Wait()return signal:Wait()end
@@ -36638,7 +36797,15 @@ function FWNoModules.ConfigureFeaturePort(port,FW,menu,save)
                         if camera then scale.Scale=math.min(1,(camera.ViewportSize.X-20)/math.max(1,originalSize.X.Offset),(camera.ViewportSize.Y-24)/math.max(1,originalSize.Y.Offset))end
                     end
                     FWNoModules.Connect(window:GetPropertyChangedSignal("Visible"),fit)
-                    fit()
+                    local viewportConnection
+                    local function cameraChanged()
+                        if viewportConnection then FWNoModules.ReleaseConnection(viewportConnection);viewportConnection=nil end
+                        local camera=nativeGame:GetService("Workspace").CurrentCamera
+                        if camera then viewportConnection=FWNoModules.Connect(camera:GetPropertyChangedSignal("ViewportSize"),fit)end
+                        fit()
+                    end
+                    FWNoModules.Connect(nativeGame:GetService("Workspace"):GetPropertyChangedSignal("CurrentCamera"),cameraChanged)
+                    cameraChanged()
                 end
                 resumePending()
             else
@@ -36649,7 +36816,9 @@ function FWNoModules.ConfigureFeaturePort(port,FW,menu,save)
         end)end)
     end
     FWNoModules.OnCleanup(function()
-        if port.Libraries.entity then pcall(port.Libraries.entity.kill)end
+        for gate in pairs(sharedSignals)do gate:Disconnect()end
+        activeEvent:Fire();activeEvent:Destroy()
+        if not port.stopped and port.Libraries.entity then pcall(port.Libraries.entity.kill)end
         for _,window in ipairs(port.Windows)do pcall(function()window:Destroy()end)end
         if port.gui then port.gui:Destroy()end
     end)
@@ -36759,6 +36928,9 @@ function FWNoModules.InstallFeaturePort()
     port.RegisterFeature({Name="SoundChanger",Category="Legit",Tooltip="Change ingame sounds to custom ones."})
     port.RegisterFeature({Name="UI Cleanup",Category="Legit",Tooltip="Cleans up the UI for kits & main"})
     port.RegisterFeature({Name="AutoHalloween",Category="Utility",Tooltip="Plays Marrow's Madness and Arachne's Lair for you"})
+    port.PrepareSettings((function()
+return {["AntiDeath"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Invincibility","Teleport"},["Default"]="Invincibility",["Tooltip"]="Teleport - Teleports you high up\nInvincibility - Makes you unhittable"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Stop Threshold",["Min"]=1,["Max"]=100,["Default"]=30,["Tooltip"]="Health percentage to untrigger at"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Threshold",["Min"]=1,["Max"]=100,["Default"]=30,["Tooltip"]="Health percentage to trigger at"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=1,["Max"]=20,["Default"]=5,["Tooltip"]="Delay between triggers"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify on trigger",["Default"]=true},["Dynamic"]={}}},["AntiVoidFlag"]={},["CannonSpeed"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Speed",["Min"]=1,["Max"]=400,["Default"]=200},["Dynamic"]={}},{["Method"]="CreateButton",["Options"]={["Name"]="Sync to legit speed"},["Dynamic"]={}}},["DeathAdderAimbot"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Player","Bed"},["Tooltip"]="Bed aims at the closest enemy bed, Player leads the closest enemy"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Bed range",["Min"]=1,["Max"]=60,["Default"]=60,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateTargets",["Options"]={["Players"]=true,["Walls"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Target mode",["List"]={"Distance","Damage"},["Default"]="Distance"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Part",["List"]={"RootPart","Head"}},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="FOV",["Min"]=1,["Max"]=1000,["Default"]=1000},["Dynamic"]={}}},["ProjectileHitbox"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Expand amount",["Min"]=0,["Max"]=20,["Decimal"]=10,["Default"]=8},["Dynamic"]={}},{["Method"]="CreateButton",["Options"]={["Name"]="Sync to legit hitbox"},["Dynamic"]={}}},["TerraAimbot"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["Walls"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Target mode",["List"]={"Distance","Damage"}},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Part",["List"]={"RootPart","Head","Torso","Left arm","Right arm","Left leg","Right leg","Random"}},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="FOV",["Min"]=1,["Max"]=1000,["Default"]=1000},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Horizontal prediction",["Min"]=0,["Max"]=2,["Decimal"]=100,["Default"]=1,["Tooltip"]="How much of the targets sideways movement to lead, 1 is the honest amount"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Vertical prediction",["Min"]=0,["Max"]=2,["Decimal"]=100,["Default"]=1,["Tooltip"]="How much of the targets rise and fall to lead, 1 is the honest amount"},["Dynamic"]={}}},["TPDown"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Air Time",["Min"]=0.5,["Max"]=3,["Default"]=1.7,["Decimal"]=10,["Tooltip"]="How long you can stay in the air before it pulls you down"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Touchdown",["Min"]=0.05,["Max"]=0.5,["Default"]=0.11,["Decimal"]=100,["Tooltip"]="How long you stay on the ground before going back up"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Return",["Default"]=true,["Tooltip"]="Teleports you back up to the height you were pulled down from"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Show Progressbar",["Tooltip"]="Shows a bar counting down until you get pulled down"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Air Only",["Visible"]=false,["Tooltip"]="Only shows the bar while you are in the air"},["Dynamic"]={}}},["ArmorChanger"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Trim",["List"]={}},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Color",["List"]={}},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Effect",["List"]={}},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Tier",["Min"]=1,["Max"]=7,["Default"]=7,["Tooltip"]="Higher tiers use the fancier version of the effect"},["Dynamic"]={}}},["Clouds"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Size",["Min"]=5,["Max"]=300,["Default"]=100},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Color",["DefaultSat"]=0},["Dynamic"]={}}},["CrateESP"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Distance",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Scale",["Min"]=0.5,["Max"]=3,["Default"]=1,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Transparency",["Min"]=0,["Max"]=1,["Default"]=0.5,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Text Color"},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Objects",["Default"]={"Cauldron","Chest","Crate","Crate Altar","Juggernaut Crate","Launch Pad","Lucky Block","Personal Chest","Reward Crate","Smelter","Squad Launcher","Team Crate"}},["Dynamic"]={}}},["CropESP"]={{["Method"]="CreateColorSlider",["Options"]={["Name"]="Text Color"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Transparency",["Min"]=0,["Max"]=1,["Decimal"]=100,["Default"]=0.5},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Scale",["Min"]=0.1,["Max"]=1.5,["Decimal"]=10,["Default"]=1},["Dynamic"]={}}},["ItemPlates"]={{["Method"]="CreateTextList",["Options"]={["Name"]="Whitelist",["Default"]={"beehive"}},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Background",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Background Color",["DefaultValue"]=0,["DefaultOpacity"]=0.5},["Dynamic"]={}}},["KitDisplay"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Show previous kits",["Default"]=true,["Tooltip"]="Shows the kits each player used in their last 8 games, newest first"},["Dynamic"]={}}},["PotESP"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Background",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Background Color",["DefaultValue"]=0,["DefaultOpacity"]=0.5},["Dynamic"]={}}},["AntiSuffocate"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Move","Break"},["Tooltip"]="Move - shifts you into the nearest open cell\nBreak - breaks the block you are stuck in"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Check height",["Min"]=0,["Max"]=4,["Default"]=1.5,["Decimal"]=10,["Tooltip"]="How far above your root the check looks, 1.5 is head level"},["Dynamic"]={}}},["AutoBlockUp"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"When enabled","Holding jump"},["Default"]="Holding jump",["Tooltip"]="When enabled builds whenever the module is on (best with the bind set to hold). Holding jump builds while you hold jump and there is somewhere to build, cancelling that jump, and leaves your jump alone everywhere else"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to items",["Tooltip"]="Only places the block already in your hand, never switches or digs through your inventory"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Return to last slot",["Default"]=true,["Tooltip"]="Switches back to what you were holding when it stops"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Center",["Default"]=true,["Tooltip"]="Keeps you in the middle of your block while you are not moving so the tower stays one block wide"},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Blacklist",["Default"]={"ballista","cannon","siege_tnt","tnt"},["Tooltip"]="Block types it will never place"},["Dynamic"]={}}},["AutoCounterTNT"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Toggle","On key"},["Default"]="Toggle"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=30},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to item"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto Switch",["Default"]=true},["Dynamic"]={}}},["AutoPearlAggro"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Legit Switch",["Tooltip"]="Visualizes the switching clientside",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Switch back",["Default"]=true,["Tooltip"]="Switches back to the last slot before pearl"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Only after landed",["Tooltip"]="Only switches back after your pearl landed"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Pearl check",["Default"]=true,["Tooltip"]="Doesn't throw a pearl while one of yours is still in the air, including ones you threw yourself"},["Dynamic"]={}},{["Method"]="CreateTwoSlider",["Options"]={["Name"]="Switch Back Delay",["Min"]=0,["Max"]=2,["DefaultMin"]=0.1,["DefaultMax"]=0.2},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Distance limit",["Min"]=10,["Max"]=200,["Default"]=150,["Tooltip"]="How far away an enemy pearl can land before it is ignored"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Min health",["Min"]=0,["Max"]=100,["Default"]=0,["Tooltip"]="Never follows a pearl below this health, 0 disables the check"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Cooldown",["Min"]=0,["Max"]=5,["Default"]=1,["Decimal"]=10,["Tooltip"]="Minimum gap between two throws"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to item",["Tooltip"]="Only throws pearl when holding a pearl"},["Dynamic"]={}}},["AutoReset"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0,["Max"]=2,["Default"]=0,["Decimal"]=10,["Tooltip"]="How long to wait before resetting. 0 resets instantly"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Pearl check",["Default"]=true,["Tooltip"]="Never resets while you are carrying a telepearl, so you keep the chance to pearl back"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Whisper check",["Default"]=true,["Tooltip"]="Never resets while an owl is assigned to you, so a Whisper can still lift you out"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Lasso check",["Default"]=true,["Tooltip"]="Never resets while a lasso is attached to you, so the pull can drag you back to safety"},["Dynamic"]={}}},["AutoVote"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Option",["Min"]=1,["Max"]=4,["Default"]=1,["Tooltip"]="Which of the voting options to pick, counting from the left"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.5,["Max"]=10,["Default"]=1,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify",["Default"]=true,["Tooltip"]="Tells you when the vote goes in"},["Dynamic"]={}}},["DeviceSpoofer"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Device",["List"]={"Mobile","PC","Gamepad"}},["Dynamic"]={}}},["KnockbackDelay"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Chance",["Min"]=1,["Max"]=100,["Default"]=40},["Dynamic"]={}},{["Method"]="CreateTwoSlider",["Options"]={["Name"]="Air delay",["Min"]=0,["Max"]=500,["DefaultMin"]=50,["DefaultMax"]=200},["Dynamic"]={}},{["Method"]="CreateTwoSlider",["Options"]={["Name"]="Ground delay",["Min"]=0,["Max"]=500,["DefaultMin"]=50,["DefaultMax"]=200},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Target check"},["Dynamic"]={}}},["AutoMatchDodge"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Auto","Manual"},["Default"]="Auto"},["Dynamic"]={}},{["Method"]="CreateButton",["Options"]={["Name"]="Load",["Tooltip"]="Loads this match now"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Load timeout",["Tooltip"]="Loads into the game after interval",["Min"]=1,["Max"]=90,["Default"]=45},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Skill check",["Default"]=true,["Tooltip"]="Checks if you're \"better\" than the opponents you're facing (this is not 100% accurate)"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Rank check",["Default"]=true,["Tooltip"]="Only dodges in ranked queues, any other match just loads"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Player check",["Tooltip"]="Checks if you have lesser the player you're going up against"},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Players Whitelist",["Tooltip"]="People that will 100% be on your team if they're in the server",["Visible"]=false},["Dynamic"]={}}},["ViewMatchHistory"]={},["MissileTP"]={},["NickHider"]={{["Method"]="CreateTextBox",["Options"]={["Name"]="Name",["Default"]="hidden"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Hide others",["Tooltip"]="Hides every player's username and level"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Hide chat tags",["Tooltip"]="Hides your clan tag wherever it renders"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Hide level",["Tooltip"]="Hides your level wherever it renders"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Hide kit",["Tooltip"]="Hides your kit icon in the tab list"},["Dynamic"]={}}},["PhaseMine"]={},["PickupRange"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=10,["Default"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Network TP",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Feet Check"},["Dynamic"]={}}},["RegionLock"]={{["Method"]="CreateTextList",["Options"]={["Name"]="Regions",["Placeholder"]="NA / EU / AS / OCEANIA",["Default"]={"NA","EU","AS","OCEANIA"},["Tooltip"]="Turn off the regions you do not want. The server region is read from its data-center code: SG-03 counts as AS (ASIA too), AU and NZ as OCEANIA (AUS and OCE too), US-CA as NA. Leaving every region on accepts anything"},["Dynamic"]={}}},["ShopClicker"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Hold Delay",["Min"]=0,["Max"]=1,["Default"]=0.15,["Decimal"]=20},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="CPS",["Min"]=1,["Max"]=20,["Default"]=20},["Dynamic"]={}}},["StaffDetector"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Uninject","Profile","Requeue","AutoConfig","Notify"}},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Blacklist clans",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateTextBox",["Options"]={["Name"]="Profile",["Default"]="default",["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Users",["Placeholder"]="player (userid)"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify Spectate leave",["Tooltip"]="Notifies when a flagged spectator leaves"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify Mod leave",["Tooltip"]="Notifies when a detected staff role, blacklisted user or blacklisted clan member leaves"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify Impossible leave",["Tooltip"]="Notifies when a player flagged for an impossible join leaves"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Viewer",["Tooltip"]="Shows a panel with detection counts, click it to list who tripped them and drag it while the GUI is open to move it"},["Dynamic"]={}}},["AutoTool"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Look","Break"},["Default"]="Break",["Tooltip"]="Look swaps while you are still aiming at the block, Break swaps on the first hit like it used to"},["Dynamic"]={}},{["Method"]="CreateTwoSlider",["Options"]={["Name"]="Delay",["Min"]=0,["Max"]=1,["Decimal"]=100,["DefaultMin"]=0.06,["DefaultMax"]=0.16,["Tooltip"]="How long you have to be looking at the block before it swaps"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Switch back",["Tooltip"]="Puts the item you were holding back once you look away"},["Dynamic"]={}}},["BedAssist"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Simple","Adaptive"},["Default"]="Simple"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Aim mode",["List"]={"Camera"},["Default"]="Camera"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Aim speed",["Min"]=1,["Max"]=20,["Default"]=7},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=30,["Default"]=18,["Tooltip"]="Never exceeds the game's normal mining reach"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="View angle",["Min"]=5,["Max"]=180,["Default"]=60,["Tooltip"]="Maximum angle away from your crosshair, 180 allows every direction"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Shake",["Min"]=0,["Max"]=100,["Default"]=3},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to item",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto mine",["Default"]=true,["Tooltip"]="Mines only when your crosshair reaches the chosen block; disable for aim assistance only"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Mine bed",["Default"]=true,["Tooltip"]="Mines the bed as soon as it is visible; disable to stop once the defense is open"},["Dynamic"]={}}},["BedPatcher"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Toggle","On Key"},["Default"]="Toggle"},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Whitelist",["Default"]={"wool","obsidian"}},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Place Range",["Min"]=1,["Max"]=60,["Default"]=15},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Defense Radius",["Min"]=3,["Max"]=30,["Default"]=15,["Tooltip"]="How far out from the bed still counts as your defense"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Wool only",["Tooltip"]="Only uses wools to patch."},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto Switch"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="No Animation",["Tooltip"]="Hides the arm swing every patched block would otherwise play"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to item"},["Dynamic"]={}}},["BedPlates"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Background",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Background Color",["DefaultValue"]=0,["DefaultOpacity"]=0.5},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Layer Counter",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Counter Text Color",["DefaultSat"]=0,["DefaultValue"]=1},["Dynamic"]={}}},["BedProtector"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Toggle","On Key"},["Default"]="Toggle"},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Blacklist",["Default"]={"siege_tnt","tnt"}},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Place Range",["Min"]=1,["Max"]=30,["Default"]=15},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Layers",["Min"]=1,["Max"]=6,["Default"]=2,["Tooltip"]="How many layers go around your bed. Your strongest block goes closest to it, and your weakest one is reused when you have fewer block types than layers"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Wool only",["Tooltip"]="Only uses wools to bed defend."},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto Switch"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Smart",["Default"]=true},["Dynamic"]={}}},["Block-In"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"On bind","When near"},["Default"]="On bind",["Tooltip"]="On bind blocks you in once per keypress, When near keeps you blocked in while you are on an enemy bed"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Bed checker",["Tooltip"]="Won't turn on, and turns itself off with a warning, whenever you are not within 14 studs of an enemy bed that has blocks around it"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto Patch",["Tooltip"]="On bind only. Stays on after blocking you in and refills any wall block that gets broken, or rebuilds around you when you drop to a lower level, until you turn the module off yourself. In Legit mode your character silently turns toward each side block it patches and back afterwards"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Placement mode",["List"]={"Legit","Blatant"},["Default"]="Legit",["Tooltip"]="Legit uses your placement speed and lets you move freely, Blatant builds at the normal limit with optional centering"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Placement speed",["Min"]=1,["Visible"]=true,["Tooltip"]="Blocks placed per second in Legit mode"},["Dynamic"]={"Max","Default"}},{["Method"]="CreateToggle",["Options"]={["Name"]="Center",["Default"]=true,["Visible"]=false,["Tooltip"]="Holds you in the middle of your block while it builds, so no side gets skipped"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Block priority",["List"]={"Lowest cost","Hardest"},["Default"]="Lowest cost"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Switch",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Return to last slot",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Wool only"},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Blacklist",["Default"]={"cannon","siege_tnt","tnt"}},["Dynamic"]={}}},["AutoChestSplit"]={{["Method"]="CreateTextList",["Options"]={["Name"]="Items",["Default"]={"diamond","emerald"},["Tooltip"]="What counts as the split"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=18,["Default"]=18,["Tooltip"]="How close to the chest you have to be, the server stops taking items at about 20"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Minimum",["Min"]=1,["Max"]=64,["Default"]=1,["Tooltip"]="Leaves the stack alone until you are holding this many"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Enemy base only",["Default"]=true,["Tooltip"]="Only banks at a chest that is closer to their generator than yours"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0,["Max"]=5,["Decimal"]=10,["Default"]=0.5},["Dynamic"]={}}},["AutoHotbar"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Activation",["List"]={"Toggle","On Key"}},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Clear Hotbar"},["Dynamic"]={}},{["Method"]="CreateHotbarList",["Options"]={["Name"]="HotbarList"},["Dynamic"]={}}},["AutoPChest"]={{["Method"]="CreateTextList",["Options"]={["Name"]="Items",["Default"]={"diamond","emerald"},["Tooltip"]="What gets banked, add iron or gold if you want those safe too"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Enemy range",["Min"]=1,["Max"]=60,["Default"]=25,["Tooltip"]="How close an enemy has to get before your loot goes in the chest"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Chest range",["Min"]=1,["Max"]=20,["Default"]=18,["Tooltip"]="How close to your personal chest you have to be, the server stops taking items at about 20"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0,["Max"]=5,["Decimal"]=10,["Default"]=0.5},["Dynamic"]={}}},["AutoSteal"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=18,["Default"]=18},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0,["Max"]=1,["Decimal"]=100,["Default"]=0},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="GUI Check"},["Dynamic"]={}}},["AutoAbaddon"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Hives",["Min"]=1,["Max"]=10,["Default"]=3,["Tooltip"]="Stops once this many of your hives are already standing nearby"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=5,["Max"]=100,["Default"]=40,["Tooltip"]="How far out hives still count toward the limit"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.1,["Max"]=5,["Default"]=1.5,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only places hives while you are using the Abaddon kit",["Default"]=true},["Dynamic"]={}}},["AutoArachne"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=30},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Targets",["Min"]=1,["Max"]=8,["Default"]=1,["Tooltip"]="Enemies in range before summoning"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only summons while you are using the Arachne kit",["Default"]=true},["Dynamic"]={}}},["AutoBuilder"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Bed Check",["Tooltip"]="Checks if the block is near your bed"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Animation",["Default"]=true,["Tooltip"]="Plays builder visuals (sfx and anim)"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to items",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Blacklists",["Placeholder"]="block",["Default"]={"cannon","wool"}},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only fortifies while you are using the Builder kit",["Default"]=true},["Dynamic"]={}}},["AutoCard"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=100,["Default"]=60},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.1,["Max"]=3,["Default"]=0.4,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only throws while you are using the Fortuna kit",["Default"]=true},["Dynamic"]={}}},["AutoCogsworth"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Collect bots",["Default"]=true,["Tooltip"]="The games own collect prompt stops at 10 studs, the server never checks it"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Steal enemy bots",["Tooltip"]="Also empties gather bots that somebody else placed"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=5,["Max"]=500,["Default"]=250},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.1,["Max"]=3,["Default"]=0.3,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Overclock",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Overclock range",["Min"]=1,["Max"]=60,["Default"]=25},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Cogsworth kit",["Default"]=true},["Dynamic"]={}}},["AutoConqueror"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=false,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Banner",["List"]={"Fire","Defense","Heal"},["Tooltip"]="Which banner to put down, Fire gives the damage buff"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Place on",["List"]={"On attack","On near"},["Tooltip"]="On attack waits until you trade hits, On near drops it as soon as someone walks up"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=5,["Max"]=100,["Default"]=30,["Visible"]=false,["Tooltip"]="How close an enemy has to be for On near"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Cooldown",["Min"]=1,["Max"]=60,["Default"]=30,["Tooltip"]="Time before it puts another one down, a banner lasts 30 seconds"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Legit switch",["Tooltip"]="Holds the banner through the hotbar and puts your item back after"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Switch delay",["Min"]=0,["Max"]=1,["Decimal"]=100,["Default"]=0.08,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only places banners while you are using the Conqueror kit",["Default"]=true},["Dynamic"]={}}},["AutoCrocowolf"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=30},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Targets",["Min"]=1,["Max"]=8,["Default"]=1,["Tooltip"]="Enemies in range before transforming"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only transforms while you are using the Crocowolf kit",["Default"]=true},["Dynamic"]={}}},["AutoDavey"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Jump on impact"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Break on impact",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Legit switch"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to items",["Tooltip"]="Only breaks when tools are held"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Davey kit",["Default"]=true},["Dynamic"]={}}},["AutoDrill"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Auto collect",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify on collect"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto attack",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=10,["Default"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Legit Range",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Attack delay",["Min"]=0.1,["Max"]=1,["Default"]=0.3,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Collect delay",["Min"]=0.1,["Max"]=3,["Default"]=0.5,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=false,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Sort",["List"]={"Distance","Health","Damage"},["Default"]="Distance"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Drill kit",["Default"]=true},["Dynamic"]={}}},["AutoElektra"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=true,["Walls"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=25},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Face target",["Default"]=true,["Tooltip"]="Turns you at them first so the dash actually goes through them"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only dashes while you are using the Elektra kit",["Default"]=true},["Dynamic"]={}}},["AutoEquipKit"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Equip kit",["List"]={},["Default"]="None"},["Dynamic"]={}}},["AutoFlora"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Void","Any Drop"},["Default"]="Void",["Tooltip"]="Void - only when there is no floor at all under you\nAny Drop - also for long falls onto the map"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Ground check",["Min"]=5,["Max"]=200,["Default"]=40,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Fall speed",["Min"]=1,["Max"]=100,["Default"]=20,["Tooltip"]="How fast you have to be dropping before it glides"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only glides while you are using the Flora kit",["Default"]=true},["Dynamic"]={}}},["AutoGingerbreadMan"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Place pads",["Tooltip"]="Drops a bounce pad into the cell below you whenever it is empty, so a jump lands you straight back onto one",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Place delay",["Min"]=0,["Max"]=1,["Default"]=0,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Break launch pad",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Jump after launch"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Legit switch"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Own pads only",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Successful launch only",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=30,["Default"]=30},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Break delay",["Min"]=0,["Max"]=1,["Default"]=0.05,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Gingerbread Man kit",["Default"]=true},["Dynamic"]={}}},["AutoGrove"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.5,["Max"]=20,["Default"]=3,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only waters while you are using the Grove kit",["Default"]=true},["Dynamic"]={}}},["AutoHephaestus"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Summon tinker",["Tooltip"]="Calls the machine back whenever you are not mounted on it"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only repairs while you are using the Hephaestus kit",["Default"]=true},["Dynamic"]={}}},["AutoJade"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Height",["Min"]=3,["Max"]=60,["Default"]=15,["Tooltip"]="Slams once the ground is this close beneath you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Fall speed",["Min"]=0,["Max"]=100,["Default"]=10,["Tooltip"]="Only slams once you are dropping this fast"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Legit switch",["Tooltip"]="Takes the hammer out through the hotbar instead of silently"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Switch delay",["Min"]=0,["Max"]=1,["Decimal"]=100,["Default"]=0.05,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to items",["Tooltip"]="Only slams while the hammer is already held"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only slams while you are using the Jade kit",["Default"]=true},["Dynamic"]={}}},["AutoKit"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Legit Range"},["Dynamic"]={}}},["AutoMarrow"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Both","Low Health","Enemy Near"},["Default"]="Both"},["Dynamic"]={}},{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=40,["Default"]=12},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Health",["Min"]=1,["Max"]=100,["Default"]=45,["Tooltip"]="Drops the clouds once you fall under this"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Marrow kit",["Default"]=true},["Dynamic"]={}}},["AutoNahila"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Health",["Min"]=1,["Max"]=100,["Default"]=60,["Tooltip"]="Heals at or below this much health"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Heal teammates",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Ally range",["Min"]=1,["Max"]=60,["Default"]=25},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only heals while you are using the Nahla kit",["Default"]=true},["Dynamic"]={}}},["AutoPyro"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0,["Max"]=2,["Default"]=0.1,["Decimal"]=100,["Tooltip"]="Wait between each upgrade it buys"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Buy Range",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Buy Heat",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Buy Power",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only upgrades while you are using the Pyro kit",["Default"]=true},["Dynamic"]={}}},["AutoRamil"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=false,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Target Mode",["List"]={"Damage","Distance"},["Default"]="Distance"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=25,["Default"]=25},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Use Moving Tornado"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Tornado Range",["Min"]=1,["Max"]=35,["Default"]=25,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Ramil kit",["Default"]=true},["Dynamic"]={}}},["AutoShielderUlt"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=25},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Targets",["Min"]=1,["Max"]=8,["Default"]=1,["Tooltip"]="Enemies in range before slamming"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.5,["Max"]=10,["Default"]=2,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only slams while you are using the Shielder kit",["Default"]=true},["Dynamic"]={}}},["AutoSkoll"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=false,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Target mode",["List"]={"Distance","Health"}},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=100,["Default"]=50,["Tooltip"]="Fenrir travels 39 studs a second and lives 3 seconds"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Aim wolf",["Default"]=true,["Tooltip"]="Throws Fenrir straight at your target instead of wherever your camera points"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto detonate",["Default"]=true,["Tooltip"]="Sets the mark off, which costs you the damage buff on them"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Detonate at",["List"]={"Low health","Instantly","Before it expires"},["Visible"]=false,["Tooltip"]="Low health finishes them off, Before it expires keeps the buff until the mark runs out"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Health",["Min"]=1,["Max"]=100,["Default"]=30,["Visible"]=false,["Tooltip"]="Blows the mark for 20 damage once they drop under this"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Skoll kit",["Default"]=true},["Dynamic"]={}}},["AutoSmoke"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=25},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Health",["Min"]=1,["Max"]=100,["Default"]=50,["Tooltip"]="Pops the bomb at or below this much health"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.5,["Max"]=15,["Default"]=5,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only pops bombs while you are using the Smoke kit",["Default"]=true},["Dynamic"]={}}},["AutoSophia"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=false,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=22},["Dynamic"]={}},{["Method"]="CreateTwoSlider",["Options"]={["Name"]="Fire Rate",["Min"]=0,["Max"]=1,["DefaultMin"]=0.05,["DefaultMax"]=0.12,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Switch Delay",["Min"]=0,["Max"]=1,["Decimal"]=100,["Default"]=0.02},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only shoots while you are using the Sophia kit",["Default"]=true},["Dynamic"]={}}},["AutoTaliyah"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Iron",["Default"]=true,["Tooltip"]="Sells ur chicken when the currency is iron"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Emerald",["Default"]=true,["Tooltip"]="Sells ur chicken when the currency is emerald"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Diamond",["Default"]=true,["Tooltip"]="Sells ur chicken when the currency is diamond"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Amount",["Min"]=1,["Max"]=1000,["Default"]=2,["Tooltip"]="Only sells if the currency is selling for the selected amount"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only buys while you are using the Taliyah kit",["Default"]=true},["Dynamic"]={}}},["AutoTrap"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"Bed ring","Enemies"},["Tooltip"]="Bed ring surrounds a bed; Enemies throws ahead of nearby targets using the trap's travel and arming time"},["Dynamic"]={}},{["Method"]="CreateTargets",["Options"]={["Players"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Trap type",["List"]={"Auto","Snap","Venom","Explosive"},["Tooltip"]="Auto uses your selected stocked trap against enemies and the Traps list around beds"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Target",["List"]={"Your bed","Enemy bed"}},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Radius",["Min"]=1,["Max"]=5,["Default"]=2},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=4,["Max"]=60,["Default"]=20,["Tooltip"]="How close the bed has to be before placing"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Amount",["Min"]=1,["Max"]=8,["Default"]=3,["Tooltip"]="Traps to throw per bed ring pass"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Place Range",["Min"]=1,["Max"]=45,["Default"]=30,["Tooltip"]="Maximum throw distance, capped at the game's throw range"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.35,["Max"]=10,["Default"]=0.5,["Decimal"]=100,["Tooltip"]="Wait between enemy throws or bed ring passes, respecting the game's cooldown"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Ignore behind walls",["Visible"]=false,["Tooltip"]="Skips enemies you cannot see; throw paths are always checked"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto detonate",["Default"]=true,["Tooltip"]="Detonates all your armed explosives when an enemy is inside a blast and is predicted to remain there"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Switch back",["Default"]=true,["Tooltip"]="Restores your hotbar slot after placing an inventory trap; Trapper throws do not change your held item"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify"},["Dynamic"]={}},{["Method"]="CreateTextList",["Options"]={["Name"]="Traps",["Default"]={"snap_trap","venom_trap","explosive_trap","invisible_landmine","spike_trap","tesla_trap","grave_trap","lucky_block_trap"},["Placeholder"]="item",["Tooltip"]="Bed ring trap priority; Trapper traps use your kit stock and other traps use your inventory"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only throws traps while you are using the Trapper kit, turn it off to throw inventory traps with any kit",["Default"]=true},["Dynamic"]={}}},["AutoTriton"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Fall speed",["Min"]=10,["Max"]=200,["Default"]=60,["Tooltip"]="How fast you have to be falling before it throws"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Search range",["Min"]=4,["Max"]=60,["Default"]=40,["Tooltip"]="How far out it looks for ground to land on"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Legit Switch",["Default"]=true,["Tooltip"]="Visualizes the switching clientside"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Switch back",["Default"]=true,["Tooltip"]="Switches back to the last slot after throwing"},["Dynamic"]={}},{["Method"]="CreateTwoSlider",["Options"]={["Name"]="Switch Back Delay",["Min"]=0,["Max"]=2,["DefaultMin"]=0.1,["DefaultMax"]=0.2},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to item",["Tooltip"]="Only throws when you are already holding the trident"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only throws while you are using the Triton kit",["Default"]=true},["Dynamic"]={}}},["AutoTrixie"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=true,["Walls"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Warp to target",["Default"]=true,["Tooltip"]="Turns you at the closest enemy before warping so the portal lands on them"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Warp range",["Min"]=5,["Max"]=80,["Default"]=40},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Rewind on low health",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Health",["Min"]=1,["Max"]=100,["Default"]=40},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Trixie kit",["Default"]=true},["Dynamic"]={}}},["AutoVanessa"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only charges instantly while you are using the Vanessa kit",["Default"]=true},["Dynamic"]={}}},["AutoVoidKnight"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Keep",["Min"]=0,["Max"]=64,["Default"]=0,["Tooltip"]="Resources left untouched in your inventory"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=30},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Iron",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Emeralds",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Ascend",["Default"]=true,["Tooltip"]="Uses void ascension when an enemy is close"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Void Knight kit",["Default"]=true},["Dynamic"]={}}},["AutoVoidRegent"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Height",["Min"]=3,["Max"]=60,["Default"]=15,["Tooltip"]="Slams once the ground is this close beneath you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Fall speed",["Min"]=0,["Max"]=100,["Default"]=10,["Tooltip"]="Only slams once you are dropping this fast"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Legit switch",["Tooltip"]="Takes the axe out through the hotbar instead of silently"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Switch delay",["Min"]=0,["Max"]=1,["Decimal"]=100,["Default"]=0.05,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Limit to items",["Tooltip"]="Only slams while the axe is already held"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only slams while you are using the Void Regent kit",["Default"]=true},["Dynamic"]={}}},["AutoWhim"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["NPCs"]=false,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=22},["Dynamic"]={}},{["Method"]="CreateTwoSlider",["Options"]={["Name"]="Fire Rate",["Min"]=0,["Max"]=1,["DefaultMin"]=0.05,["DefaultMax"]=0.12,["Decimal"]=100},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Switch Delay",["Min"]=0,["Max"]=1,["Decimal"]=100,["Default"]=0.02},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only casts while you are using the Whim kit",["Default"]=true},["Dynamic"]={}}},["AutoWhimElement"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=500,["Default"]=10,["Tooltip"]="The prompt the game gives you stops at 10 studs"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.1,["Max"]=5,["Decimal"]=10,["Default"]=0.5,["Tooltip"]="How often it looks for a tome"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Notify",["Default"]=true,["Tooltip"]="Tells you which element you picked up"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only reads tomes while you are using the Whim kit",["Default"]=true},["Dynamic"]={}}},["AutoXurot"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=200,["Default"]=120},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.1,["Max"]=3,["Default"]=0.5,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only runs while you are using the Xurot kit",["Default"]=true},["Dynamic"]={}}},["AutoYeti"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=60,["Default"]=30},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Targets",["Min"]=1,["Max"]=8,["Default"]=1,["Tooltip"]="Enemies in range before roaring"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only roars while you are using the Yeti kit",["Default"]=true},["Dynamic"]={}}},["AutoZephyr"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Lead",["Min"]=0.05,["Max"]=0.5,["Default"]=0.15,["Decimal"]=100,["Tooltip"]="How long before the pull down it jumps"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only jumps while you are using the Zephyr kit",["Default"]=true},["Dynamic"]={}}},["AutoZola"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Mode",["List"]={"On See","On Hit"},["Tooltip"]="On See - Links enemies as soon as you can see them\nOn Hit - Links enemies whenever you hit them",["Default"]="On See"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=50,["Default"]=30},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only links while you are using the Zola kit",["Default"]=true},["Dynamic"]={}}},["DaveyAim"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Aim Mode",["List"]={"Blatant","Legit"},["Default"]="Blatant"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Position Mode",["List"]={"Mouse","Camera"},["Default"]="Mouse"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Search Range",["Min"]=1,["Max"]=18,["Default"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Place Cannon",["Tooltip"]="Puts a cannon down on the nearest free block when there is none in range",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Auto Switch",["Default"]=true,["Tooltip"]="Holds the cannon before placing it"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Launch Cannon",["Default"]=true,["Tooltip"]="Launches you normally, turn this off to aim and launch yourself"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Show Target",["Default"]=true,["Tooltip"]="Highlights the block you are landing on until you land"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Old DaveyAim",["Tooltip"]="Uses the previous flight correction and stops horizontal movement at the landing point"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only aims while you are using the Davey kit",["Default"]=true},["Dynamic"]={}}},["EquipKit"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Equip kit",["List"]={},["Default"]="None"},["Dynamic"]={}}},["FalconAura"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=150,["Default"]=80},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Delay",["Min"]=0.1,["Max"]=5,["Default"]=1,["Decimal"]=10},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Recall when clear",["Default"]=true,["Tooltip"]="Calls the falcon back once nobody is in range"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only sends while you are using the Bekzat kit",["Default"]=true},["Dynamic"]={}}},["InfiniteKrystal"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only gives momentum while you are using the Krystal kit",["Default"]=true},["Dynamic"]={}}},["InfiniteTrixie"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only removes the cooldown while you are using the Trixie kit",["Default"]=true},["Dynamic"]={}}},["KitExtender"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Jade Hammer",["Tooltip"]="Extends how far the Jade Hammer jump launches you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Jade Hammer multiplier",["Min"]=1,["Max"]=5,["Decimal"]=10,["Default"]=2,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Void Regent Dash",["Tooltip"]="Extends how far the Void Regent axe dash launches you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Void Regent Dash multiplier",["Min"]=1,["Max"]=5,["Decimal"]=10,["Default"]=2,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Yamini Pounce",["Tooltip"]="Extends how far the Yamini pounce launches you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Yamini Pounce multiplier",["Min"]=1,["Max"]=5,["Decimal"]=10,["Default"]=2,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Yamini Wall Kick",["Tooltip"]="Extends how high dropping off a climbed wall throws you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Yamini Wall Kick multiplier",["Min"]=1,["Max"]=5,["Decimal"]=10,["Default"]=2,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Yuzi Dash",["Tooltip"]="Extends how far the yuzi dash launches you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Yuzi Dash multiplier",["Min"]=1,["Max"]=5,["Decimal"]=10,["Default"]=2,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Xurot Wing Flap",["Tooltip"]="Extends how high each wing flap throws you"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Xurot Wing Flap multiplier",["Min"]=1,["Max"]=5,["Decimal"]=10,["Default"]=2,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kaida Summon Range",["Tooltip"]="Lifts the cap the game puts on where the summon circle can land"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Kaida summon range",["Min"]=45,["Max"]=120,["Default"]=75,["Visible"]=false},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only extends an ability while you are using the kit it belongs to",["Default"]=true},["Dynamic"]={}}},["AutoPickpocket"]={{["Method"]="CreateTargets",["Options"]={["Players"]=true,["Walls"]=true,["Name"]="Targets"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=1,["Max"]=30},["Dynamic"]={"Default"}},{["Method"]="CreateButton",["Options"]={["Name"]="Sync to legit range"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Hide when clear",["Tooltip"]="Goes back into the block once nobody is in range"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only pickpockets while you are using the Milo kit",["Default"]=true},["Dynamic"]={}}},["RavenTP"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only teleports while you are using the Raven kit",["Default"]=true},["Dynamic"]={}}},["VoidRegentAutoClutch"]={{["Method"]="CreateSlider",["Options"]={["Name"]="Range",["Min"]=10,["Max"]=60,["Default"]=45,["Tooltip"]="How far to look for ground to dash back to"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Depth",["Min"]=10,["Max"]=150,["Default"]=60,["Tooltip"]="Nothing beneath you within this counts as the void"},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Fall speed",["Min"]=0,["Max"]=100,["Default"]=10,["Tooltip"]="Only clutches once you are dropping this fast"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Face ground",["Default"]=true,["Tooltip"]="Turns you towards the ground first, the dash always goes where you face"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Kit check",["Tooltip"]="Only clutches while you are using the Void Regent kit",["Default"]=true},["Dynamic"]={}}},["Bed Break Effect"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Effect",["List"]={}},["Dynamic"]={}}},["Clean Kit"]={},["Crosshair"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Preset",["List"]={"Custom","PC","Mobile","Turret","Mouse lock"},["Tooltip"]="Pick one of the games own crosshairs, Custom uses the image id below"},["Dynamic"]={}},{["Method"]="CreateTextBox",["Options"]={["Name"]="Image",["Placeholder"]="image id (roblox)"},["Dynamic"]={}}},["FOV"]={{["Method"]="CreateSlider",["Options"]={["Name"]="FOV",["Min"]=30,["Max"]=120},["Dynamic"]={}}},["FPSUnlocker"]={},["Interface"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Health Font",["List"]={"LuckiestGuy"}},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Health Color"},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Hotbar Color",["DefaultOpacity"]=0.8},["Dynamic"]={}}},["Ping"]={{["Method"]="CreateFont",["Options"]={["Name"]="Font"},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Color",["DefaultValue"]=0,["DefaultOpacity"]=0.5},["Dynamic"]={}}},["Potion Status"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Show Positive Effects",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Show Negative Effects",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Render background",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Background Color",["DefaultValue"]=0,["DefaultOpacity"]=0.5},["Dynamic"]={}}},["Reach Display"]={{["Method"]="CreateFont",["Options"]={["Name"]="Font"},["Dynamic"]={}},{["Method"]="CreateColorSlider",["Options"]={["Name"]="Color",["DefaultValue"]=0,["DefaultOpacity"]=0.5},["Dynamic"]={}}},["Song Beats"]={{["Method"]="CreateTextList",["Options"]={["Name"]="Songs",["Placeholder"]="filepath/bpm/start"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Beat FOV",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Adjustment",["Min"]=1,["Max"]=30,["Default"]=5},["Dynamic"]={}},{["Method"]="CreateSlider",["Options"]={["Name"]="Volume",["Min"]=1,["Max"]=100,["Default"]=100},["Dynamic"]={}}},["SoundChanger"]={{["Method"]="CreateTextList",["Options"]={["Name"]="Sounds",["Placeholder"]="(DAMAGE_1/ben.mp3)"},["Dynamic"]={}}},["UI Cleanup"]={{["Method"]="CreateToggle",["Options"]={["Name"]="Resize Health",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="No Hotbar Numbers",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="No Inventory Button",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="No Kill Feed",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Old Player List",["Default"]=true},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Fix Queue Card",["Default"]=true},["Dynamic"]={"Visible"}}},["AutoHalloween"]={{["Method"]="CreateDropdown",["Options"]={["Name"]="Event",["List"]={"Auto","Marrow's Madness","Arachne's Lair"},["Default"]="Auto",["Tooltip"]="Auto follows the queue you joined"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Class",["List"]={"Nazar","Silas","Kaida","Death Adder","Melody"},["Default"]="Nazar",["Tooltip"]="Arachne's Lair class picked at the start"},["Dynamic"]={}},{["Method"]="CreateDropdown",["Options"]={["Name"]="Upgrades",["List"]={"Damage","Health"},["Default"]="Damage",["Tooltip"]="Which level up upgrade to take first"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Killaura",["Default"]=true,["Tooltip"]="Built-in Killaura for the scenes with enemies, turned on and off by the module itself"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="ProjectileAura",["Default"]=true,["Tooltip"]="Built-in bow aura for the boss scenes, the module turns the real Killaura and ProjectileAura off and runs them itself"},["Dynamic"]={}},{["Method"]="CreateToggle",["Options"]={["Name"]="Debug",["Tooltip"]="Prints the steps and writes halloween-log.txt"},["Dynamic"]={}}}}
+    end)())
     FWNoModules.ConfigureFeaturePort(port,FW,mainScreenUI,saveConfigToPC)
     port.Sources["entity"]=[====[local Entity = {
     isAlive = false,
@@ -37218,6 +37390,9 @@ Entity.removeEntity = function(Character, IsLocal: boolean?)
     end
 
     if IsLocal then
+        if Character and Entity.EntityThreads[Character]then
+            task.cancel(Entity.EntityThreads[Character]);Entity.EntityThreads[Character]=nil
+        end
         if Entity.isAlive then
             Entity.isAlive = false
             for _, v: RBXScriptConnection in Entity.character.Connections do
@@ -37297,6 +37472,7 @@ Entity.removePlayer = function(Player: Player)
         Entity.PlayerConnections[Player] = nil
     end
 
+    if Player.Character then Entity.removeEntity(Player.Character,Player==LocalPlayer)end
     Entity.removeEntity(Player)
 end
 
@@ -46342,7 +46518,7 @@ Run(function()
                 Entity.removeEntity(Character, Player == LocalPlayer)
             end),
             Player:GetAttributeChangedSignal("Team"):Connect(function()
-                for _, v: any in Entity.List do
+                for _, v: any in table.clone(Entity.List)do
                     if v.Targetable ~= Entity.targetCheck(v) then
                         Entity.refreshEntity(v.Character, v.Player)
                     end
@@ -46361,6 +46537,8 @@ Run(function()
         if not Character then
             return
         end
+        local previous=Entity.EntityThreads[Character]
+        if previous then task.cancel(previous);Entity.EntityThreads[Character]=nil end
         Entity.EntityThreads[Character] = task.spawn(function()
             local Humanoid, HumanoidRootPart, Head
             if Player then
@@ -46379,7 +46557,7 @@ Run(function()
                 Character:WaitForChild("HandInvItem", 5)
             } or {}
 
-            if Humanoid and HumanoidRootPart then
+            if Humanoid and HumanoidRootPart and Character.Parent and (not Player or Player.Character==Character)then
                 local Ent = {
                     Connections = {},
                     Character = Character,
@@ -48034,7 +48212,7 @@ Run(function()
         store.airRay = RayParams
 
         repeat
-            if not vape.Active then task.wait(.25);continue end
+            if not vape.WaitForActive()then return end
             if Entity.isAlive then
                 Entity.character.AirTime = Entity.character.Humanoid.FloorMaterial ~= Enum.Material.Air and tick() or Entity.character.AirTime
             end
@@ -63860,7 +64038,9 @@ Debug = AutoHalloween:CreateToggle({
 
 end)
 ]====]
-    port.Start()
+    -- All controls are already prepared. Cold gameplay code is needed only on use.
+    port.Recount()
+    if port.active>0 then port.Start()end
     return port
 end
 
@@ -64405,6 +64585,107 @@ do
 end
 
 
+-- One startup report. No relay, dashboard, user-list polling or ongoing telemetry.
+function FWNoModules.CreateStartupWebhook(deps)
+    local api={}
+    local function validURL(value)
+        if type(value)~="string"then return nil end
+        local url=value:match("^%s*(.-)%s*$")
+        local host,path=url:match("^https://([^/]+)(/[^?#]*)$")
+        if host~="discord.com"and host~="discordapp.com"then return nil end
+        if not path:match("^/api/webhooks/%d+/[%w%._%-]+$")and not path:match("^/api/v%d+/webhooks/%d+/[%w%._%-]+$")then return nil end
+        return url
+    end
+    api.ValidateURL=validURL
+    function api.Send(url)
+        if url==""or url==nil then return false,"not configured"end
+        url=validURL(url)
+        if not url then deps.Notify("Startup webhook URL is invalid. Use the full Discord webhook URL.");return false,"invalid URL"end
+        if type(deps.Request)~="function"then deps.Notify("This runtime has no HTTP request function. The startup report was not sent.");return false,"HTTP unavailable"end
+        local key=deps.SessionKey().."|"..url
+        local prior=deps.Sent[key]
+        if prior and(prior.sent or(prior.runtime and prior.runtime.active))then return false,"already reported"end
+        local record={runtime=deps.Runtime}
+        deps.Sent[key]=record
+        deps.OnCleanup(function()if deps.Sent[key]==record and not record.sent then deps.Sent[key]=nil end end)
+        deps.Notify("This Featherware build sends one Discord startup report: your Roblox account, server and enabled feature names.")
+        deps.Spawn(function()
+            local encoded,body=pcall(function()return deps.Encode(deps.Payload())end)
+            if not encoded then
+                if deps.Sent[key]==record then deps.Sent[key]=nil end
+                deps.Notify("The Discord startup report could not be encoded.")
+                return
+            end
+            for attempt=1,2 do
+                if not deps.Runtime.active or deps.Sent[key]~=record then return end
+                local ok,response=pcall(deps.Request,{Url=url,Method="POST",Headers={["Content-Type"]="application/json"},Body=body,
+                    Redirect=false,FollowRedirects=false})
+                local status=ok and type(response)=="table"and tonumber(response.StatusCode or response.Status)or 0
+                if status>=200 and status<300 then record.sent=true;record.runtime=nil;return end
+                if status==429 and attempt==1 then
+                    local delay=5
+                    if type(response.Body)=="string"then
+                        local parsed,data=pcall(deps.Decode,response.Body)
+                        if parsed and type(data)=="table"then delay=math.clamp(tonumber(data.retry_after)or 5,1,30)end
+                    end
+                    deps.Wait(delay)
+                else
+                    if deps.Sent[key]==record then deps.Sent[key]=nil end
+                    deps.Notify("Discord startup report failed (HTTP "..status.."). Check the webhook URL and permissions.")
+                    return
+                end
+            end
+        end)
+        return true
+    end
+    return api
+end
+
+function FWNoModules.InstallStartupWebhook()
+    local PlayersService=game:GetService("Players")
+    local Http=game:GetService("HttpService")
+    local localPlayer=PlayersService.LocalPlayer
+    local requestFunction=request or http_request or(syn and syn.request)
+    FWNoModules.Runtime.startupWebhookSent=FWNoModules.Runtime.startupWebhookSent or{}
+    local sent=FWNoModules.Runtime.startupWebhookSent
+    local function clean(value)return tostring(value):gsub("[`*_~|]","")end
+    local reporter=FWNoModules.CreateStartupWebhook({
+        Runtime=FWNoModules.Runtime,Sent=sent,Request=requestFunction,
+        SessionKey=function()return localPlayer.UserId.."|"..game.PlaceId.."|"..(game.JobId~=""and game.JobId or"studio")end,
+        Notify=function(message)pcall(NotificationSystem.Notify,"Discord startup report",message,8)end,
+        OnCleanup=FWNoModules.OnCleanup,
+        Spawn=function(fn)return FWNoModules.WithSessionOwner(function()return task.spawn(fn)end)end,
+        Wait=task.wait,Encode=function(value)return Http:JSONEncode(value)end,Decode=function(value)return Http:JSONDecode(value)end,
+        Payload=function()
+            local features,seen={},{}
+            for _,entry in ipairs(FW.MenuAddons.Modules)do
+                if entry.Mod and entry.Mod.Toggled then
+                    local name=clean(entry.CategoryName.."/"..entry.Name)
+                    if not seen[name]then seen[name]=true;features[#features+1]=name end
+                end
+            end
+            table.sort(features)
+            local featureText=#features>0 and table.concat(features,"\n")or"None"
+            if #featureText>980 then
+                local boundary=utf8.offset(featureText,0,950)or 950
+                featureText=featureText:sub(1,boundary-1).."\n… list truncated"
+            end
+            local fields={
+                {name="Roblox account",value=clean(localPlayer.DisplayName).." (@"..clean(localPlayer.Name)..")\nUserId: "..localPlayer.UserId},
+                {name="Server",value="PlaceId: "..game.PlaceId.."\nJobId: "..(game.JobId~=""and game.JobId or"Studio")},
+                {name="Enabled features at startup ("..#features..")",value=featureText},
+                {name="Report",value="One startup snapshot. Feature activity is self-reported, not verified detection."}
+            }
+            return {username="Featherware",allowed_mentions={parse={}},embeds={{
+                title="Featherware started",color=5156169,fields=fields,timestamp=DateTime.now():ToIsoDate(),
+                footer={text="No ongoing tracking or relay. Startup snapshot only."}
+            }}}
+        end
+    })
+    reporter.Send(FW_STARTUP_WEBHOOK.URL)
+end
+
+
 FWNoModules.BuildProfilesUI()
 do
     local profiles=FWNoModules.Profiles
@@ -64444,4 +64725,10 @@ FWNoModules.WithSessionOwner(function()task.defer(function()
     if not ok then warn("[Featherware] Feature integration: "..tostring(problem))end
     if FW.MenuAddons then FW.MenuAddons.Refresh()end
     if FWNoModules.MenuOptions then FWNoModules.MenuOptions.Refresh()end
+end)end)
+
+-- Send one startup snapshot after the core settings/profile snapshot is ready.
+FWNoModules.WithSessionOwner(function()task.defer(function()
+    local ok,problem=pcall(FWNoModules.InstallStartupWebhook)
+    if not ok then warn("[Featherware] Startup webhook could not initialize.")end
 end)end)
